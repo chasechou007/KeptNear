@@ -1,0 +1,27 @@
+{
+  "displayName": "Golden",
+  "fixturePath": "golden-vault-v1.pswvault",
+  "fixtureDisplayName": "Golden Fixture V1",
+  "fixtureItemTitle": "Golden Login",
+  "fixtureItemUsername": "golden-user",
+  "fixtureItemUrl": "https://golden.example",
+  "fixtureItemTag": "golden",
+  "formatName": "psw-local-vault",
+  "vaultFormatVersion": 1,
+  "recordFormatVersion": 1,
+  "requiredPaths": [
+    "vault.json",
+    "keys.enc",
+    "items",
+    "attachments",
+    "tombstones"
+  ],
+  "plaintextNeedles": [
+    "Golden Login",
+    "golden-user",
+    "golden-password",
+    "https://golden.example",
+    "golden-note",
+    "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
+  ]
+}

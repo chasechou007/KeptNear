@@ -1,0 +1,30 @@
+{
+  "encrypted": false,
+  "items": [
+    {
+      "type": 1,
+      "name": "Example",
+      "favorite": true,
+      "notes": "demo login",
+      "login": {
+        "username": "alice",
+        "password": "correct horse battery staple",
+        "totp": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+        "uris": [
+          {
+            "uri": "https://example.com"
+          }
+        ]
+      }
+    },
+    {
+      "type": 2,
+      "name": "Recovery Note",
+      "notes": "sanitized note body"
+    },
+    {
+      "type": 4,
+      "name": "Unsupported Identity"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "scenarios": [
+    {
+      "name": "independent-edits",
+      "kind": "independent",
+      "expectedItems": 2,
+      "expectedConflicts": 0
+    },
+    {
+      "name": "same-item-concurrent-edits",
+      "kind": "same-item-conflict",
+      "expectedItems": 1,
+      "expectedConflicts": 1
+    }
+  ]
+}

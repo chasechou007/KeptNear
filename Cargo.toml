@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/psw-cli",
+    "crates/psw-core",
+    "crates/psw-ffi",
+]
+
+[workspace.package]
+authors = ["Chase Chou <chasechou007@gmail.com>"]
+edition = "2021"
+rust-version = "1.75"
+license = "GPL-3.0-only"
+repository = "https://github.com/chasechou007/KeptNear"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"

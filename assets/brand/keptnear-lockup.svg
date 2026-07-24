@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 360" role="img" aria-labelledby="title description">
+  <title id="title">KeptNear</title>
+  <desc id="description">KeptNear wordmark with the two-leaf brand symbol.</desc>
+  <g transform="translate(12 18) scale(.63)">
+    <path
+      fill="#202724"
+      d="M82 172 212 104c15-8 32 3 32 20v122L82 178c-6-2-6-3 0-6Z"
+    />
+    <path
+      fill="#246B5E"
+      d="m82 178 162 68v159c0 23-24 37-44 26L98 377c-14-7-22-22-22-38V193c0-8 2-13 6-15Z"
+    />
+    <path
+      fill="#202724"
+      d="m430 172-130-68c-15-8-32 3-32 20v122l162-68c6-2 6-3 0-6Z"
+    />
+    <path
+      fill="#D9684A"
+      d="m430 178-162 68v159c0 23 24 37 44 26l102-54c14-7 22-22 22-38V193c0-8-2-13-6-15Z"
+    />
+  </g>
+  <text
+    x="354"
+    y="228"
+    fill="#202724"
+    font-family="-apple-system, BlinkMacSystemFont, 'Helvetica Neue', Arial, sans-serif"
+    font-size="160"
+    font-weight="600"
+    letter-spacing="0"
+  >KeptNear</text>
+</svg>

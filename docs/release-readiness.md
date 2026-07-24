@@ -1,0 +1,321 @@
+# Release Readiness Notes
+
+## Dependency Review
+
+Current security-sensitive Rust dependencies:
+
+- `argon2`: master password key derivation with Argon2id.
+- `chacha20poly1305`: XChaCha20-Poly1305 authenticated encryption.
+- `rand_core`: operating system randomness.
+- `hmac` and `sha1`: TOTP generation per RFC 6238 SHA-1 compatibility.
+- `serde` and `serde_json`: vault metadata, record encoding, and import parsing.
+- `zeroize`: pinned for Rust 1.75 compatibility; `SecretBytes` also clears its allocation on drop.
+
+Current compatibility pins:
+
+- `base64ct = 1.6.0`
+- `zeroize = 1.8.1`
+
+These pins avoid transitive crates that require Rust 2024 edition and newer compilers than the current workspace Rust 1.75 toolchain.
+
+## macOS Target
+
+The Swift package currently targets macOS 13 or newer. That gives a practical baseline for SwiftUI, modern file pickers, and AppKit interoperability while avoiding the oldest SwiftUI behavior gaps.
+
+Before public alpha, confirm:
+
+- final minimum macOS version
+- signing identity and hardened runtime requirements
+- sandbox entitlements, if distributed through the Mac App Store
+- Keychain access group behavior
+- local convenience unlock review, including the Keychain local-key plus
+  `local_unlock.enc` envelope boundary and cleanup behavior for old alpha
+  Keychain entries that stored master passwords
+- Launch Services and Finder double-click association behavior after installing
+  a signed/notarized `.pswvault`-aware app bundle
+- day-use item coverage for login items, secure notes, credit cards, and
+  software licenses
+
+## Distribution Notes
+
+The current macOS packaging workflow can create an unsigned local alpha zip with
+a checksum and manifest:
+
+```sh
+script/package_macos_alpha.sh
+```
+
+This is suitable for local testing and trusted alpha testers. Public
+distribution still requires:
+
+- passing strict public alpha release readiness with
+  `script/verify_public_alpha_release_ready.sh`
+- generated and checksum-verified security review handoff materials from
+  `script/package_security_review_materials.sh`
+- passing strict macOS distribution environment preflight with
+  `script/verify_macos_distribution_environment.sh` on the release operator's
+  Mac
+- running the packaging workflow with a real Developer ID signing identity
+- successful notarization and stapling with Apple notarytool credentials
+- signed macOS install verification with `script/verify_macos_signed_install.sh`
+  against the signed/notarized archive
+- completed external security review evidence or explicit accepted-risk records
+
+## Security Review
+
+An external security review plan exists at
+`docs/security-review-plan.md`. This is a readiness artifact for preparing an
+independent review; it is not evidence that external review has been completed.
+Review evidence, findings, accepted risks, validation, and release decision
+status are tracked in `docs/security-review-evidence.md`; the current register
+does not yet approve public alpha.
+
+Use the evidence gate to check the current status:
+
+```sh
+script/verify_security_review_evidence.sh --allow-missing
+```
+
+Prepare reviewer handoff materials before external review:
+
+```sh
+script/package_security_review_materials.sh
+```
+
+The generated archive, manifest, and SHA-256 checksum live under
+`dist/security-review/`. They are preparation artifacts only; they do not
+replace reviewer findings, accepted-risk records, validation, or release
+approval.
+
+Before public alpha approval, strict mode must pass:
+
+```sh
+script/verify_security_review_evidence.sh
+```
+
+Before public alpha, collect and link:
+
+- reviewer report or tracked finding list
+- fixes or accepted-risk records for Critical and High findings
+- passing validation after review-driven fixes
+- updated security model or release readiness notes if review changes a claim
+- passing strict security review evidence verification
+
+## Pre-Alpha Gates
+
+Do not recommend production use until these gates are complete:
+
+- public alpha release readiness verification passes with
+  `script/verify_public_alpha_release_ready.sh`, including security review
+  handoff package generation and checksum verification; report mode with
+  `--allow-missing` runs the local handoff package step, lists blockers, and
+  does not approve readiness
+- local alpha readiness verification passes with
+  `script/verify_local_alpha_readiness.sh`; report mode with `--allow-missing`
+  can list managed-workspace blockers such as Launch Services registration
+  access, but it does not approve local alpha readiness. This is automated
+  local evidence only and does not replace signed/notarized clean-install
+  testing or external security review
+- local vault-format readiness verification passes with
+  `script/verify_vault_format_readiness.sh`, while the format remains
+  experimental until a separate public alpha freeze decision
+- vault doctor readiness verification passes with
+  `script/verify_vault_doctor_readiness.sh`, proving the local support CLI can
+  inspect generated supported vaults, reject incomplete and unsupported future
+  vaults, emit JSON, and avoid known plaintext item output without checking
+  provider sync state
+- vault format documented and reviewed
+- golden vectors checked in and stable
+- parser hardening tests pass
+- sync conflict fixtures pass
+- malformed, unreadable, or authentication-failing synced records are counted as
+  rejected without blocking trusted records from loading
+- sync refresh revalidates required vault structure and fails closed when
+  metadata, key material, or record directories are missing or have the wrong
+  file/directory type
+- macOS automatic file-change detection watches required vault structure as well
+  as encrypted item and tombstone records
+- macOS sidebar shows a local-only sync-location hint for common provider
+  folders without contacting provider APIs or exposing full local paths
+- macOS sidebar shows local sync readiness for required portable vault
+  structure, likely provider placement, and local unlock envelope presence
+  without contacting provider APIs or exposing full local paths
+- macOS can copy the selected encrypted vault to a sync destination, keep the
+  original vault in place, switch to the copied vault locked, and report
+  non-secret copied-record counts
+- sync issue UI can refresh again, reveal the vault directory, and copy
+  non-secret diagnostics when conflicts or rejected records are present
+- selected sync conflicts can show candidate summaries, resolve by choosing the
+  version to keep, and refresh the visible conflict count from the macOS client
+- sync refresh preserves active search, archived-item inclusion,
+  favorite-only, conflict-only, tag, and item-type filters while updating sync
+  counts and refresh time
+- conflict candidate summaries show changed-field labels, including secret
+  field labels without exposing secret values
+- conflict candidate cards show structured comparison fields and keep
+  password, TOTP, card number, verification code, secure-note body, and license
+  key values redacted
+- Keychain convenience unlock stores only opaque local unlock keys, requires the
+  matching `local_unlock.enc` envelope, and never stores the master password or
+  raw vault key
+- old alpha Keychain entries that may have stored master passwords can be
+  cleaned up for the selected vault without deleting current local unlock
+  material
+- conflicted items remain read-only for ordinary save, favorite, archive,
+  delete, tag replacement, and secret-copy actions until explicit conflict
+  resolution
+- existing-item save, favorite, archive, and delete actions send expected item
+  revisions and reject stale revisions without writing a new item record or
+  tombstone
+- macOS client uses the Rust core for all vault operations
+- login items, secure notes, credit cards, and software licenses can be created,
+  selected, edited, and reloaded through type-specific macOS editors
+- login items can preserve, edit, search, and open multiple associated URLs
+  from the macOS client without reducing them to the first saved URL
+- selected login items, secure notes, credit cards, and software licenses can be
+  duplicated as new active items while preserving supported fields and saved
+  secrets
+- login TOTP secrets can be manually added from raw Base32 or `otpauth://`
+  input, edited, cleared, and used for code copy from the macOS client only
+  when the selected login has a saved TOTP secret
+- login password generation requires at least one selected character class,
+  localizes invalid generator-option feedback, and does not retain generator
+  history outside the active editor draft
+- vault creation and master-password rotation show local, advisory strength
+  guidance without recording scores in diagnostics or blocking non-empty weak
+  passwords
+- unsigned macOS alpha package can be generated with checksum and manifest
+- macOS alpha packaging supports optional Developer ID signing, hardened
+  runtime, notarization, stapling, and manifest status metadata when local
+  Apple credentials are provided
+- macOS distribution environment preflight can verify required local signing
+  and notarization tools, a configured Developer ID Application identity, and
+  notarization credential shape without printing secret credential values; an
+  allow-missing report mode exists for development machines without release
+  credentials and does not approve distribution readiness
+- macOS alpha release artifacts can be verified with a repository command that
+  checks checksum, required bundle files, manifest integrity metadata, signing
+  status, manual update channel, `.pswvault` document metadata, and distribution
+  boundary
+- signed and notarized macOS alpha archives can be verified from a clean
+  temporary install directory with `script/verify_macos_signed_install.sh`,
+  including signed manifest status, notarization acceptance, staple validation,
+  `codesign`, Gatekeeper assessment, and Launch Services `.pswvault`
+  registration; unsigned archives are rejected by this verifier
+- public alpha update policy is manual, documented, and recorded in the package
+  manifest; automatic updates are deferred until after alpha review
+- first-run and empty-vault guidance is visible in the macOS client
+- macOS system file-open events for `.pswvault` paths route through the same
+  locked open-vault workflow as the in-app Open action, reject unsupported paths
+  locally before calling the core, and preserve unsaved-editor guardrails
+- generated macOS app bundles advertise `.pswvault` as a package-style vault
+  document type through shared Info.plist generation, and alpha artifact
+  verification fails if that metadata is missing or inconsistent
+- local Launch Services smoke verification can register a generated app bundle
+  and confirm the `.pswvault` package UTI, extension tag, document role, owner
+  rank, package flag, and binding are visible in the Launch Services database;
+  sandboxed or permission-blocked registration fails with an actionable
+  diagnostic rather than claiming readiness, while local alpha report mode can
+  surface that blocker without converting it into a passing strict gate
+- macOS Settings shows a localized trust-boundary summary covering local vault
+  files, untrusted encrypted file-sync transports, user-copied diagnostics, and
+  experimental alpha vault-format status without rendering paths, provider
+  account state, diagnostics payload contents, item data, or secrets
+- macOS password health can refresh local weak/reused counts, list only
+  non-secret issue metadata, and navigate from an issue row to the affected item
+  through dirty-editor guardrails while clearing hiding filters and enabling
+  archived visibility
+- macOS item-list context menus expose daily selected-item workflows while
+  reusing guarded selection, conflict, archive, and destructive confirmation
+  behavior and without rendering secret values in row menus
+- macOS Item menu shortcuts expose login, secure-note, credit-card, and
+  software-license copy workflows through the same guarded clipboard paths as
+  visible editor actions
+- macOS filtered search/list states show a no-matching-items recovery state with
+  a clear-filters action instead of confusing filtered-empty results with a
+  newly empty vault
+- macOS item lists can be filtered by a selected tag derived from non-secret
+  item summaries, composing with search text, archived inclusion, favorites,
+  and conflicts while preserving dirty-editor selection guardrails
+- macOS item lists can be filtered by selected item type derived from
+  non-secret item summaries, composing with search text, archived inclusion,
+  favorites, conflicts, and tags while preserving dirty-editor selection
+  guardrails
+- macOS security-state readiness verification passes with
+  `script/verify_macos_security_state.sh`, while signed install behavior,
+  notarization, and external review remain separate public-alpha decisions
+- clipboard behavior verified on macOS, including clearing copied secrets after
+  timeout, clearing the current managed secret on vault lock, and preserving
+  later user clipboard contents
+- auto-lock behavior verified on macOS, including idle timeout, system sleep,
+  screen sleep, and session lock clearing decrypted active state and transient
+  view-layer secret state, including Settings master password rotation fields
+- vault switching verified on macOS, including opening or creating another
+  vault clearing the previous unlocked session and active secret state
+- close-vault workflow verified on macOS, including clearing selected vault
+  context and active secret state without deleting files or forgetting the
+  recent vault shortcut
+- clipboard and auto-lock preference persistence verified across app launches
+- import flow supports login items, secure notes, and credit cards, warns about
+  plaintext export files, and reports preview/commit counts
+- export flow supports login items, secure notes, credit cards, and software
+  licenses, requires a clean editor state and explicit plaintext confirmation,
+  and reports exported/skipped counts and warnings
+- encrypted backup flow copies the portable encrypted vault structure without
+  decrypting records, excludes local-only unlock material, rejects unsafe
+  destinations, and reports non-secret copied-record counts
+- encrypted backup restore flow copies a selected encrypted backup to a new
+  vault destination, excludes local-only unlock material, clears previous active
+  state, and leaves the restored vault locked until normal unlock
+- copy actions verified on macOS, including empty usernames, card numbers,
+  verification codes, and license keys leaving the clipboard unchanged
+- convenience unlock stores local unlock material instead of the master password
+  and discards failed stale material before requiring master-password fallback
+- new vault creation and master password rotation reject empty master passwords
+  in macOS validation and at the Rust core boundary
+- master password rotation verifies the current password, rewraps only
+  `keys.enc`, preserves existing items, and clears local convenience unlock
+  material
+- editor guardrails block empty-title saves for login items, secure notes,
+  credit cards, and software licenses and confirm discard-prone navigation for
+  unsaved edits in those editors, including item selection,
+  open/create/close-vault workflows, destructive archive/delete requests,
+  import commit, manual sync refresh, and sync recovery actions
+- item selection rejects unconfirmed dirty editor state at the store layer
+  before replacing the active editor detail
+- vault switch and close workflows reject unconfirmed dirty editor state at the
+  store layer before replacing selected vault context or clearing the active
+  session
+- sync refresh and sync recovery protect unsaved editor drafts, including
+  store-level rejection of unconfirmed manual refresh and rejected-record
+  quarantine, manual refresh discard confirmation, and deferred automatic
+  file-change refresh while drafts are dirty
+- destructive archive/delete actions require confirmation after any required
+  unsaved-edit discard confirmation and reject unconfirmed dirty editor state at
+  the store layer before writing archive/delete mutations
+- archived items can be searched and restored to the active list from the macOS
+  client, while active or conflicted selections are rejected locally before any
+  core restore call
+- plaintext import source cleanup actions are available after import
+- plaintext export destination cleanup actions are available after export
+- local sync issue UI shows available rejected `.enc` file names without full
+  paths, while copied diagnostics continue to omit rejected record file names
+- non-secret support diagnostics can be copied from Settings and exclude item
+  content, secrets, plaintext import/export file names and paths, and full local
+  vault paths while allowing boolean plaintext cleanup state
+- logging, telemetry, diagnostics, and crash report policy exists and states
+  that current alpha builds do not automatically upload logs, diagnostics,
+  telemetry, vault records, or crash reports
+- external security review plan exists
+- security review evidence register exists and clearly states whether external
+  review evidence, accepted risks, validation, and public-alpha approval are
+  complete
+- security review handoff materials can be packaged under
+  `dist/security-review/` with a manifest and SHA-256 checksum, while remaining
+  clearly separate from completed external review evidence
+- security review evidence verification can report missing external evidence in
+  allow-missing mode and fail strict mode until review evidence, finding
+  disposition, validation, and public-alpha approval are recorded
+
+External review itself is a separate public-alpha readiness decision and should
+not be treated as complete until review evidence is attached.

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" role="img" aria-labelledby="title description">
+  <title id="title">KeptNear app icon</title>
+  <desc id="description">The KeptNear two-leaf mark on a warm neutral macOS icon tile.</desc>
+  <rect x="32" y="32" width="960" height="960" rx="224" fill="#F3F5F1"/>
+  <rect x="38" y="38" width="948" height="948" rx="218" fill="none" stroke="#D7DED8" stroke-width="12"/>
+  <g transform="translate(72 72) scale(1.72)">
+    <path
+      fill="#202724"
+      d="M82 172 212 104c15-8 32 3 32 20v122L82 178c-6-2-6-3 0-6Z"
+    />
+    <path
+      fill="#246B5E"
+      d="m82 178 162 68v159c0 23-24 37-44 26L98 377c-14-7-22-22-22-38V193c0-8 2-13 6-15Z"
+    />
+    <path
+      fill="#202724"
+      d="m430 172-130-68c-15-8-32 3-32 20v122l162-68c6-2 6-3 0-6Z"
+    />
+    <path
+      fill="#D9684A"
+      d="m430 178-162 68v159c0 23 24 37 44 26l102-54c14-7 22-22 22-38V193c0-8-2-13-6-15Z"
+    />
+  </g>
+</svg>
