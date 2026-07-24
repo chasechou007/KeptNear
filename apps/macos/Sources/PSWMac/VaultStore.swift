@@ -2234,8 +2234,9 @@ final class VaultStore: ObservableObject {
 
     private func startAutoLock() {
         autoLockTimer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
+            guard let self else { return }
             Task { @MainActor in
-                self?.lockIfIdle()
+                self.lockIfIdle()
             }
         }
     }
@@ -2244,8 +2245,9 @@ final class VaultStore: ObservableObject {
         stopSyncPolling()
         guard isUnlocked else { return }
         syncPollTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            guard let self else { return }
             Task { @MainActor in
-                self?.checkForVaultFileChanges()
+                self.checkForVaultFileChanges()
             }
         }
     }
