@@ -8,6 +8,7 @@ MIN_SYSTEM_VERSION="13.0"
 ARCHITECTURE="arm64"
 VERSION="${VERSION:-0.1.0-alpha}"
 UPDATE_CHANNEL="manual"
+RELEASE_MODE="${RELEASE_MODE:-local-test}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 NOTARIZE="${NOTARIZE:-0}"
 NOTARY_KEYCHAIN_PROFILE="${NOTARY_KEYCHAIN_PROFILE:-}"
@@ -41,6 +42,25 @@ DMG_VOLUME_NAME="$APP_NAME $VERSION"
 if [[ "$NOTARIZE" != "0" && "$NOTARIZE" != "1" ]]; then
   echo "NOTARIZE must be 0 or 1" >&2
   exit 1
+fi
+
+case "$RELEASE_MODE" in
+  local-test|experimental-pre-release) ;;
+  *)
+    echo "RELEASE_MODE must be local-test or experimental-pre-release" >&2
+    exit 1
+    ;;
+esac
+
+if [[ "$RELEASE_MODE" == "experimental-pre-release" ]]; then
+  if [[ -z "$SIGNING_IDENTITY" ]]; then
+    echo "experimental-pre-release requires SIGNING_IDENTITY" >&2
+    exit 1
+  fi
+  if [[ "$NOTARIZE" != "1" ]]; then
+    echo "experimental-pre-release requires NOTARIZE=1" >&2
+    exit 1
+  fi
 fi
 
 require_file() {
@@ -105,6 +125,20 @@ fi
 if [[ -n "$SIGNING_IDENTITY" && "$SOURCE_WORKTREE_STATUS" != "clean" ]]; then
   echo "signed packaging requires a clean Git worktree, got: $SOURCE_WORKTREE_STATUS" >&2
   exit 1
+fi
+
+DISTRIBUTION_READY="false"
+PRODUCTION_READY="false"
+SECURITY_DECISION="not requested for local-test artifact"
+RELEASE_REASON="Local testing artifact; not approved for public distribution."
+
+if [[ "$RELEASE_MODE" == "experimental-pre-release" ]]; then
+  require_executable "$ROOT_DIR/script/verify_security_review_evidence.sh" "security decision verifier"
+  echo "Verifying experimental pre-release security decision..."
+  "$ROOT_DIR/script/verify_security_review_evidence.sh"
+  DISTRIBUTION_READY="true"
+  SECURITY_DECISION="external-review or maintainer accepted-risk path verified"
+  RELEASE_REASON="Experimental pre-release only; production use is not recommended."
 fi
 
 echo "Building Rust FFI dylib..."
@@ -291,8 +325,11 @@ Supported architecture: Apple Silicon arm64 only
 
 Release boundary
 ----------------
-Distribution ready: false
-Reason: Alpha artifact; public release still requires review and distribution decisions.
+Release mode: $RELEASE_MODE
+Security decision: $SECURITY_DECISION
+Distribution ready: $DISTRIBUTION_READY
+Production ready: $PRODUCTION_READY
+Reason: $RELEASE_REASON
 
 Follow-up validation
 --------------------

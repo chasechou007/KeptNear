@@ -5,14 +5,15 @@ ALLOW_MISSING=0
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLAN_PATH="$ROOT_DIR/docs/security-review-plan.md"
 EVIDENCE_PATH="$ROOT_DIR/docs/security-review-evidence.md"
+README_PATH="$ROOT_DIR/README.md"
 
 usage() {
   cat <<'USAGE'
 usage: script/verify_security_review_evidence.sh [--allow-missing]
 
-Verifies whether external security review evidence is complete enough for
-public-alpha approval. The default strict mode exits non-zero when evidence is
-missing or incomplete.
+Verifies whether either external security review evidence or an explicit
+maintainer accepted-risk record is complete enough for experimental
+public-alpha security approval. Distribution gates remain separate.
 
 Options:
   --allow-missing                  report missing evidence but exit 0
@@ -38,10 +39,27 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-FAILURES=()
+COMMON_FAILURES=()
+EXTERNAL_REVIEW_FAILURES=()
+ACCEPTED_RISK_FAILURES=()
+FAILURE_SCOPE="common"
 
 add_failure() {
-  FAILURES+=("$1")
+  case "$FAILURE_SCOPE" in
+    common)
+      COMMON_FAILURES+=("$1")
+      ;;
+    external)
+      EXTERNAL_REVIEW_FAILURES+=("$1")
+      ;;
+    accepted-risk)
+      ACCEPTED_RISK_FAILURES+=("$1")
+      ;;
+    *)
+      echo "invalid failure scope: $FAILURE_SCOPE" >&2
+      exit 2
+      ;;
+  esac
 }
 
 status_line() {
@@ -125,12 +143,104 @@ require_release_value() {
   fi
 }
 
-printf 'Security review evidence gate\n'
+require_release_present() {
+  local label="$1"
+  local value
+  value="$(release_value "$label")"
+  if is_missing_external_value "$value"; then
+    status_line missing "$label" "${value:-missing}"
+    add_failure "$label is missing"
+  else
+    status_line ok "$label" "$value"
+  fi
+}
+
+require_release_date() {
+  local label="$1"
+  local value
+  value="$(release_value "$label")"
+  if [[ "$value" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    status_line ok "$label" "$value"
+  else
+    status_line missing "$label" "expected YYYY-MM-DD, got '${value:-missing}'"
+    add_failure "$label is not a valid date"
+  fi
+}
+
+require_validation_on_date() {
+  local validation_date="$1"
+  local command_name="$2"
+  local label="$3"
+  if awk -F'|' -v expected_date="$validation_date" -v expected_command="\`$command_name\`" '
+    function trim(value) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      return value
+    }
+    trim($2) == expected_date && trim($3) == expected_command && trim($4) == "Passed" {
+      found = 1
+    }
+    END {
+      exit(found ? 0 : 1)
+    }
+  ' "$EVIDENCE_PATH"; then
+    status_line ok "$label" "$validation_date"
+  else
+    status_line missing "$label" "expected Passed evidence dated $validation_date"
+    add_failure "$label is missing for $validation_date"
+  fi
+}
+
+require_accepted_risk_row() {
+  local risk_id="$1"
+  local expected_owner="$2"
+  if [[ ! "$risk_id" =~ ^[A-Z0-9-]+$ ]]; then
+    status_line missing "Accepted risk row" "invalid risk ID '$risk_id'"
+    add_failure "accepted risk ID has an invalid format"
+    return
+  fi
+
+  if awk -F'|' -v id="$risk_id" -v owner="$expected_owner" '
+    function trim(value) {
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+      return value
+    }
+    {
+      row_id = trim($2)
+      if (row_id == id) {
+        found = 1
+        severity = trim($3)
+        if (severity !~ /^(Critical|High|Medium|Low)$/) {
+          invalid = 1
+        }
+        if (trim($8) != owner) {
+          invalid = 1
+        }
+        for (column = 4; column <= 9; column++) {
+          value = trim($column)
+          if (value == "" || value == "None" || value == "TBD" || value ~ /^None /) {
+            invalid = 1
+          }
+        }
+      }
+    }
+    END {
+      exit(found && !invalid ? 0 : 1)
+    }
+  ' "$EVIDENCE_PATH"; then
+    status_line ok "Accepted risk row" "$risk_id has all required fields"
+  else
+    status_line missing "Accepted risk row" "$risk_id is missing or incomplete"
+    add_failure "accepted risk row $risk_id is missing or incomplete"
+  fi
+}
+
+printf 'Security review decision gate\n'
 printf 'Mode: %s\n\n' "$(if [[ "$ALLOW_MISSING" == "1" ]]; then printf 'allow-missing report'; else printf 'strict'; fi)"
 
 printf 'Required documents\n'
 require_file "$PLAN_PATH" "security review plan"
 require_file "$EVIDENCE_PATH" "security review evidence register"
+require_file "$README_PATH" "public README"
 
 if [[ -f "$PLAN_PATH" ]]; then
   printf '\nReview plan boundaries\n'
@@ -149,35 +259,13 @@ if [[ -f "$EVIDENCE_PATH" ]]; then
   require_contains "$EVIDENCE_PATH" "validation evidence" "## Validation Evidence"
   require_contains "$EVIDENCE_PATH" "release decision" "## Release Decision"
 
-  printf '\nExternal review evidence\n'
-  require_summary_value "Review status"
-  require_summary_value "Reviewer or firm"
-  require_summary_value "Review window"
-  require_summary_value "Reviewed commit or release artifact"
-
-  final_report="$(summary_value "Final report")"
-  finding_tracker="$(summary_value "Finding tracker")"
-  if ! is_missing_external_value "$final_report"; then
-    status_line ok "Final report" "$final_report"
-  elif ! is_missing_external_value "$finding_tracker"; then
-    status_line ok "Finding tracker" "$finding_tracker"
-  else
-    status_line missing "Final report or finding tracker" "at least one must be attached"
-    add_failure "missing final report or finding tracker"
-  fi
-
+  FAILURE_SCOPE="common"
+  printf '\nRegister integrity\n'
   if grep -F "TBD" "$EVIDENCE_PATH" >/dev/null; then
     status_line missing "placeholder scan" "TBD placeholders remain"
     add_failure "TBD placeholders remain in security review evidence register"
   else
     status_line ok "placeholder scan" "no TBD placeholders"
-  fi
-
-  if grep -E '^\|[[:space:]]*None[[:space:]]*\|[[:space:]]*None selected yet[[:space:]]*\|[[:space:]]*None reviewed yet[[:space:]]*\|[[:space:]]*None attached yet[[:space:]]*\|' "$EVIDENCE_PATH" >/dev/null; then
-    status_line missing "Reviewer report rows" "no external reviewer report row attached"
-    add_failure "missing external reviewer report row"
-  else
-    status_line ok "Reviewer report rows" "external reviewer report row attached"
   fi
 
   if grep -E '^\|[^|]*\|[[:space:]]*(Critical|High)[[:space:]]*\|[[:space:]]*Open[[:space:]]*\|' "$EVIDENCE_PATH" >/dev/null; then
@@ -200,8 +288,34 @@ if [[ -f "$EVIDENCE_PATH" ]]; then
     status_line missing "alpha package validation evidence" "expected Passed row"
     add_failure "missing passed alpha package validation evidence"
   fi
+  require_release_value "Production-use recommendation" "Not recommended"
 
-  printf '\nRelease decision\n'
+  FAILURE_SCOPE="external"
+  printf '\nExternal review path\n'
+  require_summary_value "Review status"
+  require_summary_value "Reviewer or firm"
+  require_summary_value "Review window"
+  require_summary_value "Reviewed commit or release artifact"
+
+  final_report="$(summary_value "Final report")"
+  finding_tracker="$(summary_value "Finding tracker")"
+  if ! is_missing_external_value "$final_report"; then
+    status_line ok "Final report" "$final_report"
+  elif ! is_missing_external_value "$finding_tracker"; then
+    status_line ok "Finding tracker" "$finding_tracker"
+  else
+    status_line missing "Final report or finding tracker" "at least one must be attached"
+    add_failure "missing final report or finding tracker"
+  fi
+
+  if grep -E '^\|[[:space:]]*None[[:space:]]*\|[[:space:]]*None selected yet[[:space:]]*\|[[:space:]]*None reviewed yet[[:space:]]*\|[[:space:]]*None attached yet[[:space:]]*\|' "$EVIDENCE_PATH" >/dev/null; then
+    status_line missing "Reviewer report rows" "no external reviewer report row attached"
+    add_failure "missing external reviewer report row"
+  else
+    status_line ok "Reviewer report rows" "external reviewer report row attached"
+  fi
+
+  printf '\nExternal review release decision\n'
   require_release_value "External review completed" "Yes"
   require_release_value "Critical findings fixed or explicitly accepted" "Yes"
   require_release_value "High findings fixed or explicitly accepted" "Yes"
@@ -210,30 +324,55 @@ if [[ -f "$EVIDENCE_PATH" ]]; then
   require_release_value "Security model or readiness claims updated after review" "Yes"
   require_release_value "Public alpha decision" "Approved"
 
-  production_value="$(release_value "Production-use recommendation")"
-  if [[ "$production_value" == "Recommended" ]]; then
-    status_line missing "Production-use recommendation" "must remain separate from public alpha"
-    add_failure "production use recommendation must not be conflated with public alpha"
-  elif [[ -n "$production_value" ]]; then
-    status_line ok "Production-use recommendation" "$production_value"
-  else
-    status_line missing "Production-use recommendation" "missing"
-    add_failure "missing production-use recommendation"
+  FAILURE_SCOPE="accepted-risk"
+  printf '\nMaintainer accepted-risk path\n'
+  require_release_value "Experimental pre-release risk accepted" "Yes"
+  require_release_present "Accepted risk ID"
+  accepted_risk_id="$(release_value "Accepted risk ID")"
+  require_release_value "Risk acceptance owner" "Chase Chou"
+  accepted_risk_owner="$(release_value "Risk acceptance owner")"
+  if ! is_missing_external_value "$accepted_risk_id" && ! is_missing_external_value "$accepted_risk_owner"; then
+    require_accepted_risk_row "$accepted_risk_id" "$accepted_risk_owner"
   fi
+  require_release_date "Risk acceptance date"
+  risk_acceptance_date="$(release_value "Risk acceptance date")"
+  if [[ "$risk_acceptance_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+    require_validation_on_date "$risk_acceptance_date" "scripts/check.sh" "Risk-date repository validation"
+    require_validation_on_date "$risk_acceptance_date" "script/package_macos_alpha.sh" "Risk-date DMG packaging validation"
+    require_validation_on_date "$risk_acceptance_date" "script/verify_macos_alpha_artifact.sh" "Risk-date DMG artifact validation"
+    require_validation_on_date "$risk_acceptance_date" "script/verify_public_source_tree.sh" "Risk-date public-source validation"
+  fi
+  require_release_value "Accepted release scope" "v0.1.x pre-alpha macOS 13+ Apple Silicon DMG"
+  require_release_value "Public alpha security decision" "Approved for experimental pre-release"
+  require_release_value "External review required before production use" "Yes"
+  require_contains "$README_PATH" "AR-001 user warning" "AR-001"
+  require_contains "$README_PATH" "production-credential warning" "Do not use it to store production"
 fi
 
 printf '\nResult\n'
-if [[ "${#FAILURES[@]}" -eq 0 ]]; then
-  printf '  Security review evidence gate passed for public-alpha review readiness.\n'
-  printf '  Production-use recommendation remains a separate release decision.\n'
+if [[ "${#COMMON_FAILURES[@]}" -eq 0 && "${#EXTERNAL_REVIEW_FAILURES[@]}" -eq 0 ]]; then
+  printf '  External security review path passed for public-alpha security readiness.\n'
+  printf '  Production-use recommendation remains separate.\n'
   exit 0
 fi
 
-for failure in "${FAILURES[@]}"; do
-  printf '  missing: %s\n' "$failure"
+if [[ "${#COMMON_FAILURES[@]}" -eq 0 && "${#ACCEPTED_RISK_FAILURES[@]}" -eq 0 ]]; then
+  printf '  Maintainer accepted-risk path passed for experimental pre-release security readiness.\n'
+  printf '  External review remains incomplete and production use is not recommended.\n'
+  exit 0
+fi
+
+for failure in "${COMMON_FAILURES[@]}"; do
+  printf '  common missing: %s\n' "$failure"
 done
-printf '  Strict security review readiness is not approved.\n'
-printf '  This gate verifies repository evidence completeness; it does not perform an external review.\n'
+for failure in "${EXTERNAL_REVIEW_FAILURES[@]}"; do
+  printf '  external path missing: %s\n' "$failure"
+done
+for failure in "${ACCEPTED_RISK_FAILURES[@]}"; do
+  printf '  accepted-risk path missing: %s\n' "$failure"
+done
+printf '  Strict security decision readiness is not approved.\n'
+printf '  This gate verifies documented evidence and accepted-risk completeness; it does not perform an external review.\n'
 
 if [[ "$ALLOW_MISSING" == "1" ]]; then
   printf '  allow-missing mode: exiting 0 after reporting missing evidence.\n'

@@ -58,6 +58,8 @@ distribution still requires:
   Mac
 - running the packaging workflow with a real Developer ID signing identity
 - successful notarization and stapling with Apple notarytool credentials
+- setting `RELEASE_MODE=experimental-pre-release`; the default `local-test`
+  mode cannot claim distribution readiness
 - signed macOS install verification with `script/verify_macos_signed_install.sh`
   against the signed/notarized DMG
 - completed external security review evidence or explicit accepted-risk records
@@ -68,8 +70,10 @@ An external security review plan exists at
 `docs/security-review-plan.md`. This is a readiness artifact for preparing an
 independent review; it is not evidence that external review has been completed.
 Review evidence, findings, accepted risks, validation, and release decision
-status are tracked in `docs/security-review-evidence.md`; the current register
-does not yet approve public alpha.
+status are tracked in `docs/security-review-evidence.md`. The current register
+keeps external review marked incomplete while `AR-001` approves only the
+security-policy component of a signed and notarized experimental pre-release.
+It does not recommend production use.
 
 Use the evidence gate to check the current status:
 
@@ -94,13 +98,16 @@ Before public alpha approval, strict mode must pass:
 script/verify_security_review_evidence.sh
 ```
 
-Before public alpha, collect and link:
+The strict evidence gate passes through either of these paths:
 
-- reviewer report or tracked finding list
-- fixes or accepted-risk records for Critical and High findings
-- passing validation after review-driven fixes
-- updated security model or release readiness notes if review changes a claim
-- passing strict security review evidence verification
+- completed external review evidence, finding disposition, and post-review
+  validation
+- an explicit maintainer accepted-risk record with complete scope,
+  user-facing implications, mitigations, owner, revisit triggers, and
+  validation
+
+The accepted-risk path does not bypass Developer ID signing, notarization,
+signed-install verification, or experimental user warnings.
 
 ## Pre-Alpha Gates
 
@@ -116,7 +123,7 @@ Do not recommend production use until these gates are complete:
   can list managed-workspace blockers such as Launch Services registration
   access, but it does not approve local alpha readiness. This is automated
   local evidence only and does not replace signed/notarized clean-install
-  testing or external security review
+  testing or the selected external-review or accepted-risk decision path
 - local vault-format readiness verification passes with
   `script/verify_vault_format_readiness.sh`, while the format remains
   experimental until a separate public alpha freeze decision
@@ -245,7 +252,8 @@ Do not recommend production use until these gates are complete:
   guardrails
 - macOS security-state readiness verification passes with
   `script/verify_macos_security_state.sh`, while signed install behavior,
-  notarization, and external review remain separate public-alpha decisions
+  notarization, and the selected external-review or accepted-risk path remain
+  separate public-alpha decisions
 - clipboard behavior verified on macOS, including clearing copied secrets after
   timeout, clearing the current managed secret on vault lock, and preserving
   later user clipboard contents
@@ -315,9 +323,10 @@ Do not recommend production use until these gates are complete:
 - security review handoff materials can be packaged under
   `dist/security-review/` with a manifest and SHA-256 checksum, while remaining
   clearly separate from completed external review evidence
-- security review evidence verification can report missing external evidence in
-  allow-missing mode and fail strict mode until review evidence, finding
-  disposition, validation, and public-alpha approval are recorded
+- security decision evidence verification reports both the external-review and
+  maintainer accepted-risk paths; strict mode passes when common validation is
+  complete and either path is complete
 
 External review itself is a separate public-alpha readiness decision and should
-not be treated as complete until review evidence is attached.
+not be treated as complete until review evidence is attached. `AR-001` does not
+change that status.

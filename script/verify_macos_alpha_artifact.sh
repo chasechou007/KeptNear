@@ -151,11 +151,33 @@ assert_equals "manifest size" "$MANIFEST_SIZE_BYTES" "$ACTUAL_SIZE_BYTES"
 
 assert_manifest_value "Channel" "manual"
 assert_manifest_value "Automatic updates" "false"
-assert_manifest_value "Distribution ready" "false"
 assert_manifest_value "Architecture" "$ARCHITECTURE"
 assert_manifest_value "Format" "DMG"
 assert_manifest_value "Method" "Drag KeptNear.app to Applications"
 assert_manifest_value "Supported architecture" "Apple Silicon arm64 only"
+assert_manifest_value "Production ready" "false"
+
+RELEASE_MODE="$(require_manifest_field "Release mode")"
+case "$RELEASE_MODE" in
+  local-test)
+    assert_manifest_value "Security decision" "not requested for local-test artifact"
+    assert_manifest_value "Distribution ready" "false"
+    ;;
+  experimental-pre-release)
+    assert_manifest_value "Security decision" "external-review or maintainer accepted-risk path verified"
+    assert_manifest_value "Distribution ready" "true"
+    assert_equals "release app signing status" "$(manifest_section_field "Signing" "Status")" "valid"
+    assert_equals "release DMG signing status" "$(manifest_section_field "Signing" "Disk image signature")" "valid"
+    assert_equals "release hardened runtime status" "$(manifest_section_field "Signing" "Hardened runtime")" "requested"
+    assert_equals "release notarization request" "$(manifest_section_field "Notarization" "Requested")" "1"
+    assert_equals "release notarization status" "$(manifest_section_field "Notarization" "Status")" "accepted"
+    assert_equals "release staple status" "$(manifest_section_field "Notarization" "Staple status")" "valid"
+    ;;
+  *)
+    echo "invalid manifest Release mode value: $RELEASE_MODE" >&2
+    exit 1
+    ;;
+esac
 
 SOURCE_WORKTREE_STATUS="$(require_manifest_field "Source worktree")"
 case "$SOURCE_WORKTREE_STATUS" in
@@ -165,6 +187,10 @@ case "$SOURCE_WORKTREE_STATUS" in
     exit 1
     ;;
 esac
+if [[ "$RELEASE_MODE" == "experimental-pre-release" && "$SOURCE_WORKTREE_STATUS" != "clean" ]]; then
+  echo "experimental pre-release must come from a clean source worktree" >&2
+  exit 1
+fi
 
 hdiutil verify "$ARCHIVE_PATH" >/dev/null
 
@@ -254,4 +280,5 @@ echo "Signing status: $ACTUAL_SIGNING_STATUS"
 echo "Disk image signing status: $ACTUAL_DMG_SIGNING_STATUS"
 echo "Architecture: $ARCHITECTURE"
 echo "Source worktree: $SOURCE_WORKTREE_STATUS"
+echo "Release mode: $RELEASE_MODE"
 echo "Update channel: manual"

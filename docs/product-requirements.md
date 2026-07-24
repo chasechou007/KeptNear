@@ -46,7 +46,8 @@ Non-target users for the first product phase:
 - No silent trust expansion: diagnostics, updates, sync placement, and
   convenience unlock must disclose their boundaries.
 - Security before distribution: public alpha must not be approved without
-  signed install verification and external review evidence.
+  signed install verification and either external review evidence or an
+  explicit, scoped maintainer accepted-risk record.
 
 ## Implemented Review
 
@@ -166,7 +167,7 @@ Implemented:
 - Optional Developer ID signing and notarization support in packaging scripts
   when credentials are provided.
 - Distribution environment preflight.
-- Signed install verification script for signed and notarized archives.
+- Signed install verification script for signed and notarized DMGs.
 - `.pswvault` package-style document registration metadata and verification.
 - Local Launch Services smoke verification for `.pswvault` registration, with
   managed-workspace blockers reported rather than hidden.
@@ -263,14 +264,16 @@ Exit criteria:
 
 ### Phase 3: Security and Trust
 
-Status: local controls implemented, external trust gates incomplete.
+Status: local controls implemented; `AR-001` accepts the limited unaudited
+experimental pre-release risk, while signed distribution gates remain
+incomplete.
 
 Exit criteria:
 
 - External security review completed or explicit accepted-risk records exist.
 - Strict security review evidence verification passes.
 - Strict public alpha readiness passes.
-- Signed and notarized archive passes clean install verification.
+- Signed and notarized DMG passes clean install verification.
 - Security model, logging policy, diagnostics, update policy, and release notes
   are aligned with reviewed behavior.
 
@@ -330,8 +333,9 @@ Exit criteria:
 - The product must keep diagnostics non-secret and user-initiated.
 - The product must not automatically upload telemetry, diagnostics, crash
   reports, vault records, or logs in the alpha.
-- The product must not approve public alpha until external review and signed
-  distribution gates are satisfied.
+- The product must not approve public alpha until external review or an
+  explicit maintainer accepted-risk path passes and all signed distribution
+  gates are satisfied.
 
 ### Import, Export, Backup, and Recovery
 

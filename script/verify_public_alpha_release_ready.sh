@@ -18,7 +18,7 @@ Strict mode verifies the full public-alpha release gate:
   - Developer ID / notarization environment preflight
   - signed and notarized Apple Silicon DMG generation
   - signed install verification
-  - external security review evidence
+  - external review evidence or explicit maintainer accepted-risk evidence
 
 Options:
   --allow-missing                  report current blockers without generating or notarizing artifacts
@@ -76,7 +76,7 @@ require_executable "$ROOT_DIR/script/package_security_review_materials.sh" "secu
 require_executable "$ROOT_DIR/script/verify_macos_distribution_environment.sh" "macOS distribution environment preflight"
 require_executable "$ROOT_DIR/script/package_macos_alpha.sh" "macOS alpha package script"
 require_executable "$ROOT_DIR/script/verify_macos_signed_install.sh" "signed install verifier"
-require_executable "$ROOT_DIR/script/verify_security_review_evidence.sh" "security review evidence verifier"
+require_executable "$ROOT_DIR/script/verify_security_review_evidence.sh" "security decision evidence verifier"
 
 cd "$ROOT_DIR"
 
@@ -90,7 +90,7 @@ REPORT
 
   report_step "Distribution environment report" "$ROOT_DIR/script/verify_macos_distribution_environment.sh" --allow-missing
   report_step "Security review materials package" "$ROOT_DIR/script/package_security_review_materials.sh"
-  report_step "Security review evidence report" "$ROOT_DIR/script/verify_security_review_evidence.sh" --allow-missing
+  report_step "Security decision evidence report" "$ROOT_DIR/script/verify_security_review_evidence.sh"
 
   if [[ -f "$ARCHIVE_PATH" ]]; then
     report_step "Signed install verifier against current DMG" "$ROOT_DIR/script/verify_macos_signed_install.sh" "$ARCHIVE_PATH"
@@ -109,7 +109,7 @@ Strict public alpha readiness still requires:
 - Developer ID signing and notarization credentials
 - signed and notarized Apple Silicon DMG generation
 - signed install verification
-- completed external security review evidence and release approval
+- a passing external-review or explicit maintainer accepted-risk decision path
 SUMMARY
   exit 0
 fi
@@ -125,9 +125,9 @@ STRICT
 run_step "Distribution environment preflight" "$ROOT_DIR/script/verify_macos_distribution_environment.sh"
 run_step "Local alpha readiness" "$ROOT_DIR/script/verify_local_alpha_readiness.sh"
 run_step "Security review materials package" "$ROOT_DIR/script/package_security_review_materials.sh"
-run_step "Signed and notarized Apple Silicon DMG" env VERSION="$VERSION" NOTARIZE=1 "$ROOT_DIR/script/package_macos_alpha.sh"
+run_step "Security decision evidence verification" "$ROOT_DIR/script/verify_security_review_evidence.sh"
+run_step "Signed and notarized Apple Silicon DMG" env VERSION="$VERSION" RELEASE_MODE=experimental-pre-release NOTARIZE=1 "$ROOT_DIR/script/package_macos_alpha.sh"
 run_step "Signed install verification" "$ROOT_DIR/script/verify_macos_signed_install.sh" "$ARCHIVE_PATH"
-run_step "Security review evidence verification" "$ROOT_DIR/script/verify_security_review_evidence.sh"
 cat <<'SUMMARY'
 
 Verified public alpha release readiness.

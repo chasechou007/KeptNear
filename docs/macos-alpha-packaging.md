@@ -29,7 +29,8 @@ test. It generates the default unsigned alpha artifact under
 Passing this command is local automated evidence only. Public alpha still
 requires separate security review handoff package generation, Developer ID
 signing/notarization decisions, clean signed/notarized install behavior checks,
-and external security review evidence.
+and either external review evidence or explicit maintainer accepted-risk
+evidence.
 
 On managed workspaces or automation agents where Launch Services registration
 may be blocked, use report mode to run the local gate sequence and list current
@@ -46,8 +47,8 @@ alpha build with trusted testers.
 ## Verify Public Alpha Release Readiness
 
 For a release operator with Developer ID credentials, notarization credentials,
-signed-install verification, and completed security review evidence, run the
-strict public-alpha release gate:
+signed-install verification, and completed external-review or maintainer
+accepted-risk evidence, run the strict public-alpha release gate:
 
 ```sh
 script/verify_public_alpha_release_ready.sh
@@ -64,10 +65,10 @@ script/verify_public_alpha_release_ready.sh --allow-missing
 Strict mode composes local alpha readiness, security review handoff package
 generation and checksum verification, distribution environment preflight,
 signed and notarized package generation, signed install verification, security
-review evidence verification. Report mode also runs the local handoff package
-step, but it remains non-approving and does not
-complete external security review. Passing strict mode is public-alpha release
-evidence only; production-use recommendation remains a separate decision.
+decision evidence verification. Report mode also runs the local handoff package
+step, but it remains non-approving and does not complete external security
+review. Passing strict mode is public-alpha release evidence only;
+production-use recommendation remains a separate decision.
 
 ## Build The Alpha Package
 
@@ -123,20 +124,23 @@ testing, or security review and accepted-risk decisions.
 
 To sign the nested Rust FFI dylib and app bundle with hardened runtime, then
 sign the DMG, set `SIGNING_IDENTITY` to a local Developer ID Application
-identity:
+identity. Without a release mode this remains a local-test artifact:
 
 ```sh
 SIGNING_IDENTITY="Developer ID Application: Example, Inc. (TEAMID)" \
   script/package_macos_alpha.sh
 ```
 
-To notarize and staple the DMG after signing, also set `NOTARIZE=1` and provide
-one notarytool credential mode.
+For an experimental public pre-release, set
+`RELEASE_MODE=experimental-pre-release`, `NOTARIZE=1`, and provide one
+notarytool credential mode. This mode also runs the strict security decision
+evidence verifier and requires a clean Git worktree.
 
 Use a stored notarytool keychain profile:
 
 ```sh
 SIGNING_IDENTITY="Developer ID Application: Example, Inc. (TEAMID)" \
+RELEASE_MODE=experimental-pre-release \
 NOTARIZE=1 \
 NOTARY_KEYCHAIN_PROFILE="psw-notary" \
   script/package_macos_alpha.sh
@@ -146,6 +150,7 @@ Or use Apple ID credentials from the environment:
 
 ```sh
 SIGNING_IDENTITY="Developer ID Application: Example, Inc. (TEAMID)" \
+RELEASE_MODE=experimental-pre-release \
 NOTARIZE=1 \
 APPLE_ID="developer@example.com" \
 APPLE_TEAM_ID="TEAMID" \
@@ -164,12 +169,13 @@ verifier:
 script/verify_macos_signed_install.sh dist/releases/KeptNear-0.1.0-alpha-macos-arm64.dmg
 ```
 
-The verifier first runs the alpha artifact verifier, then requires manifest
-evidence for valid app and DMG signing, notarization acceptance, hardened
-runtime, and a valid staple. It verifies the DMG with `codesign`, Gatekeeper,
-and `stapler`, mounts the image read-only, copies the app into a temporary clean
-install directory, then verifies the app with `codesign`, Gatekeeper, and Launch
-Services `.pswvault` registration. Unsigned DMGs fail this verifier by design.
+The verifier first runs the alpha artifact verifier, then requires an
+`experimental-pre-release` manifest with distribution readiness, valid app and
+DMG signing, notarization acceptance, hardened runtime, and a valid staple. It
+verifies the DMG with `codesign`, Gatekeeper, and `stapler`, mounts the image
+read-only, copies the app into a temporary clean install directory, then
+verifies the app with `codesign`, Gatekeeper, and Launch Services `.pswvault`
+registration. Unsigned or local-test DMGs fail this verifier by design.
 
 ## Inspect The Artifact
 
@@ -257,14 +263,17 @@ the full workflow and rationale.
 
 ## Distribution Boundary
 
-The default alpha DMG is unsigned. It is suitable only for local testing and
-trusted testers who understand macOS Gatekeeper prompts.
+The default `local-test` DMG is unsigned and records
+`Distribution ready: false`. It is suitable only for local testing and trusted
+testers who understand macOS Gatekeeper prompts.
 
-A signed and notarized alpha DMG improves Gatekeeper behavior, but the
-manifest still records `Distribution ready: false` until the project has made
-the remaining release decisions.
+An `experimental-pre-release` DMG records `Distribution ready: true` only after
+the security decision path passes and signed, notarized packaging completes.
+Every alpha manifest records `Production ready: false`.
 
 Public distribution still requires:
 
 - generated and checksum-verified security review handoff materials
 - external security review evidence or explicit accepted-risk records
+- Developer ID signing, hardened runtime, notarization, and signed-install
+  verification; accepted risk does not bypass these controls

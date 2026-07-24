@@ -20,7 +20,9 @@ This project is a source-only pre-alpha preview. It is experimental and has not
 received an external security audit. Do not use it to store production
 credentials. No installable binary or GitHub Release is provided yet. The first
 binary target is macOS 13 or newer on Apple Silicon (`arm64`), distributed as a
-DMG. See
+DMG. The maintainer has explicitly accepted the risk of an externally unaudited
+experimental pre-release under `AR-001`; this does not recommend production
+use. See
 `docs/release-readiness.md` and `docs/security-review-evidence.md` for the
 current release and review state.
 
@@ -105,7 +107,7 @@ Report current public-alpha release blockers without approving readiness:
 script/verify_public_alpha_release_ready.sh --allow-missing
 ```
 
-Report current external security review evidence state:
+Report current external-review or maintainer accepted-risk decision state:
 
 ```sh
 script/verify_security_review_evidence.sh --allow-missing

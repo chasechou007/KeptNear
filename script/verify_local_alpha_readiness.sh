@@ -138,10 +138,10 @@ cat <<'SUMMARY'
 
 Verified local alpha readiness evidence.
 
-External blockers still remain before public alpha:
+Local readiness does not evaluate these separate public-alpha gates:
 - Developer ID signing, hardened runtime, notarization, and stapling decisions
 - Clean signed/notarized install and Finder double-click verification
-- External security review evidence, finding disposition, and release approval
+- External-review or explicit maintainer accepted-risk decision verification
 
 This command does not approve public alpha or production use.
 SUMMARY
