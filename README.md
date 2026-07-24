@@ -18,14 +18,17 @@ Syncthing, or WebDAV.
 
 This project is a source-only pre-alpha preview. It is experimental and has not
 received an external security audit. Do not use it to store production
-credentials. No installable binary or GitHub Release is provided. See
+credentials. No installable binary or GitHub Release is provided yet. The first
+binary target is macOS 13 or newer on Apple Silicon (`arm64`), distributed as a
+DMG. See
 `docs/release-readiness.md` and `docs/security-review-evidence.md` for the
 current release and review state.
 
 ## Current Scope
 
 - Rust core for vault format, cryptographic boundaries, item model, sync metadata, import/export, TOTP, and search.
-- Native macOS client as the first UI target.
+- Native macOS 13+ client, with Apple Silicon (`arm64`) as the first binary
+  release target.
 - Vaults stored as encrypted directories rather than a single monolithic database file.
 - Cloud providers treated only as encrypted-file transport.
 
@@ -115,16 +118,16 @@ checksum:
 script/package_security_review_materials.sh
 ```
 
-Create an unsigned local macOS alpha package:
+Create an unsigned local Apple Silicon DMG:
 
 ```sh
 script/package_macos_alpha.sh
 ```
 
-Verify a signed and notarized alpha archive before public-alpha install checks:
+Verify a signed and notarized DMG before public-alpha install checks:
 
 ```sh
-script/verify_macos_signed_install.sh dist/releases/KeptNear-0.1.0-alpha-macos-alpha.zip
+script/verify_macos_signed_install.sh dist/releases/KeptNear-0.1.0-alpha-macos-arm64.dmg
 ```
 
 Preflight the local Developer ID and notarization environment before attempting

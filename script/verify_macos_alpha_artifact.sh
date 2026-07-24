@@ -3,11 +3,12 @@ set -euo pipefail
 
 APP_NAME="KeptNear"
 VERSION="${VERSION:-0.1.0-alpha}"
+ARCHITECTURE="arm64"
 VAULT_TYPE_IDENTIFIER="app.psw.local.vault"
 VAULT_EXTENSION="pswvault"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DEFAULT_ARCHIVE="$ROOT_DIR/dist/releases/$APP_NAME-$VERSION-macos-alpha.zip"
+DEFAULT_ARCHIVE="$ROOT_DIR/dist/releases/$APP_NAME-$VERSION-macos-arm64.dmg"
 ARCHIVE_PATH="${1:-$DEFAULT_ARCHIVE}"
 
 if [[ "$ARCHIVE_PATH" != /* ]]; then
@@ -16,15 +17,36 @@ fi
 
 ARCHIVE_DIR="$(cd "$(dirname "$ARCHIVE_PATH")" && pwd)"
 ARCHIVE_BASENAME="$(basename "$ARCHIVE_PATH")"
-ARCHIVE_STEM="${ARCHIVE_BASENAME%.zip}"
+if [[ "$ARCHIVE_BASENAME" != *.dmg ]]; then
+  echo "expected a .dmg artifact, got: $ARCHIVE_BASENAME" >&2
+  exit 1
+fi
+ARCHIVE_STEM="${ARCHIVE_BASENAME%.dmg}"
 CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
 MANIFEST_PATH="$ARCHIVE_DIR/$ARCHIVE_STEM-manifest.txt"
 
 require_file() {
   local path="$1"
   local description="$2"
-  if [[ ! -f "$path" ]]; then
-    echo "missing $description: $path" >&2
+  if [[ ! -f "$path" || -L "$path" ]]; then
+    echo "missing regular $description: $path" >&2
+    exit 1
+  fi
+}
+
+require_directory() {
+  local path="$1"
+  local description="$2"
+  if [[ ! -d "$path" || -L "$path" ]]; then
+    echo "missing real $description: $path" >&2
+    exit 1
+  fi
+}
+
+require_command() {
+  local command_name="$1"
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    echo "missing required command: $command_name" >&2
     exit 1
   fi
 }
@@ -32,6 +54,20 @@ require_file() {
 manifest_field() {
   local field="$1"
   awk -F': ' -v key="$field" '$1 == key { print $2; exit }' "$MANIFEST_PATH"
+}
+
+manifest_section_field() {
+  local section="$1"
+  local field="$2"
+  awk -F': ' -v section="$section" -v key="$field" '
+    $0 == section { in_section = 1; next }
+    in_section && $0 == "" { in_section = 0; next }
+    in_section && $1 == key {
+      sub("^[^:]+: ", "")
+      print
+      exit
+    }
+  ' "$MANIFEST_PATH"
 }
 
 require_manifest_field() {
@@ -43,6 +79,17 @@ require_manifest_field() {
     exit 1
   fi
   printf '%s' "$value"
+}
+
+require_arm64_binary() {
+  local path="$1"
+  local description="$2"
+  local architectures
+  architectures="$(lipo -archs "$path")"
+  if [[ "$architectures" != "$ARCHITECTURE" ]]; then
+    echo "$description must be arm64-only, got: $architectures" >&2
+    exit 1
+  fi
 }
 
 assert_equals() {
@@ -81,9 +128,13 @@ assert_plist_value() {
   assert_equals "Info.plist $key_path" "$actual" "$expected"
 }
 
-require_file "$ARCHIVE_PATH" "archive"
+require_file "$ARCHIVE_PATH" "disk image"
 require_file "$CHECKSUM_PATH" "checksum"
 require_file "$MANIFEST_PATH" "manifest"
+require_command codesign
+require_command hdiutil
+require_command lipo
+require_command xcrun
 
 (
   cd "$ARCHIVE_DIR"
@@ -101,18 +152,51 @@ assert_equals "manifest size" "$MANIFEST_SIZE_BYTES" "$ACTUAL_SIZE_BYTES"
 assert_manifest_value "Channel" "manual"
 assert_manifest_value "Automatic updates" "false"
 assert_manifest_value "Distribution ready" "false"
+assert_manifest_value "Architecture" "$ARCHITECTURE"
+assert_manifest_value "Format" "DMG"
+assert_manifest_value "Method" "Drag KeptNear.app to Applications"
+assert_manifest_value "Supported architecture" "Apple Silicon arm64 only"
 
-unzip -l "$ARCHIVE_PATH" | grep -F "$APP_NAME.app/Contents/MacOS/$APP_NAME" >/dev/null
-unzip -l "$ARCHIVE_PATH" | grep -F "$APP_NAME.app/Contents/Info.plist" >/dev/null
-unzip -l "$ARCHIVE_PATH" | grep -F "$APP_NAME.app/Contents/Frameworks/libpsw_ffi.dylib" >/dev/null
-unzip -l "$ARCHIVE_PATH" | grep -F "$APP_NAME.app/Contents/Resources/KeptNear.icns" >/dev/null
+SOURCE_WORKTREE_STATUS="$(require_manifest_field "Source worktree")"
+case "$SOURCE_WORKTREE_STATUS" in
+  clean|dirty|unavailable) ;;
+  *)
+    echo "invalid manifest Source worktree value: $SOURCE_WORKTREE_STATUS" >&2
+    exit 1
+    ;;
+esac
+
+hdiutil verify "$ARCHIVE_PATH" >/dev/null
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/psw-alpha-verify.XXXXXX")"
-trap 'rm -rf "$TMP_DIR"' EXIT
+MOUNT_DIR="$TMP_DIR/mount"
+COPIED_APP="$TMP_DIR/$APP_NAME.app"
+MOUNTED=0
 
-/usr/bin/ditto -x -k "$ARCHIVE_PATH" "$TMP_DIR"
+cleanup() {
+  if [[ "$MOUNTED" == "1" ]]; then
+    hdiutil detach "$MOUNT_DIR" >/dev/null 2>&1 || true
+  fi
+  rm -rf "$TMP_DIR"
+}
+trap cleanup EXIT
 
-APP_BUNDLE="$TMP_DIR/$APP_NAME.app"
+mkdir -p "$MOUNT_DIR"
+hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_DIR" "$ARCHIVE_PATH" >/dev/null
+MOUNTED=1
+
+require_directory "$MOUNT_DIR/$APP_NAME.app" "app bundle in disk image"
+if [[ ! -L "$MOUNT_DIR/Applications" ]]; then
+  echo "disk image is missing Applications link" >&2
+  exit 1
+fi
+assert_equals "Applications link" "$(readlink "$MOUNT_DIR/Applications")" "/Applications"
+
+/usr/bin/ditto "$MOUNT_DIR/$APP_NAME.app" "$COPIED_APP"
+hdiutil detach "$MOUNT_DIR" >/dev/null
+MOUNTED=0
+
+APP_BUNDLE="$COPIED_APP"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 INFO_PLIST="$APP_BUNDLE/Contents/Info.plist"
 FFI_DYLIB="$APP_BUNDLE/Contents/Frameworks/libpsw_ffi.dylib"
@@ -122,6 +206,8 @@ require_file "$APP_BINARY" "app executable"
 require_file "$INFO_PLIST" "Info.plist"
 require_file "$FFI_DYLIB" "Rust FFI dylib"
 require_file "$APP_ICON" "app icon"
+require_arm64_binary "$APP_BINARY" "app executable"
+require_arm64_binary "$FFI_DYLIB" "Rust FFI dylib"
 
 if [[ ! -x "$APP_BINARY" ]]; then
   echo "app executable is not executable: $APP_BINARY" >&2
@@ -141,7 +227,8 @@ assert_plist_value ":UTExportedTypeDeclarations:0:UTTypeDescription" "KeptNear V
 assert_plist_value ":UTExportedTypeDeclarations:0:UTTypeConformsTo:0" "com.apple.package"
 assert_plist_value ":UTExportedTypeDeclarations:0:UTTypeTagSpecification:public.filename-extension" "$VAULT_EXTENSION"
 
-MANIFEST_SIGNING_STATUS="$(require_manifest_field "Status")"
+MANIFEST_SIGNING_STATUS="$(manifest_section_field "Signing" "Status")"
+MANIFEST_DMG_SIGNING_STATUS="$(manifest_section_field "Signing" "Disk image signature")"
 if codesign --verify --deep --strict "$APP_BUNDLE" >/dev/null 2>&1; then
   ACTUAL_SIGNING_STATUS="valid"
 else
@@ -149,12 +236,22 @@ else
 fi
 assert_equals "signing status" "$ACTUAL_SIGNING_STATUS" "$MANIFEST_SIGNING_STATUS"
 
-STAPLE_STATUS="$(require_manifest_field "Staple status")"
+if codesign --verify --strict "$ARCHIVE_PATH" >/dev/null 2>&1; then
+  ACTUAL_DMG_SIGNING_STATUS="valid"
+else
+  ACTUAL_DMG_SIGNING_STATUS="unsigned"
+fi
+assert_equals "disk image signing status" "$ACTUAL_DMG_SIGNING_STATUS" "$MANIFEST_DMG_SIGNING_STATUS"
+
+STAPLE_STATUS="$(manifest_section_field "Notarization" "Staple status")"
 if [[ "$STAPLE_STATUS" == "valid" ]]; then
-  xcrun stapler validate "$APP_BUNDLE" >/dev/null
+  xcrun stapler validate "$ARCHIVE_PATH" >/dev/null
 fi
 
 echo "Verified alpha artifact: $ARCHIVE_PATH"
 echo "SHA-256: $ACTUAL_SHA256"
 echo "Signing status: $ACTUAL_SIGNING_STATUS"
+echo "Disk image signing status: $ACTUAL_DMG_SIGNING_STATUS"
+echo "Architecture: $ARCHITECTURE"
+echo "Source worktree: $SOURCE_WORKTREE_STATUS"
 echo "Update channel: manual"

@@ -6,7 +6,7 @@ VERSION="${VERSION:-0.1.0-alpha}"
 ALLOW_MISSING=0
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ARCHIVE_PATH="$ROOT_DIR/dist/releases/$APP_NAME-$VERSION-macos-alpha.zip"
+ARCHIVE_PATH="$ROOT_DIR/dist/releases/$APP_NAME-$VERSION-macos-arm64.dmg"
 APP_BUNDLE="$ROOT_DIR/dist/alpha-staging/$APP_NAME.app"
 
 usage() {
@@ -18,8 +18,8 @@ Strict mode verifies the full local alpha readiness gate:
   - vault-format readiness
   - vault doctor readiness
   - macOS security-state readiness
-  - unsigned macOS alpha package generation
-  - alpha artifact verification
+  - unsigned Apple Silicon DMG generation
+  - arm64 DMG artifact verification
   - Launch Services vault-type registration
 
 Options:
@@ -106,8 +106,8 @@ REPORT
   report_step "Vault-format readiness" "$ROOT_DIR/script/verify_vault_format_readiness.sh"
   report_step "Vault doctor readiness" "$ROOT_DIR/script/verify_vault_doctor_readiness.sh"
   report_step "macOS security-state readiness" "$ROOT_DIR/script/verify_macos_security_state.sh"
-  report_step "Unsigned macOS alpha package" env VERSION="$VERSION" SIGNING_IDENTITY="" NOTARIZE=0 "$ROOT_DIR/script/package_macos_alpha.sh"
-  report_step "macOS alpha artifact verification" "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" "$ARCHIVE_PATH"
+  report_step "Unsigned Apple Silicon DMG" env VERSION="$VERSION" SIGNING_IDENTITY="" NOTARIZE=0 "$ROOT_DIR/script/package_macos_alpha.sh"
+  report_step "Apple Silicon DMG verification" "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" "$ARCHIVE_PATH"
   report_step "Launch Services vault type verification" "$ROOT_DIR/script/verify_macos_launch_services_vault_type.sh" "$APP_BUNDLE"
 
   cat <<'SUMMARY'
@@ -117,7 +117,7 @@ Local alpha readiness is not approved in allow-missing report mode.
 Strict local alpha readiness still requires:
 - passing broad repository checks
 - passing vault-format, vault doctor, and macOS security-state readiness
-- generating and verifying the unsigned macOS alpha artifact
+- generating and verifying the unsigned arm64 DMG artifact
 - successful Launch Services vault-type registration in the current user's database
 
 If Launch Services registration is blocked by a managed workspace sandbox or
@@ -131,8 +131,8 @@ run_step "Broad repository checks" "$ROOT_DIR/scripts/check.sh"
 run_step "Vault-format readiness" "$ROOT_DIR/script/verify_vault_format_readiness.sh"
 run_step "Vault doctor readiness" "$ROOT_DIR/script/verify_vault_doctor_readiness.sh"
 run_step "macOS security-state readiness" "$ROOT_DIR/script/verify_macos_security_state.sh"
-run_step "Unsigned macOS alpha package" env VERSION="$VERSION" SIGNING_IDENTITY="" NOTARIZE=0 "$ROOT_DIR/script/package_macos_alpha.sh"
-run_step "macOS alpha artifact verification" "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" "$ARCHIVE_PATH"
+run_step "Unsigned Apple Silicon DMG" env VERSION="$VERSION" SIGNING_IDENTITY="" NOTARIZE=0 "$ROOT_DIR/script/package_macos_alpha.sh"
+run_step "Apple Silicon DMG verification" "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" "$ARCHIVE_PATH"
 run_step "Launch Services vault type verification" "$ROOT_DIR/script/verify_macos_launch_services_vault_type.sh" "$APP_BUNDLE"
 cat <<'SUMMARY'
 

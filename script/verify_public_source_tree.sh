@@ -41,6 +41,9 @@ while IFS= read -r path; do
     *.1pux|*.kdbx|*.opvault|*.opvault/*|*.agilekeychain|*.agilekeychain/*|*.pem|*.p12|*.p8|*.key|*.jks|*.keystore|*.mobileprovision|.env|.env.*|*/.env|*/.env.*)
       report_violation "credential or password-manager artifact is publishable: $path"
       ;;
+    *.dmg|*.pkg|*.xcarchive|*.xcarchive/*|*.app|*.app/*)
+      report_violation "macOS build or release artifact is publishable: $path"
+      ;;
     *.csv)
       case "$path" in
         fixtures/imports/*) ;;

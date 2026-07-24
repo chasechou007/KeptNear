@@ -1,15 +1,15 @@
 # Product Requirements Document
 
-Review date: 2026-07-11
+Review date: 2026-07-24
 
 ## Product Summary
 
 KeptNear is a local-first password manager for users who want a native
 desktop vault with encrypted file sync instead of a hosted password-management
-account. The first shippable product is macOS-first, backed by a reusable Rust
-core, and stores vault data in an encrypted `.pswvault` directory that can be
-copied by untrusted sync providers such as iCloud Drive, Dropbox, Syncthing, or
-WebDAV.
+account. The first shippable product targets macOS 13 or newer on Apple Silicon
+(`arm64`), backed by a reusable Rust core, and stores vault data in an encrypted
+`.pswvault` directory that can be copied by untrusted sync providers such as
+iCloud Drive, Dropbox, Syncthing, or WebDAV.
 
 The product is not trying to become a hosted 1Password 8 style cloud service.
 It is trying to be a more polished local-first open-source vault than
@@ -162,7 +162,7 @@ Implemented:
 
 - First-run and empty-vault guidance in the macOS client.
 - Manual alpha update policy.
-- Unsigned local macOS alpha package generation with checksum and manifest.
+- Unsigned local Apple Silicon DMG generation with checksum and manifest.
 - Optional Developer ID signing and notarization support in packaging scripts
   when credentials are provided.
 - Distribution environment preflight.

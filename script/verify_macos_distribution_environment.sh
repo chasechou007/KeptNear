@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ALLOW_MISSING=0
+ARCHITECTURE="arm64"
 NOTARIZE="${NOTARIZE:-1}"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
 NOTARY_KEYCHAIN_PROFILE="${NOTARY_KEYCHAIN_PROFILE:-}"
@@ -13,7 +14,8 @@ usage() {
   cat <<'USAGE'
 usage: script/verify_macos_distribution_environment.sh [--allow-missing]
 
-Checks the local macOS Developer ID signing and notarization environment.
+Checks the local Apple Silicon macOS Developer ID signing and notarization
+environment for an arm64 DMG.
 
 Environment:
   SIGNING_IDENTITY                 Developer ID Application identity name
@@ -93,6 +95,7 @@ developer_identity_present() {
 
 printf 'macOS distribution environment preflight\n'
 printf 'Mode: %s\n' "$(if [[ "$ALLOW_MISSING" == "1" ]]; then printf 'allow-missing report'; else printf 'strict'; fi)"
+printf 'Target architecture: %s\n' "$ARCHITECTURE"
 printf 'Requested notarization: %s\n\n' "$NOTARIZE"
 
 if [[ "$NOTARIZE" != "0" && "$NOTARIZE" != "1" ]]; then
@@ -102,11 +105,22 @@ fi
 
 printf 'Required tools\n'
 check_command codesign || true
+check_command hdiutil || true
+check_command lipo || true
 check_command security || true
 check_command xcrun || true
 if [[ "$NOTARIZE" == "1" ]]; then
   check_xcrun_tool notarytool || true
   check_xcrun_tool stapler || true
+fi
+
+printf '\nBuild host\n'
+HOST_ARCHITECTURE="$(uname -m)"
+if [[ "$HOST_ARCHITECTURE" == "$ARCHITECTURE" ]]; then
+  status_line ok architecture "$HOST_ARCHITECTURE"
+else
+  status_line invalid architecture "expected $ARCHITECTURE, got $HOST_ARCHITECTURE"
+  add_failure "Apple Silicon packaging requires an arm64 host"
 fi
 
 printf '\nSigning identity\n'
@@ -143,7 +157,7 @@ fi
 
 printf '\nResult\n'
 if [[ "${#FAILURES[@]}" -eq 0 ]]; then
-  printf '  Ready for requested macOS distribution preflight.\n'
+  printf '  Ready for requested Apple Silicon DMG distribution preflight.\n'
   printf '  Next: run script/package_macos_alpha.sh with the same signing environment.\n'
   exit 0
 fi
@@ -152,7 +166,7 @@ for failure in "${FAILURES[@]}"; do
   printf '  missing: %s\n' "$failure"
 done
 printf '  Strict distribution readiness is not approved.\n'
-printf '  This preflight does not replace signed packaging, artifact verification, clean install testing, or external security review.\n'
+printf '  This preflight does not replace signed packaging, artifact verification, clean install testing, or security review and accepted-risk decisions.\n'
 
 if [[ "$ALLOW_MISSING" == "1" ]]; then
   printf '  allow-missing mode: exiting 0 after reporting missing prerequisites.\n'

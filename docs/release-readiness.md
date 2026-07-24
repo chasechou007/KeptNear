@@ -20,13 +20,14 @@ These pins avoid transitive crates that require Rust 2024 edition and newer comp
 
 ## macOS Target
 
-The Swift package currently targets macOS 13 or newer. That gives a practical baseline for SwiftUI, modern file pickers, and AppKit interoperability while avoiding the oldest SwiftUI behavior gaps.
+The first binary release target is macOS 13 or newer on Apple Silicon
+(`arm64`). Intel Macs, Windows, iOS, and browser extensions are outside this
+first distribution scope. The reusable Rust core remains structured so later
+platform work does not require changing the portable vault format.
 
 Before public alpha, confirm:
 
-- final minimum macOS version
 - signing identity and hardened runtime requirements
-- sandbox entitlements, if distributed through the Mac App Store
 - Keychain access group behavior
 - local convenience unlock review, including the Keychain local-key plus
   `local_unlock.enc` envelope boundary and cleanup behavior for old alpha
@@ -38,8 +39,8 @@ Before public alpha, confirm:
 
 ## Distribution Notes
 
-The current macOS packaging workflow can create an unsigned local alpha zip with
-a checksum and manifest:
+The current macOS packaging workflow can create an unsigned local Apple Silicon
+DMG with a checksum and manifest:
 
 ```sh
 script/package_macos_alpha.sh
@@ -58,7 +59,7 @@ distribution still requires:
 - running the packaging workflow with a real Developer ID signing identity
 - successful notarization and stapling with Apple notarytool credentials
 - signed macOS install verification with `script/verify_macos_signed_install.sh`
-  against the signed/notarized archive
+  against the signed/notarized DMG
 - completed external security review evidence or explicit accepted-risk records
 
 ## Security Review
@@ -184,7 +185,8 @@ Do not recommend production use until these gates are complete:
 - vault creation and master-password rotation show local, advisory strength
   guidance without recording scores in diagnostics or blocking non-empty weak
   passwords
-- unsigned macOS alpha package can be generated with checksum and manifest
+- unsigned Apple Silicon macOS alpha DMG can be generated with checksum and
+  manifest
 - macOS alpha packaging supports optional Developer ID signing, hardened
   runtime, notarization, stapling, and manifest status metadata when local
   Apple credentials are provided
@@ -193,15 +195,15 @@ Do not recommend production use until these gates are complete:
   notarization credential shape without printing secret credential values; an
   allow-missing report mode exists for development machines without release
   credentials and does not approve distribution readiness
-- macOS alpha release artifacts can be verified with a repository command that
-  checks checksum, required bundle files, manifest integrity metadata, signing
-  status, manual update channel, `.pswvault` document metadata, and distribution
-  boundary
-- signed and notarized macOS alpha archives can be verified from a clean
-  temporary install directory with `script/verify_macos_signed_install.sh`,
-  including signed manifest status, notarization acceptance, staple validation,
+- macOS alpha DMGs can be verified with a repository command that checks the
+  checksum, mounted image structure, Applications link, arm64-only app and FFI
+  binaries, manifest integrity metadata, signing status, manual update channel,
+  `.pswvault` document metadata, and distribution boundary
+- signed and notarized macOS alpha DMGs can be verified from a clean temporary
+  install directory with `script/verify_macos_signed_install.sh`, including
+  signed manifest status, notarization acceptance, staple validation,
   `codesign`, Gatekeeper assessment, and Launch Services `.pswvault`
-  registration; unsigned archives are rejected by this verifier
+  registration; unsigned DMGs are rejected by this verifier
 - public alpha update policy is manual, documented, and recorded in the package
   manifest; automatic updates are deferred until after alpha review
 - first-run and empty-vault guidance is visible in the macOS client

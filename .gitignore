@@ -26,6 +26,8 @@ passwords.csv
 
 # Local build and release artifacts
 dist/
+*.dmg
+*.pkg
 *.dSYM/
 *.xcarchive/
 

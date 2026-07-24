@@ -6,7 +6,7 @@ VERSION="${VERSION:-0.1.0-alpha}"
 ALLOW_MISSING=0
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ARCHIVE_PATH="$ROOT_DIR/dist/releases/$APP_NAME-$VERSION-macos-alpha.zip"
+ARCHIVE_PATH="$ROOT_DIR/dist/releases/$APP_NAME-$VERSION-macos-arm64.dmg"
 
 usage() {
   cat <<'USAGE'
@@ -16,7 +16,7 @@ Strict mode verifies the full public-alpha release gate:
   - local alpha readiness
   - security review handoff package generation and checksum verification
   - Developer ID / notarization environment preflight
-  - signed and notarized package generation
+  - signed and notarized Apple Silicon DMG generation
   - signed install verification
   - external security review evidence
 
@@ -93,10 +93,10 @@ REPORT
   report_step "Security review evidence report" "$ROOT_DIR/script/verify_security_review_evidence.sh" --allow-missing
 
   if [[ -f "$ARCHIVE_PATH" ]]; then
-    report_step "Signed install verifier against current archive" "$ROOT_DIR/script/verify_macos_signed_install.sh" "$ARCHIVE_PATH"
+    report_step "Signed install verifier against current DMG" "$ROOT_DIR/script/verify_macos_signed_install.sh" "$ARCHIVE_PATH"
   else
-    printf '\n==> Signed install verifier against current archive\n'
-    printf 'Report step found blockers: missing archive %s\n' "$ARCHIVE_PATH"
+    printf '\n==> Signed install verifier against current DMG\n'
+    printf 'Report step found blockers: missing DMG %s\n' "$ARCHIVE_PATH"
   fi
 
   cat <<'SUMMARY'
@@ -107,7 +107,7 @@ Strict public alpha readiness still requires:
 - passing local alpha readiness
 - generated and checksum-verified security review handoff materials
 - Developer ID signing and notarization credentials
-- signed and notarized package generation
+- signed and notarized Apple Silicon DMG generation
 - signed install verification
 - completed external security review evidence and release approval
 SUMMARY
@@ -117,7 +117,7 @@ fi
 cat <<'STRICT'
 Public alpha release readiness strict gate.
 
-This command may build, sign, notarize, and staple an alpha archive using the
+This command may build, sign, notarize, and staple an Apple Silicon DMG using the
 current signing environment. It exits non-zero until every public-alpha blocker
 is cleared.
 STRICT
@@ -125,7 +125,7 @@ STRICT
 run_step "Distribution environment preflight" "$ROOT_DIR/script/verify_macos_distribution_environment.sh"
 run_step "Local alpha readiness" "$ROOT_DIR/script/verify_local_alpha_readiness.sh"
 run_step "Security review materials package" "$ROOT_DIR/script/package_security_review_materials.sh"
-run_step "Signed and notarized macOS alpha package" env VERSION="$VERSION" NOTARIZE=1 "$ROOT_DIR/script/package_macos_alpha.sh"
+run_step "Signed and notarized Apple Silicon DMG" env VERSION="$VERSION" NOTARIZE=1 "$ROOT_DIR/script/package_macos_alpha.sh"
 run_step "Signed install verification" "$ROOT_DIR/script/verify_macos_signed_install.sh" "$ARCHIVE_PATH"
 run_step "Security review evidence verification" "$ROOT_DIR/script/verify_security_review_evidence.sh"
 cat <<'SUMMARY'

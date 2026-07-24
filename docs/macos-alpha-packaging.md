@@ -1,8 +1,12 @@
 # macOS Alpha Packaging
 
-This project can create a local alpha package for test distribution. By default
-the package is unsigned. If Developer ID credentials are available, the same
-workflow can optionally sign, notarize, and staple the app bundle.
+This project can create an Apple Silicon (`arm64`) DMG for local alpha testing.
+The generated app targets macOS 13 or newer. By default the DMG is unsigned. If
+Developer ID credentials are available, the same workflow can optionally sign
+the nested Rust library, app bundle, and disk image, then notarize and staple
+the DMG.
+
+Intel Macs are not supported by this first binary distribution target.
 
 The alpha package is not a full public release decision even when signed and
 notarized.
@@ -71,14 +75,19 @@ evidence only; production-use recommendation remains a separate decision.
 script/package_macos_alpha.sh
 ```
 
-The script builds:
+The script requires an Apple Silicon build host and builds:
 
 - Rust FFI dylib in release mode
 - SwiftPM macOS executable in release mode
 - `dist/alpha-staging/KeptNear.app` with `.pswvault` document/package metadata
-- `dist/releases/KeptNear-0.1.0-alpha-macos-alpha.zip`
-- `dist/releases/KeptNear-0.1.0-alpha-macos-alpha.zip.sha256`
-- `dist/releases/KeptNear-0.1.0-alpha-macos-alpha-manifest.txt`
+- `dist/releases/KeptNear-0.1.0-alpha-macos-arm64.dmg`
+- `dist/releases/KeptNear-0.1.0-alpha-macos-arm64.dmg.sha256`
+- `dist/releases/KeptNear-0.1.0-alpha-macos-arm64-manifest.txt`
+
+The DMG contains `KeptNear.app` and an `Applications` link for drag-to-install.
+Packaging fails if the app executable or Rust FFI dylib is not arm64-only.
+The manifest records whether the source worktree was clean; signed packaging
+fails unless it is built from a clean Git worktree.
 
 Set `VERSION` to override the alpha version label:
 
@@ -106,21 +115,22 @@ prerequisites without claiming readiness:
 script/verify_macos_distribution_environment.sh --allow-missing
 ```
 
-The preflight checks local tool availability, the configured Developer ID
-Application identity, and notarization credential mode. It does not store
-credentials, print app-specific passwords, upload an app, or replace signed
-package generation, artifact verification, clean install testing, or external
-security review.
+The preflight checks the arm64 build host, local DMG and architecture tools, the
+configured Developer ID Application identity, and notarization credential
+mode. It does not store credentials, print app-specific passwords, upload an
+app, or replace signed package generation, artifact verification, clean install
+testing, or security review and accepted-risk decisions.
 
-To sign the nested Rust FFI dylib and the app bundle with hardened runtime, set
-`SIGNING_IDENTITY` to a local Developer ID Application identity:
+To sign the nested Rust FFI dylib and app bundle with hardened runtime, then
+sign the DMG, set `SIGNING_IDENTITY` to a local Developer ID Application
+identity:
 
 ```sh
 SIGNING_IDENTITY="Developer ID Application: Example, Inc. (TEAMID)" \
   script/package_macos_alpha.sh
 ```
 
-To notarize and staple the app after signing, also set `NOTARIZE=1` and provide
+To notarize and staple the DMG after signing, also set `NOTARIZE=1` and provide
 one notarytool credential mode.
 
 Use a stored notarytool keychain profile:
@@ -143,46 +153,47 @@ APPLE_APP_SPECIFIC_PASSWORD="app-specific-password" \
   script/package_macos_alpha.sh
 ```
 
-The script submits a temporary pre-staple zip to `xcrun notarytool`, staples the
-accepted ticket to `KeptNear.app`, validates the staple, then creates the final
-release archive and checksum.
+The script signs the completed DMG, submits it to `xcrun notarytool`, staples
+the accepted ticket to the DMG, validates the staple, then creates the checksum
+and manifest.
 
-After creating a signed and notarized alpha archive, run the signed install
+After creating a signed and notarized alpha DMG, run the signed install
 verifier:
 
 ```sh
-script/verify_macos_signed_install.sh dist/releases/KeptNear-0.1.0-alpha-macos-alpha.zip
+script/verify_macos_signed_install.sh dist/releases/KeptNear-0.1.0-alpha-macos-arm64.dmg
 ```
 
 The verifier first runs the alpha artifact verifier, then requires manifest
-evidence for valid signing, notarization acceptance, hardened runtime, and a
-valid staple. It extracts the archive into a temporary clean install directory
-and verifies `codesign`, Gatekeeper assessment with `spctl`, stapled ticket
-validation, and Launch Services `.pswvault` registration from the extracted app
-bundle. Unsigned archives fail this verifier by design.
+evidence for valid app and DMG signing, notarization acceptance, hardened
+runtime, and a valid staple. It verifies the DMG with `codesign`, Gatekeeper,
+and `stapler`, mounts the image read-only, copies the app into a temporary clean
+install directory, then verifies the app with `codesign`, Gatekeeper, and Launch
+Services `.pswvault` registration. Unsigned DMGs fail this verifier by design.
 
 ## Inspect The Artifact
 
-Verify the generated archive from the repository root:
+Verify the generated DMG from the repository root:
 
 ```sh
 script/verify_macos_alpha_artifact.sh
 ```
 
-Or pass an explicit archive path:
+Or pass an explicit DMG path:
 
 ```sh
-script/verify_macos_alpha_artifact.sh dist/releases/KeptNear-0.1.0-alpha-macos-alpha.zip
+script/verify_macos_alpha_artifact.sh dist/releases/KeptNear-0.1.0-alpha-macos-arm64.dmg
 ```
 
-The verifier checks the archive checksum, required bundle files, manifest
-SHA-256 and size metadata, signing status, manual update channel, and release
+The verifier checks the DMG checksum, image integrity, mounted app and
+Applications link, arm64-only app and FFI architectures, manifest SHA-256 and
+size metadata, app and DMG signing status, manual update channel, and release
 distribution boundary. It also checks that `Contents/Info.plist` advertises
 `.pswvault` as a package-style document type using the project-owned
 `app.psw.local.vault` type identifier. The manifest records the bundle
-identifier, minimum macOS version, checksum, signing status, notarization
-status, staple validation status, update channel, and validation command used
-for the artifact.
+identifier, minimum macOS version, architecture, checksum, signing status,
+notarization status, staple validation status, update channel, and validation
+command used for the artifact.
 
 ## Verify Vault Doctor Readiness
 
@@ -239,16 +250,17 @@ explicit agent approval for user-level Launch Services access.
 The public alpha update channel is manual. KeptNear does not contact an update
 server or include an automatic updater in this phase.
 
-Testers update by downloading the newer alpha archive, verifying the checksum,
-quitting KeptNear, replacing `KeptNear.app`, and reopening their existing local
-`.pswvault`. See `docs/update-policy.md` for the full workflow and rationale.
+Testers update by downloading the newer alpha DMG, verifying the checksum,
+quitting KeptNear, opening the DMG, dragging `KeptNear.app` to Applications,
+and reopening their existing local `.pswvault`. See `docs/update-policy.md` for
+the full workflow and rationale.
 
 ## Distribution Boundary
 
-The default alpha package is unsigned. It is suitable for local testing and
+The default alpha DMG is unsigned. It is suitable only for local testing and
 trusted testers who understand macOS Gatekeeper prompts.
 
-A signed and notarized alpha package improves Gatekeeper behavior, but the
+A signed and notarized alpha DMG improves Gatekeeper behavior, but the
 manifest still records `Distribution ready: false` until the project has made
 the remaining release decisions.
 
