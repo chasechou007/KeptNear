@@ -152,6 +152,11 @@ struct AppText {
     var closeVault: String { choose("Close Vault", "关闭密码库", "保管庫を閉じる") }
     var vaultMenu: String { choose("Vault", "密码库", "保管庫") }
     var itemMenu: String { choose("Item", "项目", "アイテム") }
+    var fileMenu: String { choose("File", "文件", "ファイル") }
+    var editMenu: String { choose("Edit", "编辑", "編集") }
+    var viewMenu: String { choose("View", "显示", "表示") }
+    var windowMenu: String { choose("Window", "窗口", "ウインドウ") }
+    var helpMenu: String { choose("Help", "帮助", "ヘルプ") }
     var saveItem: String { choose("Save Item", "保存项目", "アイテムを保存") }
     var focusSearch: String { choose("Focus Search", "聚焦搜索", "検索欄にフォーカス") }
     var copyUsername: String { choose("Copy Username", "复制用户名", "ユーザー名をコピー") }

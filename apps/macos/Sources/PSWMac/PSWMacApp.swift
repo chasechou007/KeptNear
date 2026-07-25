@@ -7,10 +7,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var terminationHandler: (() -> Void)?
     private var lastWindowCloseHandler: (() -> Void)?
     private var pendingOpenURLs: [[URL]] = []
+    private var menuBarLanguageRaw = AppLanguage.english.rawValue
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // SwiftUI can rebuild standard menus after scene updates, so reapply titles last.
+    func applicationDidUpdate(_ notification: Notification) {
+        refreshMenuBarLanguage()
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
@@ -44,6 +50,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func installLastWindowCloseHandler(_ handler: @escaping () -> Void) {
         lastWindowCloseHandler = handler
+    }
+
+    func updateMenuBarLanguage(_ languageRaw: String) {
+        menuBarLanguageRaw = languageRaw
+        refreshMenuBarLanguage()
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshMenuBarLanguage()
+        }
+    }
+
+    private func refreshMenuBarLanguage() {
+        MenuBarLocalization.apply(using: AppText(menuBarLanguageRaw))
     }
 
     @discardableResult
@@ -82,6 +100,10 @@ struct PSWMacApp: App {
                     appDelegate.installLastWindowCloseHandler {
                         store.lock()
                     }
+                    appDelegate.updateMenuBarLanguage(languageRaw)
+                }
+                .onChange(of: languageRaw) { newValue in
+                    appDelegate.updateMenuBarLanguage(newValue)
                 }
                 .onOpenURL { url in
                     _ = SystemVaultOpenHandler.openFirstVault(from: [url], store: store)

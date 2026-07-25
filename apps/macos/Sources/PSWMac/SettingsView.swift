@@ -11,125 +11,134 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
-            Form {
-                Picker(text.languageLabel, selection: $languageRaw) {
-                    ForEach(AppLanguage.allCases) { language in
-                        Text(language.displayName).tag(language.rawValue)
+            ScrollView {
+                Form {
+                    Picker(text.languageLabel, selection: $languageRaw) {
+                        ForEach(AppLanguage.allCases) { language in
+                            Text(language.displayName).tag(language.rawValue)
+                        }
                     }
-                }
-                .pickerStyle(.radioGroup)
+                    .pickerStyle(.radioGroup)
 
-                Text(text.languageHint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: 300, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text(text.languageHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: 300, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(20)
             .tabItem {
                 Label(text.settingsGeneral, systemImage: "gearshape")
             }
-            Form {
-                TrustBoundarySummaryView(text: text)
+            ScrollView {
+                Form {
+                    TrustBoundarySummaryView(text: text)
 
-                Divider()
+                    Divider()
 
-                Picker(text.clipboard, selection: $store.clipboardTimeout) {
-                    ForEach(VaultStore.supportedClipboardTimeouts, id: \.self) { seconds in
-                        Text(text.durationOption(seconds)).tag(seconds)
+                    Picker(text.clipboard, selection: $store.clipboardTimeout) {
+                        ForEach(VaultStore.supportedClipboardTimeouts, id: \.self) { seconds in
+                            Text(text.durationOption(seconds)).tag(seconds)
+                        }
                     }
-                }
-                .pickerStyle(.radioGroup)
+                    .pickerStyle(.radioGroup)
 
-                Text(text.clipboardPreferenceHint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: 300, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text(text.clipboardPreferenceHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: 300, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                Divider()
+                    Divider()
 
-                Picker(text.autoLock, selection: $store.autoLockSeconds) {
-                    ForEach(VaultStore.supportedAutoLockDurations, id: \.self) { seconds in
-                        Text(text.durationOption(seconds)).tag(seconds)
+                    Picker(text.autoLock, selection: $store.autoLockSeconds) {
+                        ForEach(VaultStore.supportedAutoLockDurations, id: \.self) { seconds in
+                            Text(text.durationOption(seconds)).tag(seconds)
+                        }
                     }
-                }
-                .pickerStyle(.radioGroup)
+                    .pickerStyle(.radioGroup)
 
-                Text(text.autoLockPreferenceHint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: 300, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text(text.autoLockPreferenceHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: 300, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                Divider()
+                    Divider()
 
-                Text(text.masterPasswordRotationHint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: 300, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
+                    Text(text.masterPasswordRotationHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: 300, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                SecureField(text.currentMasterPassword, text: $masterPasswordRotationForm.currentPassword)
-                SecureField(text.newMasterPassword, text: $masterPasswordRotationForm.newPassword)
-                MasterPasswordStrengthView(password: masterPasswordRotationForm.newPassword, text: text)
-                SecureField(text.confirmNewMasterPassword, text: $masterPasswordRotationForm.confirmation)
+                    SecureField(text.currentMasterPassword, text: $masterPasswordRotationForm.currentPassword)
+                    SecureField(text.newMasterPassword, text: $masterPasswordRotationForm.newPassword)
+                    MasterPasswordStrengthView(password: masterPasswordRotationForm.newPassword, text: text)
+                    SecureField(text.confirmNewMasterPassword, text: $masterPasswordRotationForm.confirmation)
 
-                Button {
-                    if store.changeMasterPassword(
-                        currentPassword: masterPasswordRotationForm.currentPassword,
-                        newPassword: masterPasswordRotationForm.newPassword,
-                        confirmation: masterPasswordRotationForm.confirmation
-                    ) {
-                        masterPasswordRotationForm.clear()
+                    Button {
+                        if store.changeMasterPassword(
+                            currentPassword: masterPasswordRotationForm.currentPassword,
+                            newPassword: masterPasswordRotationForm.newPassword,
+                            confirmation: masterPasswordRotationForm.confirmation
+                        ) {
+                            masterPasswordRotationForm.clear()
+                        }
+                    } label: {
+                        Label(text.changeMasterPassword, systemImage: "key")
                     }
-                } label: {
-                    Label(text.changeMasterPassword, systemImage: "key")
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!store.isUnlocked || store.isBusy)
+
+                    Divider()
+
+                    Text(text.cleanupLegacyKeychainHint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: 300, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Button {
+                        store.cleanupLegacyKeychainPasswords()
+                    } label: {
+                        Label(text.cleanupLegacyKeychain, systemImage: "trash")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(store.vaultURL == nil || store.isBusy)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!store.isUnlocked || store.isBusy)
-
-                Divider()
-
-                Text(text.cleanupLegacyKeychainHint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: 300, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Button {
-                    store.cleanupLegacyKeychainPasswords()
-                } label: {
-                    Label(text.cleanupLegacyKeychain, systemImage: "trash")
-                }
-                .buttonStyle(.bordered)
-                .disabled(store.vaultURL == nil || store.isBusy)
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(20)
             .tabItem {
                 Label(text.security, systemImage: "lock.shield")
             }
-            Form {
-                Text(text.diagnosticsHint)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: 300, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Button {
-                    store.copyDiagnostics(languageRaw: languageRaw)
-                } label: {
-                    Label(text.copyDiagnostics, systemImage: "doc.on.doc")
-                }
-                .buttonStyle(.borderedProminent)
-
-                if store.statusMessage == "Diagnostics copied" {
-                    Text(text.diagnosticsCopied)
+            ScrollView {
+                Form {
+                    Text(text.diagnosticsHint)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .frame(maxWidth: 300, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Button {
+                        store.copyDiagnostics(languageRaw: languageRaw)
+                    } label: {
+                        Label(text.copyDiagnostics, systemImage: "doc.on.doc")
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    if store.statusMessage == "Diagnostics copied" {
+                        Text(text.diagnosticsCopied)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
+                .padding(20)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(20)
             .tabItem {
                 Label(text.diagnostics, systemImage: "wrench.and.screwdriver")
             }

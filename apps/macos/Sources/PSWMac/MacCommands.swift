@@ -1,4 +1,69 @@
+import AppKit
 import SwiftUI
+
+enum MenuBarLocalization {
+    enum Kind: CaseIterable, Equatable {
+        case file
+        case edit
+        case view
+        case window
+        case help
+        case item
+        case vault
+    }
+
+    private static let knownTitles: [Kind: Set<String>] = [
+        .file: ["File", "文件", "ファイル"],
+        .edit: ["Edit", "编辑", "編集"],
+        .view: ["View", "显示", "表示"],
+        .window: ["Window", "窗口", "ウインドウ"],
+        .help: ["Help", "帮助", "ヘルプ"],
+        .item: ["Item", "项目", "アイテム"],
+        .vault: ["Vault", "密码库", "保管庫"]
+    ]
+
+    static func kind(forTitle title: String) -> Kind? {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        for (kind, titles) in knownTitles where titles.contains(trimmed) {
+            return kind
+        }
+        return nil
+    }
+
+    static func localizedTitle(for kind: Kind, text: AppText) -> String {
+        switch kind {
+        case .file:
+            return text.fileMenu
+        case .edit:
+            return text.editMenu
+        case .view:
+            return text.viewMenu
+        case .window:
+            return text.windowMenu
+        case .help:
+            return text.helpMenu
+        case .item:
+            return text.itemMenu
+        case .vault:
+            return text.vaultMenu
+        }
+    }
+
+    static func apply(using text: AppText) {
+        guard let mainMenu = NSApp.mainMenu else { return }
+        for item in mainMenu.items {
+            guard let kind = kind(forTitle: item.title) else { continue }
+            let localized = localizedTitle(for: kind, text: text)
+            if item.title != localized {
+                item.title = localized
+            }
+            if item.submenu?.title != localized {
+                item.submenu?.title = localized
+            }
+        }
+    }
+}
 
 enum PSWMacCommand: CaseIterable {
     case newItem
