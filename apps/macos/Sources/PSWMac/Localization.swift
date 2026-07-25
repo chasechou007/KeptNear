@@ -572,6 +572,7 @@ struct AppText {
     var delete: String { choose("Delete", "删除", "削除") }
     var displayName: String { choose("Display Name", "显示名称", "表示名") }
     var cancel: String { choose("Cancel", "取消", "キャンセル") }
+    var settings: String { choose("Settings", "设置", "設定") }
     var settingsGeneral: String { choose("General", "通用", "一般") }
     var languageLabel: String { choose("Language", "语言", "言語") }
     var languageHint: String { choose("Changes apply immediately.", "更改会立即生效。", "変更はすぐに反映されます。") }

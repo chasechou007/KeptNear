@@ -370,6 +370,9 @@ struct ContentView: View {
                 }
                 .disabled(store.vaultURL == nil)
             }
+            ToolbarItem(placement: .primaryAction) {
+                SettingsToolbarButton(text: text)
+            }
         }
         .sheet(isPresented: $showingCreateSheet) {
             createVaultSheet
