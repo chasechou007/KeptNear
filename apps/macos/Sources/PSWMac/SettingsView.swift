@@ -26,8 +26,7 @@ struct SettingsView: View {
                         .frame(maxWidth: 300, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .settingsFormLayout()
             }
             .tabItem {
                 Label(text.settingsGeneral, systemImage: "gearshape")
@@ -109,8 +108,7 @@ struct SettingsView: View {
                     .buttonStyle(.bordered)
                     .disabled(store.vaultURL == nil || store.isBusy)
                 }
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .settingsFormLayout()
             }
             .tabItem {
                 Label(text.security, systemImage: "lock.shield")
@@ -136,14 +134,13 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                .padding(20)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .settingsFormLayout()
             }
             .tabItem {
                 Label(text.diagnostics, systemImage: "wrench.and.screwdriver")
             }
         }
-        .frame(width: 520, height: 500)
+        .frame(width: 600, height: 500)
         .onChange(of: store.isUnlocked) { isUnlocked in
             if !isUnlocked {
                 masterPasswordRotationForm.clear()
@@ -152,6 +149,22 @@ struct SettingsView: View {
         .onDisappear {
             masterPasswordRotationForm.clear()
         }
+    }
+}
+
+private struct SettingsFormLayout: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: 520, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+}
+
+private extension View {
+    func settingsFormLayout() -> some View {
+        modifier(SettingsFormLayout())
     }
 }
 
