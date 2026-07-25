@@ -240,10 +240,10 @@ script/verify_macos_distribution_environment.sh --allow-missing
   active secret state. `Close Vault` leaves the current vault, clears active
   state, and returns to the first-run view without deleting the vault directory
   or forgetting the recent vault shortcut.
-- Switch the interface language, clipboard clear timeout, and auto-lock
-  duration from the macOS Settings window. Security timing preferences persist
-  across app launches, and the vault also locks on system sleep, screen sleep,
-  or session lock.
+- Switch the interface between English, Simplified Chinese, and Japanese, and
+  configure the clipboard clear timeout and auto-lock duration from the macOS
+  Settings window. Security timing preferences persist across app launches,
+  and the vault also locks on system sleep, screen sleep, or session lock.
 - Copied secrets clear after the configured timeout and are also cleared when
   the vault locks if they are still the app-managed clipboard value.
 - Change the master password for an unlocked vault from Settings. The existing

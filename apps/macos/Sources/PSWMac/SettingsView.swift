@@ -22,6 +22,8 @@ struct SettingsView: View {
                 Text(text.languageHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: 300, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .padding(20)
             .tabItem {
@@ -42,6 +44,8 @@ struct SettingsView: View {
                 Text(text.clipboardPreferenceHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: 300, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Divider()
 
@@ -55,12 +59,16 @@ struct SettingsView: View {
                 Text(text.autoLockPreferenceHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: 300, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Divider()
 
                 Text(text.masterPasswordRotationHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: 300, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 SecureField(text.currentMasterPassword, text: $masterPasswordRotationForm.currentPassword)
                 SecureField(text.newMasterPassword, text: $masterPasswordRotationForm.newPassword)
@@ -86,6 +94,8 @@ struct SettingsView: View {
                 Text(text.cleanupLegacyKeychainHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: 300, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Button {
                     store.cleanupLegacyKeychainPasswords()
@@ -103,6 +113,8 @@ struct SettingsView: View {
                 Text(text.diagnosticsHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .frame(maxWidth: 300, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
 
                 Button {
                     store.copyDiagnostics(languageRaw: languageRaw)

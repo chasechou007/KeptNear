@@ -77,8 +77,8 @@ Implemented:
   Bitwarden JSON export with explicit warnings and cleanup actions.
 - Encrypted backup and restore workflows that copy portable encrypted vault
   structure without creating plaintext exports.
-- English and Simplified Chinese UI language setting, clipboard timeout
-  setting, and auto-lock duration setting.
+- English, Simplified Chinese, and Japanese UI language setting, clipboard
+  timeout setting, and auto-lock duration setting.
 
 Key evidence:
 

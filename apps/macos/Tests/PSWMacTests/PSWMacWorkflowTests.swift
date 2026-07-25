@@ -502,6 +502,88 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(AppLanguage.resolve("unknown"), .english)
     }
 
+    func testLanguageTextSupportsJapanese() {
+        let japanese = AppText(AppLanguage.japanese.rawValue)
+
+        XCTAssertEqual(
+            AppLanguage.allCases,
+            [.english, .simplifiedChinese, .japanese]
+        )
+        XCTAssertEqual(AppLanguage.japanese.rawValue, "ja")
+        XCTAssertEqual(AppLanguage.japanese.displayName, "日本語")
+        XCTAssertEqual(AppLanguage.resolve("ja"), .japanese)
+        XCTAssertEqual(AppLanguage.resolve("unknown"), .english)
+
+        XCTAssertEqual(japanese.newVault, "新規保管庫")
+        XCTAssertEqual(japanese.openRecentVault, "最近使った保管庫を開く")
+        XCTAssertEqual(japanese.languageLabel, "言語")
+        XCTAssertEqual(japanese.languageHint, "変更はすぐに反映されます。")
+        XCTAssertEqual(japanese.login, "ログイン")
+        XCTAssertEqual(japanese.secureNote, "セキュアノート")
+        XCTAssertEqual(japanese.masterPassword, "マスターパスワード")
+        XCTAssertEqual(japanese.diagnostics, "診断")
+        XCTAssertEqual(japanese.syncReadiness, "同期準備状況")
+        XCTAssertEqual(japanese.trustBoundaryTitle, "信頼境界")
+        XCTAssertEqual(
+            japanese.syncRefreshPausedMessage,
+            "暗号化ファイルの変更が待機しています。現在の編集を保存または破棄すると、ディスクから更新されます。"
+        )
+        XCTAssertEqual(
+            japanese.masterPasswordStrengthLabel(
+                MasterPasswordStrength.evaluate("LocalVaults-2026")
+            ),
+            "強度：強い"
+        )
+        XCTAssertEqual(
+            japanese.syncLocationHint(VaultSyncLocationHint(provider: .iCloudDrive)),
+            "同期の可能性：iCloud Drive"
+        )
+        XCTAssertEqual(
+            japanese.staleSaveReviewMessage("Personal Email"),
+            "Personal Email はディスク上で変更されています。再度保存する前に、保持された下書きを確認してください。"
+        )
+        XCTAssertEqual(
+            japanese.plaintextExportMessage("backup.json"),
+            "backup.json に保管庫データを平文で書き込みますか？このファイルを入手した人は誰でも、エクスポートした秘密情報を読み取れます。"
+        )
+
+        XCTAssertEqual(japanese.statusMessage("Vault created"), "保管庫を作成しました")
+        XCTAssertEqual(japanese.statusMessage("Vault unlocked"), "保管庫のロックを解除しました")
+        XCTAssertEqual(japanese.statusMessage("12 items"), "12件のアイテム")
+        XCTAssertEqual(
+            japanese.statusMessage("Export completed: 2 exported, 1 skipped"),
+            "エクスポート完了：2件をエクスポート、1件をスキップ"
+        )
+        XCTAssertEqual(
+            japanese.statusMessage("Backup completed: 3 items, 1 attachments, 2 tombstones"),
+            "バックアップ完了：アイテムファイル 3件、添付ファイル 1件、削除マーカー 2件"
+        )
+        XCTAssertEqual(
+            japanese.statusMessage("Restore completed: 3 items, 1 attachments, 2 tombstones"),
+            "復元完了：アイテムファイル 3件、添付ファイル 1件、削除マーカー 2件"
+        )
+        XCTAssertEqual(
+            japanese.statusMessage("Vault copied to sync location: 3 items, 1 attachments, 2 tombstones"),
+            "同期先へコピーしました：アイテムファイル 3件、添付ファイル 1件、削除マーカー 2件"
+        )
+        XCTAssertEqual(
+            japanese.statusMessage("Quarantined 2 rejected records"),
+            "拒否された同期レコード 2件を隔離しました"
+        )
+        XCTAssertEqual(
+            japanese.statusMessage("2 conflict versions"),
+            "競合バージョン 2件"
+        )
+        XCTAssertEqual(
+            japanese.statusMessage("Save or discard edits before switching vaults"),
+            "保管庫を切り替える前に編集を保存または破棄してください"
+        )
+        XCTAssertEqual(
+            japanese.statusMessage("opaque core error"),
+            "opaque core error"
+        )
+    }
+
     func testMacCommandAvailabilityTracksUnlockedAndSaveGuardState() {
         let locked = PSWMacCommandAvailability(
             isUnlocked: false,
