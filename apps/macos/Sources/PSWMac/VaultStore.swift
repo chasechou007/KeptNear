@@ -34,6 +34,37 @@ final class VaultStore: ObservableObject {
     static let genericLoginCsvImportFormat = "generic-login-csv"
     static let knownItemTypeOrder = ["login", "secure note", "credit card", "software license"]
 
+    @MainActor
+    private struct NavigationFilterState {
+        let destination: VaultNavigationDestination
+        let includeArchived: Bool
+        let showArchivedOnly: Bool
+        let showFavoritesOnly: Bool
+        let showConflictsOnly: Bool
+        let selectedItemTypeFilter: String?
+        let selectedTagFilter: String?
+
+        init(store: VaultStore) {
+            destination = store.navigationDestination
+            includeArchived = store.includeArchived
+            showArchivedOnly = store.showArchivedOnly
+            showFavoritesOnly = store.showFavoritesOnly
+            showConflictsOnly = store.showConflictsOnly
+            selectedItemTypeFilter = store.selectedItemTypeFilter
+            selectedTagFilter = store.selectedTagFilter
+        }
+
+        func restore(to store: VaultStore) {
+            store.navigationDestination = destination
+            store.includeArchived = includeArchived
+            store.showArchivedOnly = showArchivedOnly
+            store.showFavoritesOnly = showFavoritesOnly
+            store.showConflictsOnly = showConflictsOnly
+            store.selectedItemTypeFilter = selectedItemTypeFilter
+            store.selectedTagFilter = selectedTagFilter
+        }
+    }
+
     @Published var vaultURL: URL?
     @Published var sessionId: UInt64?
     @Published var items: [VaultItemView] = []
@@ -47,12 +78,15 @@ final class VaultStore: ObservableObject {
     @Published var statusMessage = ""
     @Published var isBusy = false
     @Published var includeArchived = false
+    @Published var showArchivedOnly = false
     @Published var showFavoritesOnly = false
     @Published var showConflictsOnly = false
     @Published var selectedItemTypeFilter: String?
     @Published private(set) var availableItemTypes: [String] = []
     @Published var selectedTagFilter: String?
     @Published private(set) var availableTags: [String] = []
+    @Published private(set) var navigationDestination = VaultNavigationDestination.allItems
+    @Published private(set) var navigationItems: [VaultItemView] = []
     @Published var clipboardTimeout: TimeInterval = VaultStore.defaultClipboardTimeout {
         didSet {
             let normalizedValue = normalizePreference(
@@ -126,8 +160,13 @@ final class VaultStore: ObservableObject {
         items.first { $0.id == selectedItemId }
     }
 
+    var navigationCounts: VaultNavigationCounts {
+        VaultNavigationCounts(items: navigationItems, passwordHealth: passwordHealth)
+    }
+
     var hasActiveListFilters: Bool {
         includeArchived
+            || showArchivedOnly
             || showFavoritesOnly
             || showConflictsOnly
             || selectedItemTypeFilter != nil
@@ -582,6 +621,7 @@ final class VaultStore: ObservableObject {
         guard let sessionId else { return }
         perform {
             if applyVisibleItems(try service.listItems(sessionId: sessionId)) {
+                refreshNavigationInventory()
                 resetVaultSignature()
                 statusMessage = "\(items.count) items"
             }
@@ -612,12 +652,17 @@ final class VaultStore: ObservableObject {
         }
         searchText = ""
         includeArchived = true
+        showArchivedOnly = false
         showFavoritesOnly = false
         showConflictsOnly = false
         selectedItemTypeFilter = nil
         selectedTagFilter = nil
         _ = search()
-        return select(itemId: issue.itemId, discardingUnsavedEdits: discardingUnsavedEdits)
+        let selected = select(itemId: issue.itemId, discardingUnsavedEdits: discardingUnsavedEdits)
+        if selected {
+            navigationDestination = .security
+        }
+        return selected
     }
 
     @discardableResult
@@ -631,15 +676,97 @@ final class VaultStore: ObservableObject {
         guard isUnlocked else { return false }
         searchText = ""
         includeArchived = false
+        showArchivedOnly = false
         showFavoritesOnly = false
         showConflictsOnly = false
         selectedItemTypeFilter = nil
         selectedTagFilter = nil
         let applied = search()
         if applied {
+            navigationDestination = .allItems
             statusMessage = "Filters cleared"
         }
         return applied
+    }
+
+    @discardableResult
+    func applyNavigationDestination(
+        _ destination: VaultNavigationDestination,
+        discardingUnsavedEdits: Bool = false
+    ) -> Bool {
+        guard isUnlocked else { return false }
+        guard destination != navigationDestination else { return true }
+
+        if destination == .security {
+            navigationDestination = .security
+            return true
+        }
+
+        let previousState = NavigationFilterState(store: self)
+        if discardingUnsavedEdits {
+            editorHasUnsavedChanges = false
+        }
+        applyFilterState(for: destination)
+
+        guard search() else {
+            previousState.restore(to: self)
+            return false
+        }
+
+        navigationDestination = destination
+        return true
+    }
+
+    func navigationDestinationHidesSelectedItem(
+        _ destination: VaultNavigationDestination
+    ) -> Bool {
+        guard destination.isItemDestination, let selectedItem else { return false }
+
+        switch destination {
+        case .allItems:
+            return selectedItem.isArchived
+        case .favorites:
+            return selectedItem.isArchived || !selectedItem.favorite
+        case .security:
+            return false
+        case .conflicts:
+            return selectedItem.isArchived || !selectedItem.isConflicted
+        case .archive:
+            return !selectedItem.isArchived
+        case let .itemType(itemType):
+            return selectedItem.isArchived
+                || Self.normalizedItemType(selectedItem.itemType) != Self.normalizedItemType(itemType)
+        case let .tag(tag):
+            return selectedItem.isArchived
+                || !selectedItem.tags.contains { Self.normalizedTag($0) == Self.normalizedTag(tag) }
+        }
+    }
+
+    private func applyFilterState(for destination: VaultNavigationDestination) {
+        includeArchived = false
+        showArchivedOnly = false
+        showFavoritesOnly = false
+        showConflictsOnly = false
+        selectedItemTypeFilter = nil
+        selectedTagFilter = nil
+
+        switch destination {
+        case .allItems:
+            break
+        case .favorites:
+            showFavoritesOnly = true
+        case .security:
+            break
+        case .conflicts:
+            showConflictsOnly = true
+        case .archive:
+            includeArchived = true
+            showArchivedOnly = true
+        case let .itemType(itemType):
+            selectedItemTypeFilter = itemType
+        case let .tag(tag):
+            selectedTagFilter = tag
+        }
     }
 
     func refreshFromDisk(discardingUnsavedEdits: Bool = false) {
@@ -718,12 +845,8 @@ final class VaultStore: ObservableObject {
 
     func showConflictedItems() {
         guard canShowConflictedItems else { return }
-        let previousShowConflictsOnly = showConflictsOnly
-        showConflictsOnly = true
-        if search() {
+        if applyNavigationDestination(.conflicts) {
             statusMessage = "Showing conflicts"
-        } else {
-            showConflictsOnly = previousShowConflictsOnly
         }
     }
 
@@ -1712,11 +1835,17 @@ final class VaultStore: ObservableObject {
 
     private func applyUnlocked(_ unlocked: UnlockedPayload) {
         sessionId = unlocked.sessionId
+        includeArchived = false
+        showArchivedOnly = false
+        showFavoritesOnly = false
+        showConflictsOnly = false
         selectedItemTypeFilter = nil
         availableItemTypes = Self.availableItemTypes(from: unlocked.items)
         selectedTagFilter = nil
         availableTags = Self.availableTags(from: unlocked.items)
+        navigationDestination = .allItems
         items = unlocked.items
+        refreshNavigationInventory()
         selectedItemId = items.first?.id
         conflictCandidates = []
         loadSelectedDetailIfAvailable()
@@ -1812,6 +1941,7 @@ final class VaultStore: ObservableObject {
 
     private var shouldApplyListFiltersAfterSyncRefresh: Bool {
         includeArchived
+            || showArchivedOnly
             || showFavoritesOnly
             || showConflictsOnly
             || selectedItemTypeFilter != nil
@@ -1827,7 +1957,8 @@ final class VaultStore: ObservableObject {
         let normalizedSelectedItemType = selectedItemTypeFilter.map(Self.normalizedItemType)
         let normalizedSelectedTag = selectedTagFilter.map(Self.normalizedTag)
         return candidates.filter { item in
-            (!showFavoritesOnly || item.favorite)
+            (!showArchivedOnly || item.isArchived)
+                && (!showFavoritesOnly || item.favorite)
                 && (!showConflictsOnly || item.isConflicted)
                 && (normalizedSelectedItemType == nil || Self.normalizedItemType(item.itemType) == normalizedSelectedItemType)
                 && (normalizedSelectedTag == nil || item.tags.contains { Self.normalizedTag($0) == normalizedSelectedTag })
@@ -2167,7 +2298,26 @@ final class VaultStore: ObservableObject {
     private func recordVaultContentChange() {
         clearStaleSaveReview()
         clearPasswordHealth()
+        refreshNavigationInventory()
         resetVaultSignature()
+    }
+
+    private func refreshNavigationInventory() {
+        guard let sessionId else {
+            navigationItems = []
+            return
+        }
+        do {
+            navigationItems = try service.search(
+                sessionId: sessionId,
+                text: "",
+                includeArchived: true
+            )
+        } catch {
+            if navigationItems.isEmpty {
+                navigationItems = items
+            }
+        }
     }
 
     private func clearPasswordHealth() {
@@ -2187,12 +2337,16 @@ final class VaultStore: ObservableObject {
         clearSelectedDetails()
         conflictCandidates = []
         searchText = ""
+        includeArchived = false
+        showArchivedOnly = false
         showFavoritesOnly = false
         showConflictsOnly = false
         selectedItemTypeFilter = nil
         availableItemTypes = []
         selectedTagFilter = nil
         availableTags = []
+        navigationDestination = .allItems
+        navigationItems = []
         importSourceURL = nil
         importSourceFormat = Self.bitwardenJsonImportFormat
         importPreview = nil

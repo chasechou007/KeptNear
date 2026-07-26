@@ -8,10 +8,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastWindowCloseHandler: (() -> Void)?
     private var pendingOpenURLs: [[URL]] = []
     private var menuBarLanguageRaw = AppLanguage.english.rawValue
+    private var menuRefreshObserverTokens: [NSObjectProtocol] = []
+    private var menuRefreshScheduled = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
+        installMenuRefreshObservers()
     }
 
     // SwiftUI can rebuild standard menus after scene updates, so reapply titles last.
@@ -62,6 +65,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func refreshMenuBarLanguage() {
         MenuBarLocalization.apply(using: AppText(menuBarLanguageRaw))
+    }
+
+    private func installMenuRefreshObservers() {
+        guard menuRefreshObserverTokens.isEmpty else { return }
+
+        let center = NotificationCenter.default
+        let notificationNames: [Notification.Name] = [
+            NSMenu.didAddItemNotification,
+            NSMenu.didRemoveItemNotification,
+            NSMenu.didChangeItemNotification
+        ]
+        menuRefreshObserverTokens = notificationNames.map { name in
+            center.addObserver(
+                forName: name,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.scheduleMenuBarRefresh()
+                }
+            }
+        }
+    }
+
+    private func scheduleMenuBarRefresh() {
+        guard !menuRefreshScheduled else { return }
+        menuRefreshScheduled = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            menuRefreshScheduled = false
+            refreshMenuBarLanguage()
+        }
     }
 
     @discardableResult

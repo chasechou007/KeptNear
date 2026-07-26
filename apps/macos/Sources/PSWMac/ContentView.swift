@@ -17,7 +17,6 @@ struct ContentView: View {
     @State private var creditCardForm = CreditCardForm()
     @State private var softwareLicenseForm = SoftwareLicenseForm()
     @State private var showingCreateSheet = false
-    @State private var showingSecurityControls = false
     @State private var showingForgottenPasswordRecovery = false
     @State private var showingForgottenVaultTrashConfirmation = false
     @State private var createVaultAfterForgottenPasswordRecovery = false
@@ -48,6 +47,7 @@ struct ContentView: View {
     @State private var conflictMergeBaseRevision: String?
     @State private var conflictMergeFieldRevisions: [String: String] = [:]
     @State private var revealedSecrets = SavedSecretRevealCache()
+    @State private var showingVaultStatus = false
     @FocusState private var focusedField: FocusedField?
 
     private static let safeConflictMergeFieldLabels: Set<String> = [
@@ -65,6 +65,7 @@ struct ContentView: View {
     private enum EditorAction: Equatable {
         case createVault
         case select(String?)
+        case navigate(VaultNavigationDestination)
         case showPasswordHealthIssue(PasswordHealthIssue)
         case itemListAction(String, ItemListRowAction)
         case itemListDestructiveAction(String, DestructiveAction)
@@ -105,7 +106,7 @@ struct ContentView: View {
                 return .syncRecovery
             case .itemListDestructiveAction, .confirmDestructive:
                 return .destructiveItemMutation
-            case .select, .showPasswordHealthIssue, .itemListAction, .newItem, .lockVault, .closeVault, .openVault, .openRecentVault, .toggleFavorite, .duplicateItem, .resolveConflict, .resolveConflictCandidate, .resolveConflictMerge, .restoreArchive:
+            case .select, .navigate, .showPasswordHealthIssue, .itemListAction, .newItem, .lockVault, .closeVault, .openVault, .openRecentVault, .toggleFavorite, .duplicateItem, .resolveConflict, .resolveConflictCandidate, .resolveConflictMerge, .restoreArchive:
                 return .editorNavigation
             }
         }
@@ -267,6 +268,17 @@ struct ContentView: View {
         )
     }
 
+    private var navigationSelection: Binding<VaultNavigationDestination?> {
+        Binding(
+            get: { store.isUnlocked ? store.navigationDestination : nil },
+            set: { destination in
+                if let destination {
+                    requestNavigationDestination(destination)
+                }
+            }
+        )
+    }
+
     private var destructiveActionBinding: Binding<Bool> {
         Binding(
             get: { pendingDestructiveAction != nil },
@@ -304,6 +316,8 @@ struct ContentView: View {
     var body: some View {
         NavigationSplitView {
             sidebar
+        } content: {
+            contentList
         } detail: {
             detail
         }
@@ -492,65 +506,218 @@ struct ContentView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    KeptNearMark()
-                        .frame(width: 20, height: 20)
-                        .accessibilityHidden(true)
-                    Text(store.vaultURL?.lastPathComponent ?? KeptNearBrand.name)
-                        .font(.headline)
-                    Spacer()
-                }
-                if store.vaultURL != nil {
-                    Label(
-                        text.syncLocationHint(store.syncLocationHint),
-                        systemImage: store.syncLocationHint.isLikelySynced ? "arrow.triangle.2.circlepath" : "externaldrive"
-                    )
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-            .padding(12)
-
-            syncReadinessPanel
+            vaultHeader
 
             if store.isUnlocked {
-                searchBar
-                securityControls
-                syncStatusPanel
-                List(selection: itemSelection) {
-                    ForEach(store.items) { item in
-                        HStack(spacing: 8) {
-                            Image(systemName: itemIcon(item))
-                                .foregroundStyle(item.isConflicted ? .orange : (item.favorite ? .yellow : .secondary))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(item.title)
-                                    .lineLimit(1)
-                                Text(text.itemStatus(item.status))
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                        .tag(item.id)
-                        .contextMenu {
-                            itemListContextMenu(for: item)
-                        }
-                    }
-                }
+                VaultNavigationList(
+                    text: text,
+                    counts: store.navigationCounts,
+                    hasPasswordHealthResult: store.passwordHealth != nil,
+                    selection: navigationSelection
+                )
             } else {
                 lockedPanel
             }
-
-            statusBar
         }
-        .navigationSplitViewColumnWidth(min: 260, ideal: 300)
+        .navigationSplitViewColumnWidth(min: 210, ideal: 235, max: 285)
     }
 
-    private var searchBar: some View {
-        VStack(alignment: .leading, spacing: 6) {
+    private var vaultHeader: some View {
+        Group {
+            if store.vaultURL != nil {
+                Button {
+                    showingVaultStatus.toggle()
+                } label: {
+                    vaultIdentityLabel
+                }
+                .buttonStyle(.plain)
+                .popover(isPresented: $showingVaultStatus, arrowEdge: .trailing) {
+                    vaultStatusPopover
+                }
+                .help(text.vaultStatus)
+            } else {
+                vaultIdentityLabel
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 11)
+        .padding(.bottom, 8)
+    }
+
+    private var vaultIdentityLabel: some View {
+        HStack(spacing: 9) {
+            KeptNearMark()
+                .frame(width: 28, height: 28)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(store.vaultURL?.deletingPathExtension().lastPathComponent ?? KeptNearBrand.name)
+                    .font(.headline)
+                    .lineLimit(1)
+                if store.vaultURL != nil {
+                    Text(text.syncLocationHint(store.syncLocationHint))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else {
+                    Text(text.localPasswordManager)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer(minLength: 6)
+
+            if store.vaultURL != nil {
+                Image(systemName: vaultStatusIcon)
+                    .foregroundStyle(vaultStatusColor)
+                    .frame(width: 16)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    private var vaultStatusIcon: String {
+        if store.syncReadiness?.status == .incomplete || store.hasSyncIssues {
+            return "exclamationmark.triangle.fill"
+        }
+        return store.isUnlocked ? "checkmark.circle.fill" : "lock.fill"
+    }
+
+    private var vaultStatusColor: Color {
+        if store.syncReadiness?.status == .incomplete || store.hasSyncIssues {
+            return .orange
+        }
+        return store.isUnlocked ? .green : .secondary
+    }
+
+    private var vaultStatusPopover: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: vaultStatusIcon)
+                    .foregroundStyle(vaultStatusColor)
+                Text(text.vaultStatus)
+                    .font(.headline)
+                Spacer()
+                Button {
+                    showingVaultStatus = false
+                } label: {
+                    Label(text.done, systemImage: "xmark")
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help(text.done)
+            }
+            .padding(12)
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    syncReadinessPanel
+                    syncStatusPanel
+
+                    if store.syncReadiness == nil && store.syncReport == nil {
+                        Text(text.vaultStatusUnavailable)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 10)
+                    }
+                }
+                .padding(.vertical, 10)
+            }
+
+            Divider()
+
+            HStack(spacing: 8) {
+                Button {
+                    requestEditorAction(.refreshSync)
+                } label: {
+                    Label(text.syncRefresh, systemImage: "arrow.clockwise")
+                }
+                .disabled(!store.isUnlocked)
+                Button {
+                    store.revealVaultInFinder()
+                } label: {
+                    Label(text.revealInFinder, systemImage: "folder")
+                }
+                .disabled(store.vaultURL == nil)
+                Spacer()
+                Button {
+                    store.copySyncReadinessDiagnostics(languageRaw: languageRaw)
+                } label: {
+                    Label(text.copySyncDiagnostics, systemImage: "doc.on.doc")
+                }
+            }
+            .controlSize(.small)
+            .padding(12)
+        }
+        .frame(width: 380, height: 440)
+    }
+
+    @ViewBuilder
+    private var contentList: some View {
+        if store.isUnlocked {
+            if store.navigationDestination == .security {
+                securityContent
+            } else {
+                itemListContent
+            }
+        } else {
+            lockedContentList
+        }
+    }
+
+    private var itemListContent: some View {
+        VStack(spacing: 0) {
+            itemListHeader
+            Divider()
+
+            if store.items.isEmpty {
+                itemListEmptyState
+            } else {
+                List(selection: itemSelection) {
+                    ForEach(store.items) { item in
+                        VaultItemSummaryRow(item: item, text: text)
+                            .tag(item.id)
+                            .contextMenu {
+                                itemListContextMenu(for: item)
+                            }
+                    }
+                }
+                .listStyle(.inset)
+            }
+
+            Divider()
+            statusBar
+        }
+        .navigationSplitViewColumnWidth(min: 270, ideal: 320, max: 420)
+    }
+
+    private var itemListHeader: some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
+                Text(text.navigationTitle(store.navigationDestination))
+                    .font(.headline)
+                    .lineLimit(1)
+                Spacer()
+                Text("\(store.items.count)")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                Button {
+                    requestEditorAction(.newItem)
+                } label: {
+                    Label(text.newItem, systemImage: "plus")
+                }
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help(text.newItem)
+            }
+
+            HStack(spacing: 7) {
                 Image(systemName: "magnifyingglass")
                     .foregroundStyle(.secondary)
                 TextField(text.search, text: $store.searchText)
@@ -558,39 +725,69 @@ struct ContentView: View {
                     .focused($focusedField, equals: .search)
                     .onSubmit { store.search() }
                     .onChange(of: store.searchText) { _ in store.search() }
-            }
-            HStack(spacing: 12) {
-                Toggle(text.archive, isOn: $store.includeArchived)
-                    .toggleStyle(.checkbox)
-                    .onChange(of: store.includeArchived) { _ in store.search() }
-                Toggle(text.favoritesFilter, isOn: $store.showFavoritesOnly)
-                    .toggleStyle(.checkbox)
-                    .onChange(of: store.showFavoritesOnly) { _ in store.search() }
-                Toggle(text.conflictsFilter, isOn: $store.showConflictsOnly)
-                    .toggleStyle(.checkbox)
-                    .onChange(of: store.showConflictsOnly) { _ in store.search() }
-            }
-            .controlSize(.small)
-            Picker(text.itemType, selection: $store.selectedItemTypeFilter) {
-                Text(text.allTypes).tag(String?.none)
-                ForEach(store.availableItemTypes, id: \.self) { itemType in
-                    Text(text.itemTypeName(itemType)).tag(Optional(itemType))
+                if !store.searchText.isEmpty {
+                    Button {
+                        store.searchText = ""
+                        store.search()
+                    } label: {
+                        Label(text.clearFilters, systemImage: "xmark.circle.fill")
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(.secondary)
+                    .help(text.clearFilters)
                 }
             }
-            .disabled(store.availableItemTypes.isEmpty)
-            .controlSize(.small)
-            .onChange(of: store.selectedItemTypeFilter) { _ in store.search() }
-            Picker(text.tags, selection: $store.selectedTagFilter) {
-                Text(text.allTags).tag(String?.none)
-                ForEach(store.availableTags, id: \.self) { tag in
-                    Text(tag).tag(Optional(tag))
-                }
-            }
-            .disabled(store.availableTags.isEmpty)
-            .controlSize(.small)
-            .onChange(of: store.selectedTagFilter) { _ in store.search() }
+            .padding(.horizontal, 9)
+            .frame(height: 30)
+            .background(Color.secondary.opacity(0.09), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
         }
-        .padding(8)
+        .padding(10)
+    }
+
+    private var itemListEmptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: store.hasActiveListFilters ? "line.3.horizontal.decrease.circle" : "key")
+                .font(.system(size: 30))
+                .foregroundStyle(.secondary)
+            Text(store.hasActiveListFilters ? text.noMatchingItemsTitle : text.emptyVaultTitle)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+            Text(store.hasActiveListFilters ? text.noMatchingItemsSubtitle : text.emptyVaultSubtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            if store.hasActiveListFilters {
+                Button {
+                    store.clearListFilters()
+                } label: {
+                    Label(text.clearFilters, systemImage: "xmark.circle")
+                }
+            } else {
+                Button {
+                    requestEditorAction(.newItem)
+                } label: {
+                    Label(text.newItem, systemImage: "plus")
+                }
+            }
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var lockedContentList: some View {
+        VStack(spacing: 10) {
+            Image(systemName: store.vaultURL == nil ? "folder.badge.plus" : "lock")
+                .font(.system(size: 28))
+                .foregroundStyle(.secondary)
+            Text(store.vaultURL == nil ? text.openVaultFirst : text.unlockToViewItems)
+                .font(.headline)
+                .multilineTextAlignment(.center)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .navigationSplitViewColumnWidth(min: 270, ideal: 320, max: 420)
     }
 
     @ViewBuilder
@@ -765,7 +962,8 @@ struct ContentView: View {
                                 .disabled(store.vaultURL == nil)
                                 if report.detectedConflicts > 0 {
                                     Button {
-                                        store.showConflictedItems()
+                                        showingVaultStatus = false
+                                        requestNavigationDestination(.conflicts)
                                     } label: {
                                         Label(text.showConflicts, systemImage: "line.3.horizontal.decrease.circle")
                                     }
@@ -806,118 +1004,144 @@ struct ContentView: View {
         }
     }
 
-    private var securityControls: some View {
-        DisclosureGroup(text.security, isExpanded: $showingSecurityControls) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text(text.clipboard)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Picker(text.clipboard, selection: $store.clipboardTimeout) {
-                        ForEach(VaultStore.supportedClipboardTimeouts, id: \.self) { seconds in
-                            Text(text.durationOption(seconds)).tag(seconds)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: 92)
-                }
-
-                HStack {
-                    Text(text.autoLock)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Picker(text.autoLock, selection: $store.autoLockSeconds) {
-                        ForEach(VaultStore.supportedAutoLockDurations, id: \.self) { seconds in
-                            Text(text.durationOption(seconds)).tag(seconds)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .frame(width: 92)
-                }
-
-                if store.convenienceUnlockAvailable {
-                    Button {
-                        store.disableConvenienceUnlock()
-                    } label: {
-                        Label(text.disableKeychain, systemImage: "key.slash")
-                    }
-                    .buttonStyle(.link)
-                }
-
-                Divider()
-
-                passwordHealthPanel
-            }
-            .padding(.top, 6)
-        }
-        .font(.caption)
-        .padding(.horizontal, 10)
-        .padding(.bottom, 6)
-    }
-
-    private var passwordHealthPanel: some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 6) {
-                Label(text.passwordHealth, systemImage: "checkmark.shield")
-                    .font(.caption)
-                    .fontWeight(.semibold)
+    private var securityContent: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Label(text.security, systemImage: "checkmark.shield")
+                    .font(.headline)
                 Spacer()
+                if let health = store.passwordHealth {
+                    Text("\(Set(health.issues.map(\.itemId)).count)")
+                        .font(.caption)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
                 Button {
                     store.refreshPasswordHealth()
                 } label: {
                     Label(text.refreshPasswordHealth, systemImage: "arrow.clockwise")
                 }
-                .controlSize(.small)
-                .disabled(!store.isUnlocked || store.isBusy)
+                .labelStyle(.iconOnly)
+                .buttonStyle(.borderless)
+                .help(text.refreshPasswordHealth)
+                .disabled(store.isBusy)
             }
+            .padding(12)
+
+            Divider()
 
             if let health = store.passwordHealth {
-                HStack(spacing: 14) {
-                    syncMetric(text.checkedLogins, health.checkedLoginPasswords)
-                    syncMetric(text.weakPasswords, health.weakPasswords)
-                    syncMetric(text.reusedPasswords, health.reusedPasswords)
-                }
+                VStack(spacing: 0) {
+                    HStack(spacing: 22) {
+                        securityMetric(
+                            text.checkedLogins,
+                            value: health.checkedLoginPasswords,
+                            color: .secondary
+                        )
+                        securityMetric(
+                            text.weakPasswords,
+                            value: health.weakPasswords,
+                            color: health.weakPasswords > 0 ? .orange : .secondary
+                        )
+                        securityMetric(
+                            text.reusedPasswords,
+                            value: health.reusedPasswords,
+                            color: health.reusedPasswords > 0 ? .red : .secondary
+                        )
+                        Spacer()
+                    }
+                    .padding(12)
 
-                if health.issues.isEmpty {
-                    Label(text.noPasswordHealthIssues, systemImage: "checkmark.circle")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                } else {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(health.issues) { issue in
-                            HStack(spacing: 6) {
-                                Image(systemName: passwordHealthIssueIcon(issue.kind))
-                                    .foregroundStyle(passwordHealthIssueColor(issue.kind))
-                                    .frame(width: 12)
-                                Text(issue.title)
-                                    .lineLimit(1)
-                                Spacer(minLength: 4)
-                                Text(text.passwordHealthIssueLabel(issue))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                    Divider()
+
+                    if health.issues.isEmpty {
+                        VStack(spacing: 12) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .font(.system(size: 32))
+                                .foregroundStyle(.green)
+                            Text(text.noPasswordHealthIssues)
+                                .font(.headline)
+                                .multilineTextAlignment(.center)
+                        }
+                        .padding(24)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else {
+                        List {
+                            ForEach(health.issues) { issue in
                                 Button {
                                     requestEditorAction(.showPasswordHealthIssue(issue))
                                 } label: {
-                                    Label(text.showItem, systemImage: "arrow.right.circle")
+                                    HStack(spacing: 10) {
+                                        Image(systemName: passwordHealthIssueIcon(issue.kind))
+                                            .foregroundStyle(passwordHealthIssueColor(issue.kind))
+                                            .frame(width: 20)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(issue.title)
+                                                .fontWeight(.medium)
+                                                .lineLimit(1)
+                                            Text(text.passwordHealthIssueLabel(issue))
+                                                .font(.caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
+                                        Spacer(minLength: 6)
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption)
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .contentShape(Rectangle())
                                 }
-                                .labelStyle(.iconOnly)
+                                .buttonStyle(.plain)
                                 .help(text.showItem)
-                                .buttonStyle(.borderless)
                             }
-                            .font(.caption2)
                         }
+                        .listStyle(.inset)
                     }
                 }
             } else {
-                Text(text.passwordHealthNotChecked)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(spacing: 14) {
+                    Image(systemName: "checkmark.shield")
+                        .font(.system(size: 34))
+                        .foregroundStyle(.secondary)
+                    Text(text.passwordHealth)
+                        .font(.headline)
+                    Text(text.passwordHealthNotChecked)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        store.refreshPasswordHealth()
+                    } label: {
+                        Label(text.refreshPasswordHealth, systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(store.isBusy)
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+
+            Divider()
+            statusBar
+        }
+        .navigationSplitViewColumnWidth(min: 270, ideal: 320, max: 420)
+    }
+
+    private func securityMetric(
+        _ label: String,
+        value: Int,
+        color: Color
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(value)")
+                .font(.title3)
+                .fontWeight(.semibold)
+                .monospacedDigit()
+                .foregroundStyle(color)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -1018,14 +1242,10 @@ struct ContentView: View {
     private var detail: some View {
         VStack(spacing: 0) {
             if store.isUnlocked {
-                if store.items.isEmpty && !isCreatingItem {
-                    if store.hasActiveListFilters {
-                        filteredEmptyPanel
-                    } else {
-                        emptyVaultPanel
-                    }
-                } else {
+                if isCreatingItem || store.selectedItemId != nil {
                     editor
+                } else {
+                    noItemSelectedPanel
                 }
             } else if store.vaultURL == nil {
                 firstRunDetailPanel
@@ -1033,6 +1253,23 @@ struct ContentView: View {
                 lockedVaultDetailPanel
             }
         }
+    }
+
+    private var noItemSelectedPanel: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "rectangle.and.hand.point.up.left")
+                .font(.system(size: 36))
+                .foregroundStyle(.secondary)
+            Text(text.noItemSelected)
+                .font(.title3)
+                .fontWeight(.semibold)
+            Text(text.noItemSelectedSubtitle)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 360)
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     private var lockedVaultDetailPanel: some View {
@@ -1139,57 +1376,6 @@ struct ContentView: View {
                     Label(text.openRecentVault, systemImage: "clock.arrow.circlepath")
                 }
                 .disabled(store.recentVaultURL == nil)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var emptyVaultPanel: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "key")
-                .font(.system(size: 42))
-                .foregroundStyle(.secondary)
-            Text(text.emptyVaultTitle)
-                .font(.title3)
-                .fontWeight(.semibold)
-            Text(text.emptyVaultSubtitle)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-            HStack {
-                Button {
-                    requestEditorAction(.newItem)
-                } label: {
-                    Label(text.newItem, systemImage: "plus")
-                }
-                Button {
-                    store.clearImport()
-                    keepImportDuplicates = false
-                    showingImportSheet = true
-                } label: {
-                    Label(text.importItems, systemImage: "square.and.arrow.down")
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var filteredEmptyPanel: some View {
-        VStack(spacing: 14) {
-            Image(systemName: "line.3.horizontal.decrease.circle")
-                .font(.system(size: 42))
-                .foregroundStyle(.secondary)
-            Text(text.noMatchingItemsTitle)
-                .font(.title3)
-                .fontWeight(.semibold)
-            Text(text.noMatchingItemsSubtitle)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
-            Button {
-                store.clearListFilters()
-            } label: {
-                Label(text.clearFilters, systemImage: "xmark.circle")
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2520,6 +2706,17 @@ struct ContentView: View {
         }
     }
 
+    private func requestNavigationDestination(_ destination: VaultNavigationDestination) {
+        let wouldDiscardDraft = isCreatingItem
+            || store.navigationDestinationHidesSelectedItem(destination)
+        if wouldDiscardDraft && shouldConfirmDiscard(before: .editorNavigation) {
+            pendingEditorAction = .navigate(destination)
+            showingDiscardChangesAlert = true
+        } else {
+            performEditorAction(.navigate(destination))
+        }
+    }
+
     private func presentForgottenPasswordRecovery() {
         forgottenPasswordRecoveryFeedback = ""
         forgottenPasswordRecoveryHandoffFeedback = ""
@@ -2599,6 +2796,13 @@ struct ContentView: View {
             if store.select(itemId: itemId, discardingUnsavedEdits: discardConfirmed) {
                 isCreatingItem = false
             }
+        case let .navigate(destination):
+            if store.applyNavigationDestination(
+                destination,
+                discardingUnsavedEdits: discardConfirmed
+            ) {
+                isCreatingItem = false
+            }
         case let .showPasswordHealthIssue(issue):
             if store.showPasswordHealthIssue(issue, discardingUnsavedEdits: discardConfirmed) {
                 isCreatingItem = false
@@ -2612,6 +2816,10 @@ struct ContentView: View {
                 pendingDestructiveDiscardConfirmed = discardConfirmed
             }
         case .newItem:
+            _ = store.applyNavigationDestination(
+                .allItems,
+                discardingUnsavedEdits: discardConfirmed
+            )
             store.selectedItemId = nil
             store.selectedDetail = nil
             store.selectedSecureNoteDetail = nil
@@ -2843,7 +3051,7 @@ struct ContentView: View {
         rememberUnlockInKeychain = false
         resetCreateVaultForm()
         showingCreateSheet = false
-        showingSecurityControls = false
+        showingVaultStatus = false
         showingPasswordGenerator = false
         showingImportSheet = false
         keepImportDuplicates = false
@@ -3159,22 +3367,4 @@ struct ContentView: View {
         }
     }
 
-    private func itemIcon(_ item: VaultItemView) -> String {
-        if item.isConflicted {
-            return "exclamationmark.triangle.fill"
-        }
-        if item.favorite {
-            return "star.fill"
-        }
-        if item.isSecureNote {
-            return "note.text"
-        }
-        if item.isCreditCard {
-            return "creditcard"
-        }
-        if item.isSoftwareLicense {
-            return "seal"
-        }
-        return "key"
-    }
 }

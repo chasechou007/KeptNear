@@ -209,11 +209,59 @@ struct AppText {
     var copyPassword: String { choose("Copy Password", "复制密码", "パスワードをコピー") }
     var copyTotp: String { choose("Copy TOTP", "复制动态验证码", "TOTPをコピー") }
     var search: String { choose("Search", "搜索", "検索") }
+    var localPasswordManager: String {
+        choose("Local Password Manager", "本地密码管理器", "ローカルパスワードマネージャー")
+    }
+    var allItems: String { choose("All Items", "所有项目", "すべての項目") }
+    var categories: String { choose("Categories", "类别", "カテゴリー") }
+    var vaultStatus: String { choose("Vault Status", "密码库状态", "保管庫の状態") }
+    var vaultStatusUnavailable: String {
+        choose(
+            "Unlock the vault to view its latest local sync status.",
+            "解锁密码库后可查看最新的本地同步状态。",
+            "保管庫をロック解除すると、最新のローカル同期状態を確認できます。"
+        )
+    }
+    var unlockToViewItems: String {
+        choose(
+            "Unlock to view items",
+            "解锁后查看项目",
+            "項目を表示するにはロックを解除"
+        )
+    }
+    var noItemSelected: String {
+        choose("No Item Selected", "未选择项目", "項目が選択されていません")
+    }
+    var noItemSelectedSubtitle: String {
+        choose(
+            "Select an item from the list or create a new one.",
+            "从列表中选择一个项目，或新建项目。",
+            "リストから項目を選択するか、新しい項目を作成してください。"
+        )
+    }
     var archive: String { choose("Archive", "归档", "アーカイブ") }
     var favoritesFilter: String { choose("Favorites", "收藏", "お気に入り") }
     var conflictsFilter: String { choose("Conflicts", "冲突", "競合") }
     var allTypes: String { choose("All Types", "所有类型", "すべての種類") }
     var allTags: String { choose("All Tags", "所有标签", "すべてのタグ") }
+    func navigationTitle(_ destination: VaultNavigationDestination) -> String {
+        switch destination {
+        case .allItems:
+            return allItems
+        case .favorites:
+            return favoritesFilter
+        case .security:
+            return security
+        case .conflicts:
+            return conflictsFilter
+        case .archive:
+            return archive
+        case let .itemType(itemType):
+            return itemTypeName(itemType)
+        case let .tag(tag):
+            return tag
+        }
+    }
     var clearFilters: String { choose("Clear Filters", "清除过滤", "フィルターをクリア") }
     var noMatchingItemsTitle: String {
         choose("No Matching Items", "没有匹配项目", "一致するアイテムはありません")

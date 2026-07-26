@@ -100,6 +100,16 @@ struct SettingsView: View {
                         .frame(maxWidth: 300, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
 
+                    if store.convenienceUnlockAvailable {
+                        Button {
+                            store.disableConvenienceUnlock()
+                        } label: {
+                            Label(text.disableKeychain, systemImage: "key.slash")
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(store.isBusy)
+                    }
+
                     Button {
                         store.cleanupLegacyKeychainPasswords()
                     } label: {

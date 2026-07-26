@@ -8406,6 +8406,249 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertFalse(store.canRestoreSelectedArchive)
         XCTAssertEqual(store.statusMessage, "Restored")
     }
+
+    func testVaultNavigationCountsUseStableNonSecretSummaries() {
+        let items = [
+            VaultItemView(
+                id: "login_favorite",
+                title: "Mail",
+                itemType: "login",
+                status: "active",
+                favorite: true,
+                tags: ["personal"]
+            ),
+            VaultItemView(
+                id: "card",
+                title: "Bank Card",
+                itemType: "credit card",
+                status: "active",
+                favorite: false,
+                tags: ["finance"]
+            ),
+            VaultItemView(
+                id: "login_conflict",
+                title: "Forum",
+                itemType: "login",
+                status: "conflicted",
+                conflictId: "conflict_1",
+                favorite: false,
+                tags: ["Personal"]
+            ),
+            VaultItemView(
+                id: "archived_note",
+                title: "Old Note",
+                itemType: "secure note",
+                status: "archived",
+                favorite: true,
+                tags: ["legacy"]
+            )
+        ]
+        let health = PasswordHealthPayload(
+            checkedLoginPasswords: 3,
+            weakPasswords: 1,
+            reusedPasswords: 2,
+            issues: [
+                PasswordHealthIssue(itemId: "login_favorite", title: "Mail", kind: .weakPassword),
+                PasswordHealthIssue(itemId: "login_favorite", title: "Mail", kind: .reusedPassword),
+                PasswordHealthIssue(itemId: "login_conflict", title: "Forum", kind: .reusedPassword)
+            ]
+        )
+
+        let counts = VaultNavigationCounts(items: items, passwordHealth: health)
+
+        XCTAssertEqual(counts.allItems, 3)
+        XCTAssertEqual(counts.favorites, 1)
+        XCTAssertEqual(counts.security, 2)
+        XCTAssertEqual(counts.conflicts, 1)
+        XCTAssertEqual(counts.archived, 1)
+        XCTAssertEqual(counts.itemTypes.map(\.value), ["login", "credit card"])
+        XCTAssertEqual(counts.itemTypes.map(\.count), [2, 1])
+        XCTAssertEqual(counts.tags.map(\.value), ["finance", "personal"])
+        XCTAssertEqual(counts.tags.map(\.count), [1, 2])
+        XCTAssertEqual(counts.count(for: .itemType("LOGIN")), 2)
+        XCTAssertEqual(counts.count(for: .tag("PERSONAL")), 2)
+    }
+
+    func testNavigationDestinationsFilterItemsAndKeepStableCounts() {
+        let service = FakeCoreService(seedItems: [
+            SeedLogin(
+                title: "Mail",
+                username: "me@example.com",
+                password: "mail-password",
+                url: "https://mail.example.com",
+                notes: "",
+                tags: ["personal"],
+                favorite: true
+            ),
+            SeedLogin(
+                title: "Bank",
+                username: "alice",
+                password: "bank-password",
+                url: "https://bank.example.com",
+                notes: "",
+                tags: ["finance"]
+            ),
+            SeedLogin(
+                title: "Old",
+                username: "old",
+                password: "old-password",
+                url: "https://old.example.com",
+                notes: "",
+                tags: ["legacy"]
+            )
+        ])
+        service.markArchived(itemId: "item_3")
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/NavigationDestinations.pswvault"))
+        store.unlock(password: "correct horse")
+
+        XCTAssertEqual(store.navigationCounts.allItems, 2)
+        XCTAssertEqual(store.navigationCounts.archived, 1)
+        XCTAssertEqual(store.navigationItems.count, 3)
+
+        XCTAssertTrue(store.applyNavigationDestination(.favorites))
+        XCTAssertEqual(store.items.map(\.title), ["Mail"])
+        XCTAssertEqual(store.navigationCounts.allItems, 2)
+
+        XCTAssertTrue(store.applyNavigationDestination(.archive))
+        XCTAssertEqual(store.items.map(\.title), ["Old"])
+        XCTAssertTrue(store.includeArchived)
+        XCTAssertTrue(store.showArchivedOnly)
+
+        XCTAssertTrue(store.applyNavigationDestination(.tag("finance")))
+        XCTAssertEqual(store.items.map(\.title), ["Bank"])
+        XCTAssertFalse(store.includeArchived)
+        XCTAssertFalse(store.showArchivedOnly)
+
+        store.searchText = "Mail"
+        store.search()
+        XCTAssertEqual(store.navigationCounts.allItems, 2)
+        XCTAssertEqual(store.navigationCounts.archived, 1)
+
+        XCTAssertTrue(store.applyNavigationDestination(.allItems))
+        XCTAssertEqual(store.items.map(\.title), ["Mail"])
+        XCTAssertEqual(store.searchText, "Mail")
+    }
+
+    func testNavigationDestinationOnlyRequiresDiscardWhenSelectionIsHidden() {
+        let service = FakeCoreService(seedItems: [
+            SeedLogin(
+                title: "Mail",
+                username: "me@example.com",
+                password: "mail-password",
+                url: "https://mail.example.com",
+                notes: "",
+                tags: ["personal"],
+                favorite: true
+            ),
+            SeedLogin(
+                title: "Bank",
+                username: "alice",
+                password: "bank-password",
+                url: "https://bank.example.com",
+                notes: "",
+                tags: ["finance"]
+            )
+        ])
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/NavigationDirtyGuard.pswvault"))
+        store.unlock(password: "correct horse")
+        store.setEditorHasUnsavedChanges(true)
+
+        XCTAssertFalse(store.navigationDestinationHidesSelectedItem(.favorites))
+        XCTAssertTrue(store.applyNavigationDestination(.favorites))
+        XCTAssertEqual(store.selectedItemId, "item_1")
+
+        XCTAssertTrue(store.navigationDestinationHidesSelectedItem(.tag("finance")))
+        XCTAssertFalse(store.applyNavigationDestination(.tag("finance")))
+        XCTAssertEqual(store.navigationDestination, .favorites)
+        XCTAssertEqual(store.items.map(\.title), ["Mail"])
+        XCTAssertEqual(store.statusMessage, "Save or discard edits before changing selection")
+
+        XCTAssertTrue(store.applyNavigationDestination(.tag("finance"), discardingUnsavedEdits: true))
+        XCTAssertEqual(store.navigationDestination, .tag("finance"))
+        XCTAssertEqual(store.items.map(\.title), ["Bank"])
+        XCTAssertEqual(store.selectedItemId, "item_2")
+    }
+
+    func testNavigationInventoryRefreshesAfterMutationAndClearsOnLock() {
+        let service = FakeCoreService(seedItems: [
+            SeedLogin(
+                title: "Mail",
+                username: "me@example.com",
+                password: "mail-password",
+                url: "https://mail.example.com",
+                notes: "",
+                tags: ["personal"]
+            ),
+            SeedLogin(
+                title: "Bank",
+                username: "alice",
+                password: "bank-password",
+                url: "https://bank.example.com",
+                notes: "",
+                tags: ["finance"]
+            )
+        ])
+        service.nextPasswordHealthPayload = PasswordHealthPayload(
+            checkedLoginPasswords: 2,
+            weakPasswords: 1,
+            reusedPasswords: 1,
+            issues: [
+                PasswordHealthIssue(itemId: "item_1", title: "Mail", kind: .weakPassword),
+                PasswordHealthIssue(itemId: "item_1", title: "Mail", kind: .reusedPassword)
+            ]
+        )
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/NavigationLifecycle.pswvault"))
+        store.unlock(password: "correct horse")
+        store.refreshPasswordHealth()
+        XCTAssertEqual(store.navigationCounts.security, 1)
+
+        XCTAssertTrue(store.archiveSelected())
+        XCTAssertEqual(store.navigationCounts.allItems, 1)
+        XCTAssertEqual(store.navigationCounts.archived, 1)
+        XCTAssertEqual(store.navigationCounts.security, 0)
+
+        store.lock()
+        XCTAssertTrue(store.navigationItems.isEmpty)
+        XCTAssertEqual(store.navigationCounts, .empty)
+        XCTAssertEqual(store.navigationDestination, .allItems)
+    }
+
+    func testNavigationLabelsAreLocalizedAcrossSupportedLanguages() {
+        let english = AppText(AppLanguage.english.rawValue)
+        let chinese = AppText(AppLanguage.simplifiedChinese.rawValue)
+        let japanese = AppText(AppLanguage.japanese.rawValue)
+
+        XCTAssertEqual(english.allItems, "All Items")
+        XCTAssertEqual(chinese.allItems, "所有项目")
+        XCTAssertEqual(japanese.allItems, "すべての項目")
+        XCTAssertEqual(english.categories, "Categories")
+        XCTAssertEqual(chinese.vaultStatus, "密码库状态")
+        XCTAssertEqual(japanese.unlockToViewItems, "項目を表示するにはロックを解除")
+        XCTAssertEqual(english.navigationTitle(.itemType("credit card")), "Credit Card")
+        XCTAssertEqual(chinese.navigationTitle(.tag("财务")), "财务")
+        XCTAssertEqual(japanese.noItemSelected, "項目が選択されていません")
+    }
 }
 
 private struct SeedLogin {
