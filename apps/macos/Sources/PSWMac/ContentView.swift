@@ -62,6 +62,11 @@ struct ContentView: View {
         "licensed to"
     ]
 
+    private static let vaultContentType = UTType(
+        exportedAs: "app.psw.local.vault",
+        conformingTo: .package
+    )
+
     private enum EditorAction: Equatable {
         case createVault
         case select(String?)
@@ -3075,9 +3080,7 @@ struct ContentView: View {
 
     private func openVaultPanel(discardingUnsavedEdits: Bool = false) {
         let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
+        configureVaultSelectionPanel(panel)
         if panel.runModal() == .OK, let url = panel.url {
             if store.openVault(url: url, discardingUnsavedEdits: discardingUnsavedEdits) {
                 clearLockSensitiveViewState()
@@ -3165,9 +3168,7 @@ struct ContentView: View {
 
     private func chooseRestoreBackup(discardingUnsavedEdits: Bool = false) {
         let sourcePanel = NSOpenPanel()
-        sourcePanel.canChooseDirectories = true
-        sourcePanel.canChooseFiles = false
-        sourcePanel.allowsMultipleSelection = false
+        configureVaultSelectionPanel(sourcePanel)
         guard sourcePanel.runModal() == .OK, let sourceURL = sourcePanel.url else { return }
 
         let destinationPanel = NSSavePanel()
@@ -3184,6 +3185,13 @@ struct ContentView: View {
                 showingRestoreBackupResult = true
             }
         }
+    }
+
+    private func configureVaultSelectionPanel(_ panel: NSOpenPanel) {
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [Self.vaultContentType]
     }
 
     private func chooseCopyVaultToSyncDestination(discardingUnsavedEdits: Bool = false) {
