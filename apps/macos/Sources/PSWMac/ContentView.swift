@@ -1176,13 +1176,8 @@ struct ContentView: View {
 
     private var firstRunSidebarPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                KeptNearMark()
-                    .frame(width: 24, height: 24)
-                    .accessibilityHidden(true)
-                Text(text.firstRunTitle)
-                    .font(.headline)
-            }
+            Text(text.firstRunTitle)
+                .font(.headline)
             Text(text.firstRunSubtitle)
                 .font(.caption)
                 .foregroundStyle(.secondary)
