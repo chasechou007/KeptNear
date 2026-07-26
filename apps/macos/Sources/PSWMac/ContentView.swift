@@ -18,6 +18,11 @@ struct ContentView: View {
     @State private var softwareLicenseForm = SoftwareLicenseForm()
     @State private var showingCreateSheet = false
     @State private var showingSecurityControls = false
+    @State private var showingForgottenPasswordRecovery = false
+    @State private var showingForgottenVaultTrashConfirmation = false
+    @State private var createVaultAfterForgottenPasswordRecovery = false
+    @State private var forgottenPasswordRecoveryFeedback = ""
+    @State private var forgottenPasswordRecoveryHandoffFeedback = ""
     @State private var rememberUnlockInKeychain = false
     @State private var rememberCreatedVaultInKeychain = false
     @State private var showingPasswordGenerator = false
@@ -384,6 +389,12 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showingCreateSheet) {
             createVaultSheet
+        }
+        .sheet(
+            isPresented: $showingForgottenPasswordRecovery,
+            onDismiss: presentReplacementVaultAfterForgottenPasswordRecovery
+        ) {
+            forgottenPasswordRecoverySheet
         }
         .sheet(isPresented: $showingImportSheet) {
             importSheet
@@ -993,6 +1004,13 @@ struct ContentView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(store.vaultURL == nil)
+            Button {
+                presentForgottenPasswordRecovery()
+            } label: {
+                Label(text.forgotMasterPassword, systemImage: "questionmark.circle")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
             Spacer()
         }
     }
@@ -1058,6 +1076,15 @@ struct ContentView: View {
                     }
                     .controlSize(.large)
                 }
+
+                Button {
+                    presentForgottenPasswordRecovery()
+                } label: {
+                    Label(text.forgotMasterPassword, systemImage: "questionmark.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
             }
             .frame(maxWidth: 360)
 
@@ -2120,6 +2147,104 @@ struct ContentView: View {
         .frame(width: 360)
     }
 
+    private var forgottenPasswordRecoverySheet: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label(text.forgottenPasswordRecoveryTitle, systemImage: "key.slash")
+                .font(.title3)
+                .fontWeight(.semibold)
+
+            if let vaultURL = store.vaultURL {
+                LabeledContent(text.selectedVault) {
+                    Text(vaultURL.lastPathComponent)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            Text(text.forgottenPasswordNoRecoveryMessage)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Label(
+                text.forgottenPasswordLocalCopiesWarning,
+                systemImage: "exclamationmark.triangle"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 10) {
+                Button {
+                    store.revealVaultInFinder()
+                } label: {
+                    Label(text.revealInFinder, systemImage: "folder")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Button {
+                    closeForgottenVault(createReplacement: false)
+                } label: {
+                    Label(text.closeVault, systemImage: "xmark.circle")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                Button {
+                    closeForgottenVault(createReplacement: true)
+                } label: {
+                    Label(text.closeAndCreateNewVault, systemImage: "plus")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+
+                Divider()
+
+                Button(role: .destructive) {
+                    showingForgottenVaultTrashConfirmation = true
+                } label: {
+                    Label(text.moveVaultToTrashAndCreateNew, systemImage: "trash")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+
+            if !forgottenPasswordRecoveryFeedback.isEmpty {
+                Label(
+                    text.statusMessage(forgottenPasswordRecoveryFeedback),
+                    systemImage: "exclamationmark.circle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button(text.cancel) {
+                    showingForgottenPasswordRecovery = false
+                }
+            }
+        }
+        .padding(24)
+        .frame(width: 500)
+        .alert(
+            text.moveForgottenVaultToTrashTitle(
+                store.vaultURL?.lastPathComponent ?? KeptNearBrand.name
+            ),
+            isPresented: $showingForgottenVaultTrashConfirmation
+        ) {
+            Button(text.moveToTrash, role: .destructive) {
+                moveForgottenVaultToTrashAndCreateReplacement()
+            }
+            Button(text.cancel, role: .cancel) {}
+        } message: {
+            Text(
+                text.moveForgottenVaultToTrashMessage(
+                    store.vaultURL?.lastPathComponent ?? KeptNearBrand.name
+                )
+            )
+        }
+    }
+
     private var importSheet: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
@@ -2392,6 +2517,53 @@ struct ContentView: View {
             showingDiscardChangesAlert = true
         } else {
             performEditorAction(action)
+        }
+    }
+
+    private func presentForgottenPasswordRecovery() {
+        forgottenPasswordRecoveryFeedback = ""
+        forgottenPasswordRecoveryHandoffFeedback = ""
+        showingForgottenVaultTrashConfirmation = false
+        createVaultAfterForgottenPasswordRecovery = false
+        showingForgottenPasswordRecovery = true
+    }
+
+    private func closeForgottenVault(createReplacement: Bool) {
+        guard store.closeVault() else {
+            forgottenPasswordRecoveryFeedback = store.statusMessage
+            return
+        }
+        clearLockSensitiveViewState()
+        forgottenPasswordRecoveryHandoffFeedback = ""
+        createVaultAfterForgottenPasswordRecovery = createReplacement
+        showingForgottenPasswordRecovery = false
+    }
+
+    private func moveForgottenVaultToTrashAndCreateReplacement() {
+        let outcome = store.moveForgottenVaultToTrash()
+        guard outcome.didMove else {
+            forgottenPasswordRecoveryFeedback = store.statusMessage
+            return
+        }
+        let handoffFeedback = outcome == .movedWithKeychainCleanupFailure
+            ? store.statusMessage
+            : ""
+        clearLockSensitiveViewState()
+        forgottenPasswordRecoveryHandoffFeedback = handoffFeedback
+        createVaultAfterForgottenPasswordRecovery = true
+        showingForgottenPasswordRecovery = false
+    }
+
+    private func presentReplacementVaultAfterForgottenPasswordRecovery() {
+        showingForgottenVaultTrashConfirmation = false
+        forgottenPasswordRecoveryFeedback = ""
+        guard createVaultAfterForgottenPasswordRecovery else { return }
+        let handoffFeedback = forgottenPasswordRecoveryHandoffFeedback
+        createVaultAfterForgottenPasswordRecovery = false
+        forgottenPasswordRecoveryHandoffFeedback = ""
+        DispatchQueue.main.async {
+            performEditorAction(.createVault)
+            createVaultFeedback = handoffFeedback
         }
     }
 

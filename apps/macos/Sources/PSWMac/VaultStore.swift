@@ -8,6 +8,20 @@ enum EditorSaveOutcome: Equatable {
     case failed
 }
 
+enum ForgottenVaultTrashOutcome: Equatable {
+    case moved
+    case movedWithKeychainCleanupFailure
+    case failed
+
+    var didMove: Bool {
+        self != .failed
+    }
+}
+
+private enum ForgottenVaultRecoveryError: Error {
+    case unsupportedTrashTarget
+}
+
 @MainActor
 final class VaultStore: ObservableObject {
     static let supportedClipboardTimeouts: [TimeInterval] = [15, 30, 45, 60, 120]
@@ -519,6 +533,49 @@ final class VaultStore: ObservableObject {
             didClose = true
         }
         return didClose
+    }
+
+    @discardableResult
+    func moveForgottenVaultToTrash() -> ForgottenVaultTrashOutcome {
+        guard !isUnlocked else {
+            statusMessage = "Lock the vault before moving it to Trash"
+            return .failed
+        }
+        guard let vaultURL else {
+            statusMessage = "No vault selected"
+            return .failed
+        }
+
+        let trashTarget: URL
+        do {
+            trashTarget = try validatedForgottenVaultTrashTarget(vaultURL)
+        } catch {
+            statusMessage = "Only a local .pswvault directory can be moved to Trash"
+            return .failed
+        }
+
+        touch()
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            try importSourceHandler.moveToTrash(trashTarget)
+        } catch {
+            statusMessage = "Vault could not be moved to Trash"
+            return .failed
+        }
+
+        let keychainCleanupSucceeded = clearConvenienceUnlockMaterial(for: trashTarget)
+        clearActiveVaultSession()
+        self.vaultURL = nil
+        convenienceUnlockAvailable = false
+        if recentVaultURL?.standardizedFileURL.path == trashTarget.path {
+            forgetRecentVault()
+        }
+        statusMessage = keychainCleanupSucceeded
+            ? "Vault moved to Trash"
+            : "Vault moved to Trash, but Keychain cleanup failed"
+        return keychainCleanupSucceeded ? .moved : .movedWithKeychainCleanupFailure
     }
 
     func refreshItems() {
@@ -2054,6 +2111,36 @@ final class VaultStore: ObservableObject {
             return "Refresh sync before editing this item"
         }
         return message
+    }
+
+    private func validatedForgottenVaultTrashTarget(_ url: URL) throws -> URL {
+        let standardizedURL = url.standardizedFileURL
+        guard standardizedURL.isFileURL,
+              standardizedURL.pathExtension.caseInsensitiveCompare("pswvault") == .orderedSame,
+              let values = try? standardizedURL.resourceValues(
+                  forKeys: [.isDirectoryKey, .isSymbolicLinkKey]
+              ),
+              values.isDirectory == true,
+              values.isSymbolicLink != true
+        else {
+            throw ForgottenVaultRecoveryError.unsupportedTrashTarget
+        }
+        return standardizedURL
+    }
+
+    private func clearConvenienceUnlockMaterial(for vaultURL: URL) -> Bool {
+        var succeeded = true
+        do {
+            try convenienceUnlockStore.deleteMaterial(for: vaultURL)
+        } catch {
+            succeeded = false
+        }
+        do {
+            _ = try convenienceUnlockStore.deleteLegacyPasswordMaterial(for: vaultURL)
+        } catch {
+            succeeded = false
+        }
+        return succeeded
     }
 
     private func isStaleRevisionError(_ error: Error) -> Bool {

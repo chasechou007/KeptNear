@@ -158,6 +158,21 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(english.closeVault, "Close Vault")
         XCTAssertEqual(chinese.closeVault, "关闭密码库")
         XCTAssertEqual(chinese.statusMessage("Vault closed"), "密码库已关闭")
+        XCTAssertEqual(english.forgotMasterPassword, "Forgot master password?")
+        XCTAssertEqual(chinese.forgotMasterPassword, "忘记主密码？")
+        XCTAssertEqual(english.closeAndCreateNewVault, "Close and Create New Vault")
+        XCTAssertEqual(chinese.closeAndCreateNewVault, "关闭并新建密码库")
+        XCTAssertEqual(
+            chinese.statusMessage("Vault moved to Trash"),
+            "密码库已移到废纸篓"
+        )
+        XCTAssertEqual(
+            chinese.statusMessage("Vault moved to Trash, but Keychain cleanup failed"),
+            "密码库已移到废纸篓，但钥匙串清理失败"
+        )
+        XCTAssertTrue(
+            chinese.isErrorStatusMessage("Vault moved to Trash, but Keychain cleanup failed")
+        )
         XCTAssertEqual(english.firstRunTitle, "Start with a local vault")
         XCTAssertEqual(chinese.firstRunTitle, "从本地密码库开始")
         XCTAssertEqual(english.lockedVaultTitle, "Vault Locked")
@@ -578,9 +593,18 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(japanese.secureNote, "セキュアノート")
         XCTAssertEqual(japanese.masterPassword, "マスターパスワード")
         XCTAssertEqual(japanese.enterMasterPasswordToUnlock, "マスターパスワードを入力")
+        XCTAssertEqual(japanese.forgotMasterPassword, "マスターパスワードを忘れた場合")
+        XCTAssertEqual(
+            japanese.closeAndCreateNewVault,
+            "閉じて新しい保管庫を作成"
+        )
         XCTAssertEqual(
             japanese.statusMessage("invalid vault credentials"),
             "マスターパスワードが正しくありません。もう一度お試しください。"
+        )
+        XCTAssertEqual(
+            japanese.statusMessage("Vault moved to Trash"),
+            "保管庫をゴミ箱へ移動しました"
         )
         XCTAssertEqual(japanese.diagnostics, "診断")
         XCTAssertEqual(japanese.syncReadiness, "同期準備状況")
@@ -2064,6 +2088,186 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(clipboard.clearManagedSecretCallCount, 0)
         assertVaultSwitchStateCleared(store)
         XCTAssertEqual(store.statusMessage, "Vault closed")
+    }
+
+    func testMovingForgottenVaultToTrashClearsLocalStateAndKeychainMaterial() throws {
+        let defaults = makeIsolatedDefaults()
+        let parentURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PSWMacWorkflowTests.\(UUID().uuidString)", isDirectory: true)
+        let vaultURL = parentURL.appendingPathComponent("Forgotten.pswvault", isDirectory: true)
+        try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: parentURL)
+        }
+
+        let service = FakeCoreService()
+        let clipboard = FakeClipboard()
+        let importSourceHandler = FakeImportSourceHandler()
+        let convenienceUnlockStore = FakeConvenienceUnlockStore()
+        try convenienceUnlockStore.saveMaterial("local-material", for: vaultURL)
+        convenienceUnlockStore.saveLegacyPasswordMaterial("legacy-password", for: vaultURL)
+        let store = VaultStore(
+            service: service,
+            clipboard: clipboard,
+            convenienceUnlockStore: convenienceUnlockStore,
+            importSourceHandler: importSourceHandler,
+            userDefaults: defaults
+        )
+        store.openVault(url: vaultURL)
+
+        let moved = store.moveForgottenVaultToTrash()
+
+        XCTAssertEqual(moved, .moved)
+        XCTAssertEqual(importSourceHandler.trashedURLs, [vaultURL.standardizedFileURL])
+        XCTAssertNil(store.vaultURL)
+        XCTAssertNil(store.recentVaultURL)
+        XCTAssertFalse(store.convenienceUnlockAvailable)
+        XCTAssertNil(convenienceUnlockStore.material(for: vaultURL))
+        XCTAssertEqual(convenienceUnlockStore.legacyPasswordMaterialCount(for: vaultURL), 0)
+        XCTAssertNil(defaults.string(forKey: "recentVaultPath"))
+        XCTAssertTrue(service.lockedSessionIds.isEmpty)
+        XCTAssertEqual(clipboard.clearManagedSecretCallCount, 0)
+        assertVaultSwitchStateCleared(store)
+        XCTAssertEqual(store.statusMessage, "Vault moved to Trash")
+    }
+
+    func testMovingForgottenVaultToTrashRejectsUnlockedAndUnsupportedTargets() throws {
+        let parentURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PSWMacWorkflowTests.\(UUID().uuidString)", isDirectory: true)
+        let unlockedVaultURL = parentURL.appendingPathComponent("Unlocked.pswvault", isDirectory: true)
+        let regularFileURL = parentURL.appendingPathComponent("Regular.pswvault")
+        let wrongExtensionURL = parentURL.appendingPathComponent("WrongExtension", isDirectory: true)
+        let symlinkTargetURL = parentURL.appendingPathComponent("Target.pswvault", isDirectory: true)
+        let symlinkURL = parentURL.appendingPathComponent("Link.pswvault", isDirectory: true)
+        let missingURL = parentURL.appendingPathComponent("Missing.pswvault", isDirectory: true)
+        try FileManager.default.createDirectory(at: unlockedVaultURL, withIntermediateDirectories: true)
+        try Data().write(to: regularFileURL)
+        try FileManager.default.createDirectory(at: wrongExtensionURL, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: symlinkTargetURL, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: symlinkURL, withDestinationURL: symlinkTargetURL)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: parentURL)
+        }
+
+        let importSourceHandler = FakeImportSourceHandler()
+        let unlockedStore = VaultStore(
+            service: FakeCoreService(),
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            importSourceHandler: importSourceHandler,
+            userDefaults: makeIsolatedDefaults()
+        )
+        unlockedStore.openVault(url: unlockedVaultURL)
+        unlockedStore.unlock(password: "correct horse")
+
+        XCTAssertEqual(unlockedStore.moveForgottenVaultToTrash(), .failed)
+        XCTAssertEqual(unlockedStore.statusMessage, "Lock the vault before moving it to Trash")
+        XCTAssertEqual(unlockedStore.vaultURL?.path, unlockedVaultURL.path)
+
+        for unsupportedURL in [
+            regularFileURL,
+            wrongExtensionURL,
+            symlinkURL,
+            missingURL,
+            URL(string: "https://example.invalid/Remote.pswvault")!
+        ] {
+            let store = VaultStore(
+                service: FakeCoreService(),
+                clipboard: FakeClipboard(),
+                convenienceUnlockStore: FakeConvenienceUnlockStore(),
+                importSourceHandler: importSourceHandler,
+                userDefaults: makeIsolatedDefaults()
+            )
+            store.openVault(url: unsupportedURL)
+
+            XCTAssertEqual(
+                store.moveForgottenVaultToTrash(),
+                .failed,
+                unsupportedURL.absoluteString
+            )
+            XCTAssertEqual(
+                store.statusMessage,
+                "Only a local .pswvault directory can be moved to Trash"
+            )
+            XCTAssertEqual(store.vaultURL, unsupportedURL)
+            XCTAssertEqual(store.recentVaultURL?.standardizedFileURL.path, unsupportedURL.standardizedFileURL.path)
+        }
+        XCTAssertTrue(importSourceHandler.trashedURLs.isEmpty)
+    }
+
+    func testForgottenVaultTrashFailurePreservesSelectionRecentAndKeychain() throws {
+        let defaults = makeIsolatedDefaults()
+        let parentURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PSWMacWorkflowTests.\(UUID().uuidString)", isDirectory: true)
+        let vaultURL = parentURL.appendingPathComponent("TrashFailure.pswvault", isDirectory: true)
+        try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: parentURL)
+        }
+
+        let importSourceHandler = FakeImportSourceHandler()
+        importSourceHandler.trashError = NSError(domain: "trash-test", code: 1)
+        let convenienceUnlockStore = FakeConvenienceUnlockStore()
+        try convenienceUnlockStore.saveMaterial("local-material", for: vaultURL)
+        let store = VaultStore(
+            service: FakeCoreService(),
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: convenienceUnlockStore,
+            importSourceHandler: importSourceHandler,
+            userDefaults: defaults
+        )
+        store.openVault(url: vaultURL)
+
+        let moved = store.moveForgottenVaultToTrash()
+
+        XCTAssertEqual(moved, .failed)
+        XCTAssertEqual(importSourceHandler.trashedURLs, [vaultURL.standardizedFileURL])
+        XCTAssertEqual(store.vaultURL?.path, vaultURL.path)
+        XCTAssertEqual(store.recentVaultURL?.path, vaultURL.path)
+        XCTAssertEqual(convenienceUnlockStore.material(for: vaultURL), "local-material")
+        XCTAssertEqual(defaults.string(forKey: "recentVaultPath"), vaultURL.standardizedFileURL.path)
+        XCTAssertEqual(store.statusMessage, "Vault could not be moved to Trash")
+    }
+
+    func testForgottenVaultKeychainCleanupFailureClosesMovedVaultWithWarning() throws {
+        let defaults = makeIsolatedDefaults()
+        let parentURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PSWMacWorkflowTests.\(UUID().uuidString)", isDirectory: true)
+        let vaultURL = parentURL.appendingPathComponent("KeychainFailure.pswvault", isDirectory: true)
+        try FileManager.default.createDirectory(at: vaultURL, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: parentURL)
+        }
+
+        let importSourceHandler = FakeImportSourceHandler()
+        let convenienceUnlockStore = FakeConvenienceUnlockStore()
+        try convenienceUnlockStore.saveMaterial("local-material", for: vaultURL)
+        convenienceUnlockStore.saveLegacyPasswordMaterial("legacy-password", for: vaultURL)
+        convenienceUnlockStore.resetDeleteCallHistory()
+        convenienceUnlockStore.deleteMaterialError = NSError(domain: "keychain-test", code: 1)
+        let store = VaultStore(
+            service: FakeCoreService(),
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: convenienceUnlockStore,
+            importSourceHandler: importSourceHandler,
+            userDefaults: defaults
+        )
+        store.openVault(url: vaultURL)
+
+        let moved = store.moveForgottenVaultToTrash()
+
+        XCTAssertEqual(moved, .movedWithKeychainCleanupFailure)
+        XCTAssertEqual(importSourceHandler.trashedURLs, [vaultURL.standardizedFileURL])
+        XCTAssertNil(store.vaultURL)
+        XCTAssertNil(store.recentVaultURL)
+        XCTAssertEqual(convenienceUnlockStore.material(for: vaultURL), "local-material")
+        XCTAssertEqual(convenienceUnlockStore.legacyPasswordMaterialCount(for: vaultURL), 0)
+        XCTAssertEqual(convenienceUnlockStore.deleteMaterialURLs, [vaultURL.standardizedFileURL])
+        XCTAssertEqual(convenienceUnlockStore.deleteLegacyMaterialURLs, [vaultURL.standardizedFileURL])
+        XCTAssertEqual(
+            store.statusMessage,
+            "Vault moved to Trash, but Keychain cleanup failed"
+        )
     }
 
     func testSecurityPreferencesPersistAcrossStoreInstances() {
@@ -8313,6 +8517,10 @@ private final class FakeURLOpener: URLOpening {
 private final class FakeConvenienceUnlockStore: ConvenienceUnlockStoring {
     private var materials: [String: String] = [:]
     private var legacyPasswordMaterials: [String: [String: String]] = [:]
+    private(set) var deleteMaterialURLs: [URL] = []
+    private(set) var deleteLegacyMaterialURLs: [URL] = []
+    var deleteMaterialError: Error?
+    var deleteLegacyMaterialError: Error?
 
     func containsMaterial(for vaultURL: URL) -> Bool {
         materials[key(for: vaultURL)] != nil
@@ -8327,10 +8535,18 @@ private final class FakeConvenienceUnlockStore: ConvenienceUnlockStoring {
     }
 
     func deleteMaterial(for vaultURL: URL) throws {
+        deleteMaterialURLs.append(vaultURL.standardizedFileURL)
+        if let deleteMaterialError {
+            throw deleteMaterialError
+        }
         materials[key(for: vaultURL)] = nil
     }
 
     func deleteLegacyPasswordMaterial(for vaultURL: URL) throws -> Int {
+        deleteLegacyMaterialURLs.append(vaultURL.standardizedFileURL)
+        if let deleteLegacyMaterialError {
+            throw deleteLegacyMaterialError
+        }
         let vaultKey = key(for: vaultURL)
         let removed = legacyPasswordMaterials[vaultKey]?.count ?? 0
         legacyPasswordMaterials[vaultKey] = nil
@@ -8349,6 +8565,11 @@ private final class FakeConvenienceUnlockStore: ConvenienceUnlockStoring {
 
     func legacyPasswordMaterialCount(for vaultURL: URL) -> Int {
         legacyPasswordMaterials[key(for: vaultURL)]?.count ?? 0
+    }
+
+    func resetDeleteCallHistory() {
+        deleteMaterialURLs = []
+        deleteLegacyMaterialURLs = []
     }
 
     private func key(for vaultURL: URL) -> String {

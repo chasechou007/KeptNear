@@ -42,6 +42,26 @@ When the user closes the selected vault, the client performs the same active
 state cleanup and clears the selected vault context. Closing a vault does not
 delete the vault directory or clear the recent vault shortcut.
 
+## Forgotten Master Password Recovery
+
+KeptNear cannot recover, reset, or bypass a forgotten master password. The
+master password is not escrowed by a KeptNear account or remote service. If
+local Keychain convenience unlock is available, the user can try that normal
+unlock path before replacing the vault.
+
+From the locked-vault recovery view, revealing the selected vault in Finder or
+closing it is non-destructive. Moving a forgotten vault to Trash is available
+only after a separate destructive confirmation and only for the selected,
+locked, existing, non-symbolic-link local `.pswvault` directory. The client uses
+macOS Trash semantics and does not permanently delete the directory.
+
+After a successful Trash move, the client clears the selected-vault context,
+forgets a matching recent-vault shortcut, and attempts to remove current and
+known legacy Keychain convenience-unlock material for that vault. A Keychain
+cleanup failure is reported as partial cleanup rather than complete success.
+Moving one local vault copy to Trash does not delete copies in sync providers,
+on other devices, in backups, or already retained in Trash.
+
 ## Clipboard Handling
 
 The macOS client routes secret copy actions through a managed clipboard helper.

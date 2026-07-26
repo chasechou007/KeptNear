@@ -240,6 +240,13 @@ script/verify_macos_distribution_environment.sh --allow-missing
   active secret state. `Close Vault` leaves the current vault, clears active
   state, and returns to the first-run view without deleting the vault directory
   or forgetting the recent vault shortcut.
+- Use the locked-vault `Forgot master password?` recovery flow when no master
+  password is available. KeptNear cannot recover or reset that password. The
+  flow can reveal or close the vault without deleting it, or move a validated
+  local `.pswvault` directory to macOS Trash after a second confirmation,
+  clear its local recent-vault and Keychain references, and start the existing
+  create-vault flow. Trash affects only that local copy; synchronized,
+  backed-up, and other-device copies require separate handling.
 - Switch the interface between English, Simplified Chinese, and Japanese, and
   configure the clipboard clear timeout and auto-lock duration from the macOS
   Settings window. Security timing preferences persist across app launches,

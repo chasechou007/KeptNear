@@ -150,6 +150,52 @@ struct AppText {
     var lock: String { choose("Lock", "锁定", "ロック") }
     var lockVault: String { choose("Lock Vault", "锁定密码库", "保管庫をロック") }
     var closeVault: String { choose("Close Vault", "关闭密码库", "保管庫を閉じる") }
+    var forgotMasterPassword: String {
+        choose("Forgot master password?", "忘记主密码？", "マスターパスワードを忘れた場合")
+    }
+    var forgottenPasswordRecoveryTitle: String {
+        choose("Master Password Recovery", "主密码恢复", "マスターパスワードの復旧")
+    }
+    var forgottenPasswordNoRecoveryMessage: String {
+        choose(
+            "KeptNear cannot recover, reset, or bypass this vault's master password. If Keychain unlock is available, try it before replacing the vault.",
+            "KeptNear 无法找回、重置或绕过此密码库的主密码。如果钥匙串解锁可用，请先尝试使用它。",
+            "KeptNearでは、この保管庫のマスターパスワードを復旧、リセット、回避できません。キーチェーン解除が利用できる場合は、保管庫を置き換える前にお試しください。"
+        )
+    }
+    var forgottenPasswordLocalCopiesWarning: String {
+        choose(
+            "Moving this vault to Trash affects only this local copy. Copies in sync providers, other devices, backups, or Trash must be handled separately.",
+            "将此密码库移到废纸篓只会影响当前本地副本。同步服务、其他设备、备份或废纸篓中的副本需要另行处理。",
+            "この保管庫をゴミ箱へ移動しても、このローカルコピーだけが対象です。同期サービス、他のデバイス、バックアップ、ゴミ箱内のコピーは別途処理が必要です。"
+        )
+    }
+    var selectedVault: String { choose("Selected Vault", "当前密码库", "選択中の保管庫") }
+    var closeAndCreateNewVault: String {
+        choose("Close and Create New Vault", "关闭并新建密码库", "閉じて新しい保管庫を作成")
+    }
+    var moveVaultToTrashAndCreateNew: String {
+        choose(
+            "Move to Trash and Create New Vault",
+            "移到废纸篓并新建密码库",
+            "ゴミ箱へ移動して新しい保管庫を作成"
+        )
+    }
+    var moveToTrash: String { choose("Move to Trash", "移到废纸篓", "ゴミ箱へ移動") }
+    func moveForgottenVaultToTrashTitle(_ vaultName: String) -> String {
+        choose(
+            "Move “\(vaultName)” to Trash?",
+            "将“\(vaultName)”移到废纸篓？",
+            "「\(vaultName)」をゴミ箱へ移動しますか？"
+        )
+    }
+    func moveForgottenVaultToTrashMessage(_ vaultName: String) -> String {
+        choose(
+            "This moves only the local copy of \(vaultName) to macOS Trash and clears its local Keychain unlock material. Synced, backed-up, and other-device copies are not deleted.",
+            "此操作只会将 \(vaultName) 的本地副本移到 macOS 废纸篓，并清理其本机钥匙串解锁材料。同步副本、备份和其他设备上的副本不会被删除。",
+            "\(vaultName) のローカルコピーだけをmacOSのゴミ箱へ移動し、ローカルのキーチェーン解除情報を消去します。同期済み、バックアップ済み、他のデバイス上のコピーは削除されません。"
+        )
+    }
     var vaultMenu: String { choose("Vault", "密码库", "保管庫") }
     var itemMenu: String { choose("Item", "项目", "アイテム") }
     var fileMenu: String { choose("File", "文件", "ファイル") }
@@ -981,6 +1027,38 @@ struct AppText {
             return choose("Vault revealed in Finder", "已在访达中显示密码库", "Finderで保管庫を表示しました")
         case "Vault closed":
             return choose("Vault closed", "密码库已关闭", "保管庫を閉じました")
+        case "No vault selected":
+            return choose("No vault selected", "未选择密码库", "保管庫が選択されていません")
+        case "Lock the vault before moving it to Trash":
+            return choose(
+                "Lock the vault before moving it to Trash",
+                "请先锁定密码库，再将其移到废纸篓",
+                "ゴミ箱へ移動する前に保管庫をロックしてください"
+            )
+        case "Only a local .pswvault directory can be moved to Trash":
+            return choose(
+                "Only a local .pswvault directory can be moved to Trash",
+                "只能将本地 .pswvault 密码库目录移到废纸篓",
+                "ローカルの.pswvault保管庫ディレクトリだけをゴミ箱へ移動できます"
+            )
+        case "Vault could not be moved to Trash":
+            return choose(
+                "Vault could not be moved to Trash",
+                "无法将密码库移到废纸篓",
+                "保管庫をゴミ箱へ移動できませんでした"
+            )
+        case "Vault moved to Trash":
+            return choose(
+                "Vault moved to Trash",
+                "密码库已移到废纸篓",
+                "保管庫をゴミ箱へ移動しました"
+            )
+        case "Vault moved to Trash, but Keychain cleanup failed":
+            return choose(
+                "Vault moved to Trash, but Keychain cleanup failed",
+                "密码库已移到废纸篓，但钥匙串清理失败",
+                "保管庫をゴミ箱へ移動しましたが、キーチェーンの消去に失敗しました"
+            )
         case "Legacy Keychain entries removed":
             return legacyKeychainEntriesRemoved
         case "No legacy Keychain entries found":
@@ -991,7 +1069,16 @@ struct AppText {
     }
 
     func isErrorStatusMessage(_ message: String) -> Bool {
-        message.localizedCaseInsensitiveContains("invalid vault credentials")
+        if message.localizedCaseInsensitiveContains("invalid vault credentials") {
+            return true
+        }
+        return [
+            "No vault selected",
+            "Lock the vault before moving it to Trash",
+            "Only a local .pswvault directory can be moved to Trash",
+            "Vault could not be moved to Trash",
+            "Vault moved to Trash, but Keychain cleanup failed"
+        ].contains(message)
     }
 
     private func itemCountStatus(_ message: String) -> String? {

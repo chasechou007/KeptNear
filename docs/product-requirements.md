@@ -77,6 +77,9 @@ Implemented:
   Bitwarden JSON export with explicit warnings and cleanup actions.
 - Encrypted backup and restore workflows that copy portable encrypted vault
   structure without creating plaintext exports.
+- Locked-vault forgotten-master-password recovery that explains the
+  no-recovery boundary, preserves non-destructive reveal and close options, and
+  can move a validated local vault to macOS Trash before creating a replacement.
 - English, Simplified Chinese, and Japanese UI language setting, clipboard
   timeout setting, and auto-lock duration setting.
 
