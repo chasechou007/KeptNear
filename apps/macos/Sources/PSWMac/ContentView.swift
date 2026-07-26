@@ -108,6 +108,7 @@ struct ContentView: View {
 
     private enum FocusedField {
         case search
+        case unlockPassword
     }
 
     private enum NewItemKind: String, CaseIterable, Identifiable {
@@ -358,11 +359,18 @@ struct ContentView: View {
                 }
                 .disabled(!store.isUnlocked)
                 Button {
-                    requestEditorAction(.lockVault)
+                    if store.isUnlocked {
+                        requestEditorAction(.lockVault)
+                    } else {
+                        focusedField = .unlockPassword
+                    }
                 } label: {
-                    Label(text.lock, systemImage: "lock")
+                    Label(
+                        store.isUnlocked ? text.lock : text.unlock,
+                        systemImage: store.isUnlocked ? "lock" : "lock.open"
+                    )
                 }
-                .disabled(!store.isUnlocked)
+                .disabled(store.vaultURL == nil)
                 Button {
                     requestEditorAction(.closeVault)
                 } label: {
@@ -978,27 +986,13 @@ struct ContentView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            SecureField(text.masterPassword, text: $unlockPassword)
-                .textFieldStyle(.roundedBorder)
-                .disabled(store.vaultURL == nil)
-                .onSubmit {
-                    unlockWithPassword()
-                }
-            Toggle(text.enableKeychainUnlock, isOn: $rememberUnlockInKeychain)
-                .toggleStyle(.checkbox)
-                .disabled(store.vaultURL == nil || unlockPassword.isEmpty)
             Button {
-                unlockWithPassword()
+                focusedField = .unlockPassword
             } label: {
-                Label(text.unlock, systemImage: "lock.open")
+                Label(text.enterMasterPasswordToUnlock, systemImage: "lock.open")
             }
-            .disabled(store.vaultURL == nil || unlockPassword.isEmpty)
-            Button {
-                store.unlockWithConvenience()
-            } label: {
-                Label(text.unlockWithKeychain, systemImage: "key.viewfinder")
-            }
-            .disabled(store.vaultURL == nil || !store.convenienceUnlockAvailable)
+            .buttonStyle(.borderedProminent)
+            .disabled(store.vaultURL == nil)
             Spacer()
         }
     }
@@ -1018,18 +1012,73 @@ struct ContentView: View {
             } else if store.vaultURL == nil {
                 firstRunDetailPanel
             } else {
-                VStack(spacing: 12) {
-                    KeptNearMark()
-                        .frame(width: 58, height: 58)
-                        .accessibilityHidden(true)
-                    Text(text.lockedVaultTitle)
-                        .font(.headline)
-                    Text(text.lockedVaultSubtitle)
-                        .foregroundStyle(.secondary)
-                    Text(text.statusMessage(store.statusMessage))
-                        .foregroundStyle(.secondary)
+                lockedVaultDetailPanel
+            }
+        }
+    }
+
+    private var lockedVaultDetailPanel: some View {
+        VStack(spacing: 16) {
+            KeptNearMark()
+                .frame(width: 58, height: 58)
+                .accessibilityHidden(true)
+            Text(text.lockedVaultTitle)
+                .font(.title3)
+                .fontWeight(.semibold)
+            Text(text.lockedVaultSubtitle)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+
+            VStack(alignment: .leading, spacing: 10) {
+                SecureField(text.masterPassword, text: $unlockPassword)
+                    .textFieldStyle(.roundedBorder)
+                    .focused($focusedField, equals: .unlockPassword)
+                    .onSubmit {
+                        unlockWithPassword()
+                    }
+                Toggle(text.enableKeychainUnlock, isOn: $rememberUnlockInKeychain)
+                    .toggleStyle(.checkbox)
+                    .disabled(unlockPassword.isEmpty)
+                Button {
+                    unlockWithPassword()
+                } label: {
+                    Label(text.unlock, systemImage: "lock.open")
+                        .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+                .disabled(unlockPassword.isEmpty)
+
+                if store.convenienceUnlockAvailable {
+                    Button {
+                        store.unlockWithConvenience()
+                    } label: {
+                        Label(text.unlockWithKeychain, systemImage: "key.viewfinder")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .controlSize(.large)
+                }
+            }
+            .frame(maxWidth: 360)
+
+            if text.isErrorStatusMessage(store.statusMessage) {
+                Label(
+                    text.statusMessage(store.statusMessage),
+                    systemImage: "exclamationmark.circle.fill"
+                )
+                .font(.caption)
+                .foregroundStyle(.red)
+            } else {
+                Text(text.statusMessage(store.statusMessage))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .onAppear {
+            DispatchQueue.main.async {
+                focusedField = .unlockPassword
             }
         }
     }
@@ -2023,7 +2072,9 @@ struct ContentView: View {
                 .frame(width: 8, height: 8)
             Text(text.statusMessage(store.statusMessage))
                 .font(.caption)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(
+                    text.isErrorStatusMessage(store.statusMessage) ? Color.red : Color.secondary
+                )
                 .lineLimit(1)
             Spacer()
         }

@@ -146,6 +146,15 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(chinese.plaintextExportTitle, "要导出明文秘密吗？")
         XCTAssertEqual(english.unlockWithKeychain, "Unlock with Keychain")
         XCTAssertEqual(chinese.unlockWithKeychain, "使用钥匙串解锁")
+        XCTAssertEqual(english.enterMasterPasswordToUnlock, "Enter Master Password")
+        XCTAssertEqual(chinese.enterMasterPasswordToUnlock, "输入主密码解锁")
+        XCTAssertEqual(
+            english.statusMessage("invalid vault credentials"),
+            "Incorrect master password. Try again."
+        )
+        XCTAssertEqual(chinese.statusMessage("invalid vault credentials"), "主密码不正确，请重试。")
+        XCTAssertTrue(chinese.isErrorStatusMessage("invalid vault credentials"))
+        XCTAssertFalse(chinese.isErrorStatusMessage("Vault locked"))
         XCTAssertEqual(english.closeVault, "Close Vault")
         XCTAssertEqual(chinese.closeVault, "关闭密码库")
         XCTAssertEqual(chinese.statusMessage("Vault closed"), "密码库已关闭")
@@ -568,6 +577,11 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(japanese.login, "ログイン")
         XCTAssertEqual(japanese.secureNote, "セキュアノート")
         XCTAssertEqual(japanese.masterPassword, "マスターパスワード")
+        XCTAssertEqual(japanese.enterMasterPasswordToUnlock, "マスターパスワードを入力")
+        XCTAssertEqual(
+            japanese.statusMessage("invalid vault credentials"),
+            "マスターパスワードが正しくありません。もう一度お試しください。"
+        )
         XCTAssertEqual(japanese.diagnostics, "診断")
         XCTAssertEqual(japanese.syncReadiness, "同期準備状況")
         XCTAssertEqual(japanese.trustBoundaryTitle, "信頼境界")

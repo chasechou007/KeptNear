@@ -385,6 +385,13 @@ struct AppText {
     var enableKeychainUnlock: String {
         choose("Enable Keychain unlock", "启用钥匙串解锁", "キーチェーン解除を有効化")
     }
+    var enterMasterPasswordToUnlock: String {
+        choose(
+            "Enter Master Password",
+            "输入主密码解锁",
+            "マスターパスワードを入力"
+        )
+    }
     var unlock: String { choose("Unlock", "解锁", "ロック解除") }
     var unlockWithKeychain: String { choose("Unlock with Keychain", "使用钥匙串解锁", "キーチェーンで解除") }
     var title: String { choose("Title", "标题", "タイトル") }
@@ -688,6 +695,12 @@ struct AppText {
 
     func statusMessage(_ message: String) -> String {
         switch message {
+        case let message where message.localizedCaseInsensitiveContains("invalid vault credentials"):
+            return choose(
+                "Incorrect master password. Try again.",
+                "主密码不正确，请重试。",
+                "マスターパスワードが正しくありません。もう一度お試しください。"
+            )
         case "Rust core connected":
             return choose("Rust core connected", "Rust 核心已连接", "Rustコアに接続しました")
         case "Rust core library not loaded":
@@ -975,6 +988,10 @@ struct AppText {
         default:
             return message
         }
+    }
+
+    func isErrorStatusMessage(_ message: String) -> Bool {
+        message.localizedCaseInsensitiveContains("invalid vault credentials")
     }
 
     private func itemCountStatus(_ message: String) -> String? {
