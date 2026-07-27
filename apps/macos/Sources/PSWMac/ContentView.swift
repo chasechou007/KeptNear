@@ -39,6 +39,7 @@ struct ContentView: View {
     @State private var baselineCreditCardForm = CreditCardForm()
     @State private var baselineSoftwareLicenseForm = SoftwareLicenseForm()
     @State private var isCreatingItem = false
+    @State private var isEditingSelectedItem = false
     @State private var newItemKind = NewItemKind.login
     @State private var pendingEditorAction: EditorAction?
     @State private var showingDiscardChangesAlert = false
@@ -75,6 +76,7 @@ struct ContentView: View {
         case itemListAction(String, ItemListRowAction)
         case itemListDestructiveAction(String, DestructiveAction)
         case newItem(NewItemKind)
+        case cancelEditing
         case lockVault
         case closeVault
         case openVault
@@ -111,7 +113,7 @@ struct ContentView: View {
                 return .syncRecovery
             case .itemListDestructiveAction, .confirmDestructive:
                 return .destructiveItemMutation
-            case .select, .navigate, .showPasswordHealthIssue, .itemListAction, .newItem(_), .lockVault, .closeVault, .openVault, .openRecentVault, .toggleFavorite, .duplicateItem, .resolveConflict, .resolveConflictCandidate, .resolveConflictMerge, .restoreArchive:
+            case .select, .navigate, .showPasswordHealthIssue, .itemListAction, .newItem(_), .cancelEditing, .lockVault, .closeVault, .openVault, .openRecentVault, .toggleFavorite, .duplicateItem, .resolveConflict, .resolveConflictCandidate, .resolveConflictMerge, .restoreArchive:
                 return .editorNavigation
             }
         }
@@ -227,7 +229,8 @@ struct ContentView: View {
     }
 
     private var hasUnsavedEditorChanges: Bool {
-        shouldConfirmDiscard(before: .editorNavigation)
+        guard isCreatingItem || isEditingSelectedItem else { return false }
+        return shouldConfirmDiscard(before: .editorNavigation)
     }
 
     private var editorDraftState: EditorDraftState {
@@ -263,7 +266,11 @@ struct ContentView: View {
         PSWMacCommandHandler(
             availability: PSWMacCommandAvailability(
                 isUnlocked: store.isUnlocked,
-                canSaveCurrentEditor: store.canSaveCurrentEditor,
+                canSaveCurrentEditor: (isCreatingItem || isEditingSelectedItem)
+                    && store.canSaveCurrentEditor,
+                canEditItem: !isCreatingItem
+                    && !isEditingSelectedItem
+                    && selectedDetailCapabilities.canEdit,
                 hasRecentVault: store.recentVaultURL != nil,
                 canCopyUsername: store.canCopyLoginFields,
                 canCopyPassword: store.canCopyLoginFields,
@@ -287,7 +294,8 @@ struct ContentView: View {
             copyCardVerificationCode: { store.copyCardVerificationCode() },
             copyLicenseKey: { store.copyLicenseKey() },
             refreshSync: { requestEditorAction(.refreshSync) },
-            lockVault: { requestEditorAction(.lockVault) }
+            lockVault: { requestEditorAction(.lockVault) },
+            editCurrentItem: beginEditingSelectedItem
         )
     }
 
@@ -644,6 +652,7 @@ struct ContentView: View {
             updateEditorDirtyState()
         }
         .onChange(of: store.selectedItemId) { _ in
+            isEditingSelectedItem = false
             revealedSecrets.clearAll()
             resetConflictMergeSelections()
             updateEditorDirtyState()
@@ -1247,14 +1256,157 @@ struct ContentView: View {
         }
     }
 
+    @ViewBuilder
     private var detail: some View {
-        VStack(spacing: 0) {
-            if isCreatingItem || store.selectedItemId != nil {
-                editor
+        switch VaultDetailMode(
+            hasSelection: store.selectedItemId != nil,
+            isEditing: isEditingSelectedItem,
+            isCreating: isCreatingItem
+        ) {
+        case .creating, .editing:
+            editor
+        case .readOnly:
+            if let selectedDetailModel {
+                VaultItemDetailView(
+                    text: text,
+                    model: selectedDetailModel,
+                    capabilities: selectedDetailCapabilities,
+                    actions: selectedDetailActions
+                )
             } else {
-                noItemSelectedPanel
+                VStack(spacing: 10) {
+                    ProgressView()
+                    Text(text.loadingItem)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        case .empty:
+            noItemSelectedPanel
         }
+    }
+
+    private var selectedDetailModel: VaultItemDetailModel? {
+        guard let item = store.selectedItem else { return nil }
+        return VaultItemDetailModel(
+            item: item,
+            login: store.selectedDetail,
+            secureNote: store.selectedSecureNoteDetail,
+            creditCard: store.selectedCreditCardDetail,
+            softwareLicense: store.selectedSoftwareLicenseDetail
+        )
+    }
+
+    private var selectedDetailCapabilities: VaultItemDetailCapabilities {
+        let selectedItem = store.selectedItem
+        return VaultItemDetailCapabilities(
+            canEdit: store.canSaveCurrentEditor && selectedItem?.isArchived != true,
+            canCopyLoginFields: store.canCopyLoginFields,
+            canCopyTotp: store.canCopyTotpCode,
+            canOpenURL: store.canOpenSelectedLoginURL,
+            canCopySecureNoteBody: store.canCopySecureNoteBody,
+            canCopyCreditCardFields: store.canCopyCreditCardFields,
+            canCopySoftwareLicenseFields: store.canCopySoftwareLicenseFields,
+            canRevealSecrets: store.canMutateSelectedItem,
+            canToggleFavorite: store.canMutateSelectedItem,
+            canDuplicate: store.canDuplicateSelectedItem,
+            canResolveConflict: store.canResolveSelectedConflict,
+            canRestoreArchive: store.canRestoreSelectedArchive,
+            canArchive: store.canMutateSelectedItem && selectedItem?.isArchived != true,
+            canDelete: store.canMutateSelectedItem
+        )
+    }
+
+    private var selectedDetailActions: VaultItemDetailActions {
+        VaultItemDetailActions(
+            edit: beginEditingSelectedItem,
+            copy: performDetailCopy,
+            openURL: { _ = store.openSelectedLoginURL($0) },
+            revealedSecret: revealedSecretValue,
+            revealSecret: revealSelectedSecret,
+            hideSecret: hideSelectedSecret,
+            performMoreAction: performDetailMoreAction
+        )
+    }
+
+    private func beginEditingSelectedItem() {
+        guard store.selectedItemId != nil, selectedDetailCapabilities.canEdit else { return }
+        revealedSecrets.clearAll()
+        syncFormFromSelectedDetail()
+        isEditingSelectedItem = true
+        updateEditorDirtyState()
+    }
+
+    private func performDetailCopy(_ action: VaultItemDetailCopyAction) {
+        switch action {
+        case .username:
+            store.copyUsername()
+        case .password:
+            store.copyPassword()
+        case .totp:
+            store.copyTotp()
+        case let .url(value):
+            store.copySelectedLoginURL(value)
+        case .secureNoteBody:
+            store.copySecureNoteBody()
+        case .cardNumber:
+            store.copyCardNumber()
+        case .cardVerificationCode:
+            store.copyCardVerificationCode()
+        case .licenseKey:
+            store.copyLicenseKey()
+        }
+    }
+
+    private func performDetailMoreAction(_ action: VaultItemDetailMoreAction) {
+        switch action {
+        case .toggleFavorite:
+            requestEditorAction(.toggleFavorite)
+        case .duplicate:
+            requestEditorAction(.duplicateItem)
+        case .resolveConflict:
+            requestEditorAction(.resolveConflict)
+        case .restoreArchive:
+            requestEditorAction(.restoreArchive)
+        case .archive:
+            requestDestructiveAction(.archive)
+        case .delete:
+            requestDestructiveAction(.delete)
+        }
+    }
+
+    private func revealedSecretValue(_ field: SavedSecretRevealField) -> String? {
+        guard let itemId = store.selectedItemId else { return nil }
+        return revealedSecrets.value(for: SavedSecretRevealKey(itemId: itemId, field: field))
+    }
+
+    private func revealSelectedSecret(_ field: SavedSecretRevealField) {
+        guard let itemId = store.selectedItemId else { return }
+        let value: String?
+        switch field {
+        case .loginPassword:
+            value = store.revealSelectedLoginPassword()
+        case .loginTotpSecret:
+            value = store.revealSelectedLoginTotpSecret()
+        case .creditCardNumber:
+            value = store.revealSelectedCardNumber()
+        case .creditCardVerificationCode:
+            value = store.revealSelectedCardVerificationCode()
+        case .softwareLicenseKey:
+            value = store.revealSelectedLicenseKey()
+        }
+        if let value {
+            revealedSecrets.reveal(
+                value,
+                for: SavedSecretRevealKey(itemId: itemId, field: field)
+            )
+        }
+    }
+
+    private func hideSelectedSecret(_ field: SavedSecretRevealField) {
+        guard let itemId = store.selectedItemId else { return }
+        revealedSecrets.hide(SavedSecretRevealKey(itemId: itemId, field: field))
     }
 
     private var noItemSelectedPanel: some View {
@@ -1431,6 +1583,12 @@ struct ContentView: View {
                     }
                     .disabled(!store.canSaveCurrentEditor)
                     Button {
+                        requestEditorAction(.cancelEditing)
+                    } label: {
+                        Label(text.cancel, systemImage: "xmark")
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    Button {
                         requestNewItem()
                     } label: {
                         Label(text.newItem, systemImage: "plus")
@@ -1531,6 +1689,12 @@ struct ContentView: View {
                         Label(store.selectedItemId == nil ? text.create : text.save, systemImage: "checkmark")
                     }
                     .disabled(!store.canSaveCurrentEditor)
+                    Button {
+                        requestEditorAction(.cancelEditing)
+                    } label: {
+                        Label(text.cancel, systemImage: "xmark")
+                    }
+                    .keyboardShortcut(.cancelAction)
                     Button {
                         requestNewItem()
                     } label: {
@@ -1648,6 +1812,12 @@ struct ContentView: View {
                     }
                     .disabled(!store.canSaveCurrentEditor)
                     Button {
+                        requestEditorAction(.cancelEditing)
+                    } label: {
+                        Label(text.cancel, systemImage: "xmark")
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    Button {
                         requestNewItem()
                     } label: {
                         Label(text.newItem, systemImage: "plus")
@@ -1752,6 +1922,12 @@ struct ContentView: View {
                         Label(store.selectedItemId == nil ? text.create : text.save, systemImage: "checkmark")
                     }
                     .disabled(!store.canSaveCurrentEditor)
+                    Button {
+                        requestEditorAction(.cancelEditing)
+                    } label: {
+                        Label(text.cancel, systemImage: "xmark")
+                    }
+                    .keyboardShortcut(.cancelAction)
                     Button {
                         requestNewItem()
                     } label: {
@@ -2692,6 +2868,7 @@ struct ContentView: View {
         case let .select(itemId):
             if store.select(itemId: itemId, discardingUnsavedEdits: discardConfirmed) {
                 isCreatingItem = false
+                isEditingSelectedItem = false
             }
         case let .navigate(destination):
             if store.applyNavigationDestination(
@@ -2699,16 +2876,19 @@ struct ContentView: View {
                 discardingUnsavedEdits: discardConfirmed
             ) {
                 isCreatingItem = false
+                isEditingSelectedItem = false
             }
         case let .showPasswordHealthIssue(issue):
             if store.showPasswordHealthIssue(issue, discardingUnsavedEdits: discardConfirmed) {
                 isCreatingItem = false
+                isEditingSelectedItem = false
             }
         case let .itemListAction(itemId, action):
             performItemListRowAction(action, itemId: itemId, discardConfirmed: discardConfirmed)
         case let .itemListDestructiveAction(itemId, action):
             if store.prepareItemListAction(itemId: itemId, discardingUnsavedEdits: discardConfirmed) {
                 isCreatingItem = false
+                isEditingSelectedItem = false
                 pendingDestructiveAction = action
                 pendingDestructiveDiscardConfirmed = discardConfirmed
             }
@@ -2724,7 +2904,17 @@ struct ContentView: View {
             store.selectedSoftwareLicenseDetail = nil
             newItemKind = kind
             isCreatingItem = true
+            isEditingSelectedItem = false
             resetEditorForms()
+        case .cancelEditing:
+            isCreatingItem = false
+            isEditingSelectedItem = false
+            if store.selectedItemId == nil {
+                resetEditorForms()
+            } else {
+                syncFormFromSelectedDetail()
+            }
+            updateEditorDirtyState()
         case .lockVault:
             store.lock()
             clearLockSensitiveViewState()
@@ -2743,9 +2933,11 @@ struct ContentView: View {
         case .commitImport:
             store.commitImport(keepDuplicates: keepImportDuplicates, discardingUnsavedEdits: discardConfirmed)
             isCreatingItem = false
+            isEditingSelectedItem = false
         case .backupVault:
             if discardConfirmed {
                 isCreatingItem = false
+                isEditingSelectedItem = false
                 syncFormFromSelectedDetail()
                 if store.selectedItemId == nil {
                     resetEditorForms()
@@ -2756,6 +2948,7 @@ struct ContentView: View {
         case .restoreBackup:
             if discardConfirmed {
                 isCreatingItem = false
+                isEditingSelectedItem = false
                 syncFormFromSelectedDetail()
                 if store.selectedItemId == nil {
                     resetEditorForms()
@@ -2766,6 +2959,7 @@ struct ContentView: View {
         case .copyVaultToSyncLocation:
             if discardConfirmed {
                 isCreatingItem = false
+                isEditingSelectedItem = false
                 syncFormFromSelectedDetail()
                 if store.selectedItemId == nil {
                     resetEditorForms()
@@ -2776,17 +2970,23 @@ struct ContentView: View {
         case .quarantineRejectedRecords:
             store.quarantineRejectedRecords(discardingUnsavedEdits: discardConfirmed)
         case .toggleFavorite:
-            store.toggleFavoriteSelected(discardingUnsavedEdits: discardConfirmed)
+            if store.toggleFavoriteSelected(discardingUnsavedEdits: discardConfirmed) {
+                isEditingSelectedItem = false
+                syncFormFromSelectedDetail()
+            }
         case .duplicateItem:
             if store.duplicateSelectedItem(discardingUnsavedEdits: discardConfirmed) {
+                isEditingSelectedItem = false
                 syncFormFromSelectedDetail()
             }
         case .resolveConflict:
             if store.resolveSelectedConflict(discardingUnsavedEdits: discardConfirmed) {
+                isEditingSelectedItem = false
                 syncFormFromSelectedDetail()
             }
         case let .resolveConflictCandidate(revision):
             if store.resolveSelectedConflictCandidate(revision: revision, discardingUnsavedEdits: discardConfirmed) {
+                isEditingSelectedItem = false
                 resetConflictMergeSelections()
                 syncFormFromSelectedDetail()
             }
@@ -2796,11 +2996,13 @@ struct ContentView: View {
                 fieldSelections: fieldSelections,
                 discardingUnsavedEdits: discardConfirmed
             ) {
+                isEditingSelectedItem = false
                 resetConflictMergeSelections()
                 syncFormFromSelectedDetail()
             }
         case .restoreArchive:
             if store.restoreSelectedArchive(discardingUnsavedEdits: discardConfirmed) {
+                isEditingSelectedItem = false
                 syncFormFromSelectedDetail()
             }
         case let .confirmDestructive(action):
@@ -2818,6 +3020,7 @@ struct ContentView: View {
             return
         }
         isCreatingItem = false
+        isEditingSelectedItem = false
 
         switch action {
         case .copyUsername:
@@ -2863,11 +3066,13 @@ struct ContentView: View {
         case .archive:
             if store.archiveSelected(discardingUnsavedEdits: discardConfirmed) {
                 isCreatingItem = false
+                isEditingSelectedItem = false
                 resetEditorForms()
             }
         case .delete:
             if store.deleteSelected(discardingUnsavedEdits: discardConfirmed) {
                 isCreatingItem = false
+                isEditingSelectedItem = false
                 resetEditorForms()
             }
         case nil:
@@ -2960,6 +3165,7 @@ struct ContentView: View {
         pendingDestructiveAction = nil
         resetConflictMergeSelections()
         isCreatingItem = false
+        isEditingSelectedItem = false
         resetEditorForms()
     }
 
@@ -3114,6 +3320,7 @@ struct ContentView: View {
     }
 
     private func saveCurrentEditorFromCommand() {
+        guard isCreatingItem || isEditingSelectedItem else { return }
         switch activeEditorKind {
         case .login:
             saveCurrentLogin()
@@ -3138,6 +3345,7 @@ struct ContentView: View {
             return
         }
         isCreatingItem = false
+        isEditingSelectedItem = false
         if let detail = store.selectedDetail {
             setEditorForm(LoginForm(detail: detail))
         } else {
@@ -3160,6 +3368,7 @@ struct ContentView: View {
             return
         }
         isCreatingItem = false
+        isEditingSelectedItem = false
         if let detail = store.selectedSecureNoteDetail {
             setSecureNoteEditorForm(SecureNoteForm(detail: detail))
         } else {
@@ -3179,6 +3388,7 @@ struct ContentView: View {
             return
         }
         isCreatingItem = false
+        isEditingSelectedItem = false
         if let detail = store.selectedCreditCardDetail {
             setCreditCardEditorForm(CreditCardForm(detail: detail))
         } else {
@@ -3201,6 +3411,7 @@ struct ContentView: View {
             return
         }
         isCreatingItem = false
+        isEditingSelectedItem = false
         if let detail = store.selectedSoftwareLicenseDetail {
             setSoftwareLicenseEditorForm(SoftwareLicenseForm(detail: detail))
         } else {
@@ -3220,6 +3431,7 @@ struct ContentView: View {
             form = submittedForm
         }
         isCreatingItem = false
+        isEditingSelectedItem = store.selectedItemId != nil
     }
 
     private func preserveStaleSecureNoteDraft(_ submittedForm: SecureNoteForm) {
@@ -3232,6 +3444,7 @@ struct ContentView: View {
             secureNoteForm = submittedForm
         }
         isCreatingItem = false
+        isEditingSelectedItem = store.selectedItemId != nil
     }
 
     private func preserveStaleCreditCardDraft(_ submittedForm: CreditCardForm) {
@@ -3244,6 +3457,7 @@ struct ContentView: View {
             creditCardForm = submittedForm
         }
         isCreatingItem = false
+        isEditingSelectedItem = store.selectedItemId != nil
     }
 
     private func preserveStaleSoftwareLicenseDraft(_ submittedForm: SoftwareLicenseForm) {
@@ -3256,6 +3470,7 @@ struct ContentView: View {
             softwareLicenseForm = submittedForm
         }
         isCreatingItem = false
+        isEditingSelectedItem = store.selectedItemId != nil
     }
 
     private func generatePassword() {

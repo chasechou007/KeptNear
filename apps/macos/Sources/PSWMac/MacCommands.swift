@@ -70,6 +70,7 @@ enum PSWMacCommand: CaseIterable {
     case openVault
     case openRecentVault
     case newItem
+    case editItem
     case saveCurrentEditor
     case focusSearch
     case copyUsername
@@ -88,6 +89,7 @@ struct PSWMacCommandAvailability: Equatable {
     var canOpenVault: Bool
     var canOpenRecentVault: Bool
     var canCreateNewItem: Bool
+    var canEditItem: Bool
     var canSaveCurrentEditor: Bool
     var canFocusSearch: Bool
     var canCopyUsername: Bool
@@ -103,6 +105,7 @@ struct PSWMacCommandAvailability: Equatable {
     init(
         isUnlocked: Bool,
         canSaveCurrentEditor: Bool,
+        canEditItem: Bool = false,
         hasRecentVault: Bool = false,
         canCopyUsername: Bool = false,
         canCopyPassword: Bool = false,
@@ -116,6 +119,7 @@ struct PSWMacCommandAvailability: Equatable {
         self.canOpenVault = true
         self.canOpenRecentVault = hasRecentVault
         self.canCreateNewItem = isUnlocked
+        self.canEditItem = isUnlocked && canEditItem
         self.canSaveCurrentEditor = isUnlocked && canSaveCurrentEditor
         self.canFocusSearch = isUnlocked
         self.canCopyUsername = isUnlocked && canCopyUsername
@@ -139,6 +143,8 @@ struct PSWMacCommandAvailability: Equatable {
             return canOpenRecentVault
         case .newItem:
             return canCreateNewItem
+        case .editItem:
+            return canEditItem
         case .saveCurrentEditor:
             return canSaveCurrentEditor
         case .focusSearch:
@@ -182,6 +188,7 @@ struct PSWMacCommandHandler {
     var copyLicenseKey: () -> Void
     var refreshSync: () -> Void
     var lockVault: () -> Void
+    var editCurrentItem: () -> Void = {}
 
     func perform(_ command: PSWMacCommand) {
         guard availability.isEnabled(command) else { return }
@@ -195,6 +202,8 @@ struct PSWMacCommandHandler {
             openRecentVault()
         case .newItem:
             createNewItem()
+        case .editItem:
+            editCurrentItem()
         case .saveCurrentEditor:
             saveCurrentEditor()
         case .focusSearch:
@@ -282,6 +291,14 @@ struct PSWMacCommands: Commands {
         }
 
         CommandMenu(text.itemMenu) {
+            Button(text.editItem) {
+                commandHandler?.perform(.editItem)
+            }
+            .keyboardShortcut(.return, modifiers: [.command])
+            .disabled(!isEnabled(.editItem))
+
+            Divider()
+
             Button(text.copyUsername) {
                 commandHandler?.perform(.copyUsername)
             }

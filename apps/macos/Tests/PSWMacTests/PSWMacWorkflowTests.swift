@@ -739,6 +739,7 @@ final class PSWMacWorkflowTests: XCTestCase {
         let unlocked = PSWMacCommandAvailability(
             isUnlocked: true,
             canSaveCurrentEditor: true,
+            canEditItem: true,
             hasRecentVault: true,
             canCopyUsername: true,
             canCopyPassword: true,
@@ -770,6 +771,7 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertTrue(ineligibleLoginSelection.isEnabled(.openVault))
         XCTAssertTrue(ineligibleLoginSelection.isEnabled(.openRecentVault))
         XCTAssertTrue(ineligibleLoginSelection.isEnabled(.newItem))
+        XCTAssertFalse(ineligibleLoginSelection.isEnabled(.editItem))
         XCTAssertFalse(ineligibleLoginSelection.isEnabled(.saveCurrentEditor))
         XCTAssertTrue(ineligibleLoginSelection.isEnabled(.focusSearch))
         XCTAssertFalse(ineligibleLoginSelection.isEnabled(.copyUsername))
@@ -816,6 +818,7 @@ final class PSWMacWorkflowTests: XCTestCase {
             availability: PSWMacCommandAvailability(
                 isUnlocked: true,
                 canSaveCurrentEditor: false,
+                canEditItem: true,
                 hasRecentVault: true,
                 canCopyUsername: true,
                 canCopyPassword: true,
@@ -839,7 +842,8 @@ final class PSWMacWorkflowTests: XCTestCase {
             copyCardVerificationCode: { performedCommands.append(.copyCardVerificationCode) },
             copyLicenseKey: { performedCommands.append(.copyLicenseKey) },
             refreshSync: { performedCommands.append(.refreshSync) },
-            lockVault: { performedCommands.append(.lockVault) }
+            lockVault: { performedCommands.append(.lockVault) },
+            editCurrentItem: { performedCommands.append(.editItem) }
         )
 
         for command in PSWMacCommand.allCases {
@@ -851,6 +855,7 @@ final class PSWMacWorkflowTests: XCTestCase {
             .openVault,
             .openRecentVault,
             .newItem,
+            .editItem,
             .focusSearch,
             .copyUsername,
             .copyPassword,
@@ -957,6 +962,97 @@ final class PSWMacWorkflowTests: XCTestCase {
                 + VaultWorkspaceLayout.detailMinimum,
             1_040
         )
+    }
+
+    func testVaultDetailModeDefaultsSelectedItemsToReadOnly() {
+        XCTAssertEqual(
+            VaultDetailMode(hasSelection: false, isEditing: false, isCreating: false),
+            .empty
+        )
+        XCTAssertEqual(
+            VaultDetailMode(hasSelection: true, isEditing: false, isCreating: false),
+            .readOnly
+        )
+        XCTAssertEqual(
+            VaultDetailMode(hasSelection: true, isEditing: true, isCreating: false),
+            .editing
+        )
+        XCTAssertEqual(
+            VaultDetailMode(hasSelection: false, isEditing: false, isCreating: true),
+            .creating
+        )
+        XCTAssertEqual(
+            VaultDetailMode(hasSelection: true, isEditing: true, isCreating: true),
+            .creating
+        )
+    }
+
+    func testVaultItemDetailModelKeepsProtectedValuesOutOfReadOnlyPresentation() throws {
+        let item = VaultItemView(
+            id: "login_1",
+            title: "Email",
+            itemType: "login",
+            status: "active",
+            favorite: true,
+            tags: ["personal"]
+        )
+        let detail = LoginDetail(
+            id: "login_1",
+            revision: "rev_1",
+            title: "Email",
+            username: "me@example.com",
+            url: "https://mail.example.com",
+            notes: "Primary inbox",
+            totpSecret: "JBSWY3DPEHPK3PXP",
+            favorite: true,
+            tags: ["personal"],
+            status: "active"
+        )
+
+        let model = try XCTUnwrap(VaultItemDetailModel(
+            item: item,
+            login: detail,
+            secureNote: nil,
+            creditCard: nil,
+            softwareLicense: nil
+        ))
+        guard case let .login(login) = model.content else {
+            return XCTFail("Expected login read-only content")
+        }
+
+        XCTAssertEqual(login.username, "me@example.com")
+        XCTAssertEqual(login.urls, ["https://mail.example.com"])
+        XCTAssertEqual(login.notes, "Primary inbox")
+        XCTAssertTrue(login.hasTotpSecret)
+        XCTAssertFalse(String(reflecting: model).contains("JBSWY3DPEHPK3PXP"))
+    }
+
+    func testVaultItemDetailCapabilitiesMapFieldCopyActions() {
+        let capabilities = VaultItemDetailCapabilities(
+            canEdit: true,
+            canCopyLoginFields: true,
+            canCopyTotp: false,
+            canOpenURL: true,
+            canCopySecureNoteBody: false,
+            canCopyCreditCardFields: true,
+            canCopySoftwareLicenseFields: false,
+            canRevealSecrets: true,
+            canToggleFavorite: true,
+            canDuplicate: true,
+            canResolveConflict: false,
+            canRestoreArchive: false,
+            canArchive: true,
+            canDelete: true
+        )
+
+        XCTAssertTrue(capabilities.canCopy(.username))
+        XCTAssertTrue(capabilities.canCopy(.password))
+        XCTAssertTrue(capabilities.canCopy(.url("https://example.com")))
+        XCTAssertFalse(capabilities.canCopy(.totp))
+        XCTAssertFalse(capabilities.canCopy(.secureNoteBody))
+        XCTAssertTrue(capabilities.canCopy(.cardNumber))
+        XCTAssertTrue(capabilities.canCopy(.cardVerificationCode))
+        XCTAssertFalse(capabilities.canCopy(.licenseKey))
     }
 
     func testSecretCopyCommandsUseExistingClipboardWorkflows() {
@@ -8182,6 +8278,54 @@ final class PSWMacWorkflowTests: XCTestCase {
             "https://mail.example.com/login",
             "https://example.com/account"
         ])
+        XCTAssertEqual(store.statusMessage, "login item has no valid URL")
+    }
+
+    func testReadOnlyURLActionsTargetOnlyURLsFromCurrentSelection() {
+        let service = FakeCoreService(seedItems: [
+            SeedLogin(
+                title: "Email",
+                username: "me@example.com",
+                password: "email-password",
+                url: "https://mail.example.com/login",
+                notes: "Primary inbox",
+                tags: ["personal"]
+            )
+        ])
+        let clipboard = FakeClipboard()
+        let urlOpener = FakeURLOpener()
+        let store = VaultStore(
+            service: service,
+            clipboard: clipboard,
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            urlOpener: urlOpener,
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/ReadOnlyURLActions.pswvault"))
+        store.unlock(password: "correct horse")
+        store.select(itemId: "item_1")
+
+        var form = LoginForm(detail: try! XCTUnwrap(store.selectedDetail))
+        form.urlsText = """
+        https://mail.example.com/login
+        portal.example.com/account
+        """
+        XCTAssertEqual(store.saveLogin(form: form), .saved)
+
+        store.copySelectedLoginURL("portal.example.com/account")
+        XCTAssertEqual(clipboard.copied.map(\.value), ["portal.example.com/account"])
+        XCTAssertEqual(store.statusMessage, "URL copied")
+
+        XCTAssertTrue(store.openSelectedLoginURL("portal.example.com/account"))
+        XCTAssertEqual(urlOpener.openedURLs.map(\.absoluteString), ["https://portal.example.com/account"])
+
+        store.copySelectedLoginURL("https://outside.example.com")
+        XCTAssertEqual(clipboard.copied.map(\.value), ["portal.example.com/account"])
+        XCTAssertEqual(store.statusMessage, "login item has no URL")
+
+        XCTAssertFalse(store.openSelectedLoginURL("https://outside.example.com"))
+        XCTAssertEqual(urlOpener.openedURLs.map(\.absoluteString), ["https://portal.example.com/account"])
         XCTAssertEqual(store.statusMessage, "login item has no valid URL")
     }
 

@@ -561,6 +561,7 @@ struct AppText {
         choose("Open Another Vault", "打开其他密码库", "別の保管庫を開く")
     }
     var more: String { choose("More", "更多", "その他") }
+    var editItem: String { choose("Edit", "编辑", "編集") }
     var title: String { choose("Title", "标题", "タイトル") }
     var itemType: String { choose("Item Type", "项目类型", "アイテムの種類") }
     var login: String { choose("Login", "登录项", "ログイン") }
@@ -614,6 +615,7 @@ struct AppText {
     }
     var url: String { choose("URL", "网址", "URL") }
     var urls: String { choose("URLs", "网址", "URL") }
+    var copyURL: String { choose("Copy URL", "复制网址", "URLをコピー") }
     var openURL: String { choose("Open URL", "打开网址", "URLを開く") }
     var body: String { choose("Body", "正文", "本文") }
     var copyBody: String { choose("Copy Body", "复制正文", "本文をコピー") }
@@ -665,6 +667,29 @@ struct AppText {
     var licensedTo: String { choose("Licensed To", "授权给", "ライセンス所有者") }
     var tags: String { choose("Tags", "标签", "タグ") }
     var notes: String { choose("Notes", "备注", "メモ") }
+    var account: String { choose("Account", "账户", "アカウント") }
+    var websites: String { choose("Websites", "网站", "Webサイト") }
+    var content: String { choose("Content", "内容", "内容") }
+    var cardDetails: String { choose("Card Details", "卡片信息", "カード情報") }
+    var protectedFields: String { choose("Protected Fields", "受保护字段", "保護された項目") }
+    var licenseDetails: String { choose("License Details", "许可证信息", "ライセンス情報") }
+    var otherDetails: String { choose("Other Details", "其他", "その他") }
+    var notSet: String { choose("Not set", "未设置", "未設定") }
+    var loadingItem: String { choose("Loading item...", "正在加载项目…", "アイテムを読み込み中…") }
+    var detailConflictMessage: String {
+        choose(
+            "Resolve this conflict before copying, revealing, or editing protected fields.",
+            "请先解决此冲突，再复制、显示或编辑受保护字段。",
+            "保護された項目をコピー、表示、編集する前に競合を解決してください。"
+        )
+    }
+    var detailArchivedMessage: String {
+        choose(
+            "This item is archived. Restore it from More to return it to the active list.",
+            "此项目已归档。可从“更多”中恢复到活跃列表。",
+            "このアイテムはアーカイブ済みです。「その他」から有効な一覧へ復元できます。"
+        )
+    }
     var create: String { choose("Create", "创建", "作成") }
     var save: String { choose("Save", "保存", "保存") }
     var newItem: String { choose("New", "新建", "新規") }
@@ -922,6 +947,10 @@ struct AppText {
             return choose("Password copied", "密码已复制", "パスワードをコピーしました")
         case "login item has no password":
             return choose("login item has no password", "登录项没有密码", "ログインにパスワードがありません")
+        case "URL copied":
+            return choose("URL copied", "网址已复制", "URLをコピーしました")
+        case "login item has no URL":
+            return choose("login item has no URL", "登录项没有网址", "ログインにURLがありません")
         case "Select at least one password character class":
             return selectPasswordCharacterClass
         case "URL opened":

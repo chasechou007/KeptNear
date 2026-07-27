@@ -1376,6 +1376,21 @@ final class VaultStore: ObservableObject {
         copyLoginField("password", label: "Password copied", emptyLabel: "login item has no password")
     }
 
+    func copySelectedLoginURL(_ value: String) {
+        guard canCopyLoginFields else { return }
+        guard selectedDetail?.urls.contains(value) == true else {
+            statusMessage = "login item has no URL"
+            return
+        }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            statusMessage = "login item has no URL"
+            return
+        }
+        clipboard.copy(trimmed, clearAfter: clipboardTimeout)
+        statusMessage = "URL copied"
+    }
+
     func copyTotp() {
         guard let sessionId, let selectedItemId, selectedItem?.isLogin == true else { return }
         guard canMutateSelectedItem else {
@@ -1396,7 +1411,19 @@ final class VaultStore: ObservableObject {
     @discardableResult
     func openSelectedLoginURL() -> Bool {
         guard canOpenSelectedLoginURL else { return false }
-        guard let url = selectedDetail.flatMap({ Self.firstNormalizedWebURL(from: $0.urls) }) else {
+        guard let value = selectedDetail?.urls.first(where: { Self.normalizedWebURL(from: $0) != nil }) else {
+            statusMessage = "login item has no valid URL"
+            return false
+        }
+        return openSelectedLoginURL(value)
+    }
+
+    @discardableResult
+    func openSelectedLoginURL(_ value: String) -> Bool {
+        guard canOpenSelectedLoginURL else { return false }
+        guard selectedDetail?.urls.contains(value) == true,
+              let url = Self.normalizedWebURL(from: value)
+        else {
             statusMessage = "login item has no valid URL"
             return false
         }
