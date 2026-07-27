@@ -213,7 +213,32 @@ struct AppText {
         choose("Local Password Manager", "本地密码管理器", "ローカルパスワードマネージャー")
     }
     var allItems: String { choose("All Items", "所有项目", "すべての項目") }
+    var browse: String { choose("Browse", "浏览", "ブラウズ") }
+    var itemTypes: String { choose("Types", "类型", "種類") }
+    var securityAndMaintenance: String {
+        choose("Security & Maintenance", "安全与维护", "セキュリティと管理")
+    }
     var categories: String { choose("Categories", "类别", "カテゴリー") }
+    func itemCount(_ count: Int) -> String {
+        switch selectedLanguage {
+        case .english:
+            return count == 1 ? "1 item" : "\(count) items"
+        case .simplifiedChinese:
+            return "\(count) 个项目"
+        case .japanese:
+            return "\(count)件"
+        }
+    }
+    var sidebarSyncReady: String { choose("Sync ready", "同步就绪", "同期準備完了") }
+    var sidebarSyncNeedsAttention: String {
+        choose("Sync needs attention", "同步需要处理", "同期の確認が必要")
+    }
+    var sidebarSyncWaiting: String {
+        choose("Waiting for edits", "等待完成编辑", "編集完了を待機中")
+    }
+    var notRefreshedYet: String {
+        choose("Not refreshed yet", "尚未刷新", "まだ更新されていません")
+    }
     var vaultStatus: String { choose("Vault Status", "密码库状态", "保管庫の状態") }
     var vaultStatusUnavailable: String {
         choose(
@@ -347,6 +372,43 @@ struct AppText {
     var clipboard: String { choose("Clipboard", "剪贴板", "クリップボード") }
     var autoLock: String { choose("Auto-lock", "自动锁定", "自動ロック") }
     var disableKeychain: String { choose("Disable Keychain", "停用钥匙串", "キーチェーンを無効化") }
+    var welcomeHeadline: String {
+        choose(
+            "Your passwords, always kept near.",
+            "你的密码，始终在你身边。",
+            "パスワードを、いつも手元に。"
+        )
+    }
+    var welcomeMessage: String {
+        choose(
+            "KeptNear stores an encrypted vault in a location you choose. No account, no hosted cloud dependency, and complete offline access.",
+            "KeptNear 将加密密码库存储在你选择的位置。无需账户，不依赖托管云服务，离线也能完整使用。",
+            "KeptNearは、選択した場所に暗号化保管庫を保存します。アカウントもホスト型クラウドへの依存もなく、オフラインで完全に利用できます。"
+        )
+    }
+    var encryptedVault: String { choose("Encrypted vault", "加密密码库", "暗号化保管庫") }
+    var filesStayWithYou: String { choose("Files stay with you", "文件由你保管", "ファイルは自分で管理") }
+    var localFirst: String { choose("Local first", "本地优先", "ローカルファースト") }
+    var welcomeActionsTitle: String {
+        choose("Start using KeptNear", "开始使用 KeptNear", "KeptNearを使い始める")
+    }
+    var welcomeActionsMessage: String {
+        choose(
+            "Open an existing .pswvault vault or create a new one on this Mac.",
+            "打开已有的 .pswvault 密码库，或在这台 Mac 上创建一个新的密码库。",
+            "既存の .pswvault 保管庫を開くか、このMacに新しい保管庫を作成します。"
+        )
+    }
+    var openExistingVault: String {
+        choose("Open Existing Vault", "打开现有密码库", "既存の保管庫を開く")
+    }
+    var welcomeSyncMessage: String {
+        choose(
+            "KeptNear does not upload your vault. You may place the encrypted directory in iCloud Drive, Dropbox, or another sync folder.",
+            "KeptNear 不会上传你的密码库。你可以将加密目录放入 iCloud Drive、Dropbox 或其他同步文件夹。",
+            "KeptNearが保管庫をアップロードすることはありません。暗号化ディレクトリはiCloud Drive、Dropbox、その他の同期フォルダに配置できます。"
+        )
+    }
     var firstRunTitle: String { choose("Start with a local vault", "从本地密码库开始", "ローカル保管庫から始める") }
     var firstRunSubtitle: String {
         choose(
@@ -486,8 +548,19 @@ struct AppText {
             "マスターパスワードを入力"
         )
     }
+    func unlockVaultNamed(_ vaultName: String) -> String {
+        choose(
+            "Unlock \(vaultName)",
+            "解锁 \(vaultName)",
+            "\(vaultName)のロックを解除"
+        )
+    }
     var unlock: String { choose("Unlock", "解锁", "ロック解除") }
     var unlockWithKeychain: String { choose("Unlock with Keychain", "使用钥匙串解锁", "キーチェーンで解除") }
+    var openOtherVault: String {
+        choose("Open Another Vault", "打开其他密码库", "別の保管庫を開く")
+    }
+    var more: String { choose("More", "更多", "その他") }
     var title: String { choose("Title", "标题", "タイトル") }
     var itemType: String { choose("Item Type", "项目类型", "アイテムの種類") }
     var login: String { choose("Login", "登录项", "ログイン") }

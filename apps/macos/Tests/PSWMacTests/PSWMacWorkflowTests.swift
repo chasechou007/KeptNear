@@ -134,10 +134,35 @@ final class PSWMacWorkflowTests: XCTestCase {
             .write(to: vaultURL.appendingPathComponent("keys.enc"))
     }
 
+    func testAppPresentationStateUsesVaultSelectionAndUnlockState() {
+        XCTAssertEqual(
+            AppPresentationState(hasSelectedVault: false, isUnlocked: false),
+            .welcome
+        )
+        XCTAssertEqual(
+            AppPresentationState(hasSelectedVault: false, isUnlocked: true),
+            .welcome
+        )
+        XCTAssertEqual(
+            AppPresentationState(hasSelectedVault: true, isUnlocked: false),
+            .locked
+        )
+        XCTAssertEqual(
+            AppPresentationState(hasSelectedVault: true, isUnlocked: true),
+            .unlocked
+        )
+    }
+
     func testLanguageTextSupportsEnglishAndSimplifiedChinese() {
         let english = AppText(AppLanguage.english.rawValue)
         let chinese = AppText(AppLanguage.simplifiedChinese.rawValue)
 
+        XCTAssertEqual(english.welcomeHeadline, "Your passwords, always kept near.")
+        XCTAssertEqual(chinese.welcomeHeadline, "你的密码，始终在你身边。")
+        XCTAssertEqual(english.openExistingVault, "Open Existing Vault")
+        XCTAssertEqual(chinese.openExistingVault, "打开现有密码库")
+        XCTAssertEqual(english.unlockVaultNamed("Personal"), "Unlock Personal")
+        XCTAssertEqual(chinese.unlockVaultNamed("Personal"), "解锁 Personal")
         XCTAssertEqual(english.newVault, "New Vault")
         XCTAssertEqual(chinese.newVault, "新建密码库")
         XCTAssertEqual(english.exportItems, "Export")
@@ -179,6 +204,20 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(chinese.lockedVaultTitle, "密码库已锁定")
         XCTAssertEqual(english.emptyVaultTitle, "No Items Yet")
         XCTAssertEqual(chinese.emptyVaultTitle, "还没有项目")
+        XCTAssertEqual(english.browse, "Browse")
+        XCTAssertEqual(chinese.browse, "浏览")
+        XCTAssertEqual(english.itemTypes, "Types")
+        XCTAssertEqual(chinese.itemTypes, "类型")
+        XCTAssertEqual(english.securityAndMaintenance, "Security & Maintenance")
+        XCTAssertEqual(chinese.securityAndMaintenance, "安全与维护")
+        XCTAssertEqual(english.itemCount(1), "1 item")
+        XCTAssertEqual(english.itemCount(2), "2 items")
+        XCTAssertEqual(chinese.itemCount(2), "2 个项目")
+        XCTAssertEqual(english.sidebarSyncReady, "Sync ready")
+        XCTAssertEqual(chinese.sidebarSyncReady, "同步就绪")
+        XCTAssertEqual(chinese.sidebarSyncNeedsAttention, "同步需要处理")
+        XCTAssertEqual(chinese.sidebarSyncWaiting, "等待完成编辑")
+        XCTAssertEqual(chinese.notRefreshedYet, "尚未刷新")
         XCTAssertEqual(english.login, "Login")
         XCTAssertEqual(chinese.login, "登录项")
         XCTAssertEqual(english.secureNote, "Secure Note")
@@ -577,6 +616,9 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(AppLanguage.resolve("ja"), .japanese)
         XCTAssertEqual(AppLanguage.resolve("unknown"), .english)
 
+        XCTAssertEqual(japanese.welcomeHeadline, "パスワードを、いつも手元に。")
+        XCTAssertEqual(japanese.openExistingVault, "既存の保管庫を開く")
+        XCTAssertEqual(japanese.unlockVaultNamed("Personal"), "Personalのロックを解除")
         XCTAssertEqual(japanese.newVault, "新規保管庫")
         XCTAssertEqual(japanese.openRecentVault, "最近使った保管庫を開く")
         XCTAssertEqual(japanese.languageLabel, "言語")
@@ -591,6 +633,12 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(japanese.settings, "設定")
         XCTAssertEqual(japanese.login, "ログイン")
         XCTAssertEqual(japanese.secureNote, "セキュアノート")
+        XCTAssertEqual(japanese.browse, "ブラウズ")
+        XCTAssertEqual(japanese.itemTypes, "種類")
+        XCTAssertEqual(japanese.securityAndMaintenance, "セキュリティと管理")
+        XCTAssertEqual(japanese.itemCount(2), "2件")
+        XCTAssertEqual(japanese.sidebarSyncReady, "同期準備完了")
+        XCTAssertEqual(japanese.notRefreshedYet, "まだ更新されていません")
         XCTAssertEqual(japanese.masterPassword, "マスターパスワード")
         XCTAssertEqual(japanese.enterMasterPasswordToUnlock, "マスターパスワードを入力")
         XCTAssertEqual(japanese.forgotMasterPassword, "マスターパスワードを忘れた場合")
@@ -682,13 +730,16 @@ final class PSWMacWorkflowTests: XCTestCase {
             canCopyLicenseKey: true
         )
 
-        for command in PSWMacCommand.allCases {
+        XCTAssertTrue(locked.isEnabled(.newVault))
+        XCTAssertTrue(locked.isEnabled(.openVault))
+        for command in PSWMacCommand.allCases where ![.newVault, .openVault].contains(command) {
             XCTAssertFalse(locked.isEnabled(command))
         }
 
         let unlocked = PSWMacCommandAvailability(
             isUnlocked: true,
             canSaveCurrentEditor: true,
+            hasRecentVault: true,
             canCopyUsername: true,
             canCopyPassword: true,
             canCopyTotp: true,
@@ -705,6 +756,7 @@ final class PSWMacWorkflowTests: XCTestCase {
         let ineligibleLoginSelection = PSWMacCommandAvailability(
             isUnlocked: true,
             canSaveCurrentEditor: false,
+            hasRecentVault: true,
             canCopyUsername: false,
             canCopyPassword: false,
             canCopyTotp: false,
@@ -714,6 +766,9 @@ final class PSWMacWorkflowTests: XCTestCase {
             canCopyLicenseKey: false
         )
 
+        XCTAssertTrue(ineligibleLoginSelection.isEnabled(.newVault))
+        XCTAssertTrue(ineligibleLoginSelection.isEnabled(.openVault))
+        XCTAssertTrue(ineligibleLoginSelection.isEnabled(.openRecentVault))
         XCTAssertTrue(ineligibleLoginSelection.isEnabled(.newItem))
         XCTAssertFalse(ineligibleLoginSelection.isEnabled(.saveCurrentEditor))
         XCTAssertTrue(ineligibleLoginSelection.isEnabled(.focusSearch))
@@ -733,6 +788,9 @@ final class PSWMacWorkflowTests: XCTestCase {
 
         let lockedHandler = PSWMacCommandHandler(
             availability: PSWMacCommandAvailability(isUnlocked: false, canSaveCurrentEditor: true),
+            createNewVault: { performedCommands.append(.newVault) },
+            openVault: { performedCommands.append(.openVault) },
+            openRecentVault: { performedCommands.append(.openRecentVault) },
             createNewItem: { performedCommands.append(.newItem) },
             saveCurrentEditor: { performedCommands.append(.saveCurrentEditor) },
             focusSearch: { performedCommands.append(.focusSearch) },
@@ -751,12 +809,14 @@ final class PSWMacWorkflowTests: XCTestCase {
             lockedHandler.perform(command)
         }
 
-        XCTAssertTrue(performedCommands.isEmpty)
+        XCTAssertEqual(performedCommands, [.newVault, .openVault])
+        performedCommands.removeAll()
 
         let guardedHandler = PSWMacCommandHandler(
             availability: PSWMacCommandAvailability(
                 isUnlocked: true,
                 canSaveCurrentEditor: false,
+                hasRecentVault: true,
                 canCopyUsername: true,
                 canCopyPassword: true,
                 canCopyTotp: false,
@@ -765,6 +825,9 @@ final class PSWMacWorkflowTests: XCTestCase {
                 canCopyCardVerificationCode: false,
                 canCopyLicenseKey: true
             ),
+            createNewVault: { performedCommands.append(.newVault) },
+            openVault: { performedCommands.append(.openVault) },
+            openRecentVault: { performedCommands.append(.openRecentVault) },
             createNewItem: { performedCommands.append(.newItem) },
             saveCurrentEditor: { performedCommands.append(.saveCurrentEditor) },
             focusSearch: { performedCommands.append(.focusSearch) },
@@ -784,6 +847,9 @@ final class PSWMacWorkflowTests: XCTestCase {
         }
 
         XCTAssertEqual(performedCommands, [
+            .newVault,
+            .openVault,
+            .openRecentVault,
             .newItem,
             .focusSearch,
             .copyUsername,
@@ -853,6 +919,46 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertNil(ItemListRowAction.copyPassword.destructiveAction)
     }
 
+    func testVaultItemSummarySubtitleKeepsNormalRowsQuietAndHighlightsSpecialStatus() {
+        let active = VaultItemView(
+            id: "active",
+            title: "Email",
+            itemType: "login",
+            status: "active",
+            favorite: false,
+            tags: ["personal", "mail", "ignored"]
+        )
+        let archived = VaultItemView(
+            id: "archived",
+            title: "Old Note",
+            itemType: "secure note",
+            status: "archived",
+            favorite: false,
+            tags: ["old"]
+        )
+
+        XCTAssertEqual(
+            VaultItemSummaryRow.subtitle(for: active, text: AppText("en")),
+            "Login · personal · mail"
+        )
+        XCTAssertEqual(
+            VaultItemSummaryRow.subtitle(for: archived, text: AppText("zh-Hans")),
+            "安全笔记 · 已归档"
+        )
+    }
+
+    func testVaultWorkspaceLayoutPreservesThreeUsableColumnsAtMinimumWindowWidth() {
+        XCTAssertEqual(VaultWorkspaceLayout.sidebarIdeal, 220)
+        XCTAssertEqual(VaultWorkspaceLayout.itemListIdeal, 340)
+        XCTAssertGreaterThanOrEqual(VaultWorkspaceLayout.detailMinimum, 480)
+        XCTAssertLessThanOrEqual(
+            VaultWorkspaceLayout.sidebarMinimum
+                + VaultWorkspaceLayout.itemListMinimum
+                + VaultWorkspaceLayout.detailMinimum,
+            1_040
+        )
+    }
+
     func testSecretCopyCommandsUseExistingClipboardWorkflows() {
         let service = FakeCoreService(seedItems: [
             SeedLogin(
@@ -890,6 +996,9 @@ final class PSWMacWorkflowTests: XCTestCase {
                     canCopyCardVerificationCode: store.canCopyCreditCardFields,
                     canCopyLicenseKey: store.canCopySoftwareLicenseFields
                 ),
+                createNewVault: {},
+                openVault: {},
+                openRecentVault: {},
                 createNewItem: {},
                 saveCurrentEditor: {},
                 focusSearch: {},

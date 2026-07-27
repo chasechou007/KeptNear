@@ -66,6 +66,9 @@ enum MenuBarLocalization {
 }
 
 enum PSWMacCommand: CaseIterable {
+    case newVault
+    case openVault
+    case openRecentVault
     case newItem
     case saveCurrentEditor
     case focusSearch
@@ -81,6 +84,9 @@ enum PSWMacCommand: CaseIterable {
 }
 
 struct PSWMacCommandAvailability: Equatable {
+    var canCreateNewVault: Bool
+    var canOpenVault: Bool
+    var canOpenRecentVault: Bool
     var canCreateNewItem: Bool
     var canSaveCurrentEditor: Bool
     var canFocusSearch: Bool
@@ -97,6 +103,7 @@ struct PSWMacCommandAvailability: Equatable {
     init(
         isUnlocked: Bool,
         canSaveCurrentEditor: Bool,
+        hasRecentVault: Bool = false,
         canCopyUsername: Bool = false,
         canCopyPassword: Bool = false,
         canCopyTotp: Bool = false,
@@ -105,6 +112,9 @@ struct PSWMacCommandAvailability: Equatable {
         canCopyCardVerificationCode: Bool = false,
         canCopyLicenseKey: Bool = false
     ) {
+        self.canCreateNewVault = true
+        self.canOpenVault = true
+        self.canOpenRecentVault = hasRecentVault
         self.canCreateNewItem = isUnlocked
         self.canSaveCurrentEditor = isUnlocked && canSaveCurrentEditor
         self.canFocusSearch = isUnlocked
@@ -121,6 +131,12 @@ struct PSWMacCommandAvailability: Equatable {
 
     func isEnabled(_ command: PSWMacCommand) -> Bool {
         switch command {
+        case .newVault:
+            return canCreateNewVault
+        case .openVault:
+            return canOpenVault
+        case .openRecentVault:
+            return canOpenRecentVault
         case .newItem:
             return canCreateNewItem
         case .saveCurrentEditor:
@@ -151,6 +167,9 @@ struct PSWMacCommandAvailability: Equatable {
 
 struct PSWMacCommandHandler {
     var availability: PSWMacCommandAvailability
+    var createNewVault: () -> Void
+    var openVault: () -> Void
+    var openRecentVault: () -> Void
     var createNewItem: () -> Void
     var saveCurrentEditor: () -> Void
     var focusSearch: () -> Void
@@ -168,6 +187,12 @@ struct PSWMacCommandHandler {
         guard availability.isEnabled(command) else { return }
 
         switch command {
+        case .newVault:
+            createNewVault()
+        case .openVault:
+            openVault()
+        case .openRecentVault:
+            openRecentVault()
         case .newItem:
             createNewItem()
         case .saveCurrentEditor:
@@ -214,6 +239,25 @@ struct PSWMacCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .newItem) {
+            Button(text.newVault) {
+                commandHandler?.perform(.newVault)
+            }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
+            .disabled(!isEnabled(.newVault))
+
+            Button(text.openVault) {
+                commandHandler?.perform(.openVault)
+            }
+            .keyboardShortcut("o", modifiers: [.command])
+            .disabled(!isEnabled(.openVault))
+
+            Button(text.openRecentVault) {
+                commandHandler?.perform(.openRecentVault)
+            }
+            .disabled(!isEnabled(.openRecentVault))
+
+            Divider()
+
             Button(text.newItem) {
                 commandHandler?.perform(.newItem)
             }
