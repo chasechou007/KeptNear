@@ -122,6 +122,8 @@ grep -F 'KEPTNEAR_REVIEWED_APPLE_AR_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/nul
 grep -F 'KEPTNEAR_REVIEWED_APPLE_RANLIB_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_REVIEWED_XCODEBUILD_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_SYSTEM_SHASUM="/usr/bin/shasum"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'keptnear_run_clean_shasum()' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'environment_command=("$KEPTNEAR_SYSTEM_ENV" -i)' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_SYSTEM_XCODE_SELECT="/usr/bin/xcode-select"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_SYSTEM_XCRUN="/usr/bin/xcrun"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
@@ -232,8 +234,9 @@ trap 'rm -rf "$TMP_DIR" "$UNTRUSTED_TARGET"' EXIT
 if [[ "$RUN_DISTRIBUTION_TOOLCHAIN_SMOKE" == "1" ]]; then
   UNTRUSTED_CARGO_HOME="$TMP_DIR/untrusted-cargo-home"
   UNTRUSTED_HOME="$TMP_DIR/untrusted-home"
+  UNTRUSTED_PERL_LIB="$TMP_DIR/untrusted-perl-lib"
   rm -rf "$UNTRUSTED_TARGET"
-  mkdir -p "$UNTRUSTED_CARGO_HOME" "$UNTRUSTED_HOME"
+  mkdir -p "$UNTRUSTED_CARGO_HOME" "$UNTRUSTED_HOME" "$UNTRUSTED_PERL_LIB"
   python3 - "$UNTRUSTED_CARGO_HOME/config.toml" <<'PY'
 import pathlib
 import sys
@@ -243,6 +246,18 @@ pathlib.Path(sys.argv[1]).write_text(
 CC = { value = "/usr/bin/false", force = true }
 CFLAGS = { value = "-include /private/tmp/keptnear-untrusted.h", force = true }
 KEPTNEAR_UNTRUSTED_CARGO_CONFIG = { value = "loaded", force = true }
+""",
+    encoding="utf-8",
+)
+PY
+  python3 - "$UNTRUSTED_PERL_LIB/KeptNearHashPoison.pm" <<'PY'
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(
+    """package KeptNearHashPoison;
+BEGIN { die "untrusted Perl loader executed\\n"; }
+1;
 """,
     encoding="utf-8",
 )
@@ -260,6 +275,9 @@ PY
       CFLAGS="-include /private/tmp/keptnear-untrusted.h" \
       CPPFLAGS="-I/private/tmp/keptnear-untrusted" \
       LIBSQLITE3_FLAGS="-DSQLITE_UNTRUSTED" \
+      PERL5OPT=-MKeptNearHashPoison \
+      PERL5LIB="$UNTRUSTED_PERL_LIB" \
+      PERLLIB="$UNTRUSTED_PERL_LIB" \
       "$DISTRIBUTION_CARGO_RUNNER" -V
   )"
   require_text \
@@ -278,6 +296,9 @@ PY
     CFLAGS="-include /private/tmp/keptnear-untrusted.h" \
     CPPFLAGS="-I/private/tmp/keptnear-untrusted" \
     LIBSQLITE3_FLAGS="-DSQLITE_UNTRUSTED" \
+    PERL5OPT=-MKeptNearHashPoison \
+    PERL5LIB="$UNTRUSTED_PERL_LIB" \
+    PERLLIB="$UNTRUSTED_PERL_LIB" \
     "$DISTRIBUTION_CARGO_RUNNER" \
       build \
       --locked \

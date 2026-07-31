@@ -144,7 +144,7 @@ require_manifest_atom() {
 }
 
 sha256_file() {
-  shasum -a 256 "$1" | awk '{print $1}'
+  keptnear_run_clean_shasum -a 256 "$1" | awk '{print $1}'
 }
 
 cd "$ROOT_DIR"
@@ -400,7 +400,7 @@ if [[ "$NOTARIZE" == "1" ]]; then
   STAPLE_DETAIL="disk image stapler validation passed"
 fi
 
-ARCHIVE_SHA256="$(shasum -a 256 "$ARCHIVE_PATH" | awk '{print $1}')"
+ARCHIVE_SHA256="$(keptnear_run_clean_shasum -a 256 "$ARCHIVE_PATH" | awk '{print $1}')"
 printf '%s  %s\n' "$ARCHIVE_SHA256" "$(basename "$ARCHIVE_PATH")" >"$CHECKSUM_PATH"
 
 ARCHIVE_SIZE_BYTES="$(wc -c <"$ARCHIVE_PATH" | tr -d ' ')"

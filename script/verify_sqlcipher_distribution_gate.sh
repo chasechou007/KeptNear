@@ -265,7 +265,7 @@ case "$LIBSQLITE3_SYS_VERSION" in
 esac
 
 sha256_file() {
-  "$KEPTNEAR_SYSTEM_SHASUM" -a 256 "$1" |
+  keptnear_run_clean_shasum -a 256 "$1" |
     "$KEPTNEAR_SYSTEM_AWK" '{print $1}'
 }
 
@@ -294,7 +294,7 @@ source_tree_sha256() {
     relative_path="${source_file#$ROOT_DIR/}"
     printf '%s  %s\n' "$(sha256_file "$source_file")" "$relative_path"
   done <<<"$source_files" |
-    "$KEPTNEAR_SYSTEM_SHASUM" -a 256 |
+    keptnear_run_clean_shasum -a 256 |
     "$KEPTNEAR_SYSTEM_AWK" '{print $1}'
 }
 

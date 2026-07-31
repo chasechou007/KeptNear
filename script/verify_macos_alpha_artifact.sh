@@ -167,10 +167,10 @@ require_command xcrun
 
 (
   cd "$ARCHIVE_DIR"
-  shasum -a 256 -c "$(basename "$CHECKSUM_PATH")" >/dev/null
+  keptnear_run_clean_shasum -a 256 -c "$(basename "$CHECKSUM_PATH")" >/dev/null
 )
 
-ACTUAL_SHA256="$(shasum -a 256 "$ARCHIVE_PATH" | awk '{print $1}')"
+ACTUAL_SHA256="$(keptnear_run_clean_shasum -a 256 "$ARCHIVE_PATH" | awk '{print $1}')"
 MANIFEST_SHA256="$(require_manifest_field "SHA-256")"
 assert_equals "manifest SHA-256" "$MANIFEST_SHA256" "$ACTUAL_SHA256"
 
@@ -178,14 +178,20 @@ ACTUAL_SIZE_BYTES="$(wc -c <"$ARCHIVE_PATH" | tr -d ' ')"
 MANIFEST_SIZE_BYTES="$(require_manifest_field "Size bytes")"
 assert_equals "manifest size" "$MANIFEST_SIZE_BYTES" "$ACTUAL_SIZE_BYTES"
 
-ACTUAL_PROTOCOL_MANIFEST_SHA256="$(shasum -a 256 "$PROTOCOL_MANIFEST_PATH" | awk '{print $1}')"
+ACTUAL_PROTOCOL_MANIFEST_SHA256="$(
+  keptnear_run_clean_shasum -a 256 "$PROTOCOL_MANIFEST_PATH" |
+    awk '{print $1}'
+)"
 MANIFEST_PROTOCOL_MANIFEST_SHA256="$(require_manifest_field "Protocol manifest SHA-256")"
 assert_equals \
   "protocol manifest SHA-256" \
   "$MANIFEST_PROTOCOL_MANIFEST_SHA256" \
   "$ACTUAL_PROTOCOL_MANIFEST_SHA256"
 
-ACTUAL_SQLCIPHER_EVIDENCE_SHA256="$(shasum -a 256 "$SQLCIPHER_EVIDENCE_PATH" | awk '{print $1}')"
+ACTUAL_SQLCIPHER_EVIDENCE_SHA256="$(
+  keptnear_run_clean_shasum -a 256 "$SQLCIPHER_EVIDENCE_PATH" |
+    awk '{print $1}'
+)"
 MANIFEST_SQLCIPHER_EVIDENCE_SHA256="$(require_manifest_field "SQLCipher distribution evidence SHA-256")"
 assert_equals \
   "SQLCipher distribution evidence SHA-256" \

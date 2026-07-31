@@ -61,8 +61,17 @@ keptnear_toolchain_require_regular_executable() {
   fi
 }
 
+keptnear_run_clean_shasum() {
+  "$KEPTNEAR_SYSTEM_ENV" \
+    -i \
+    "PATH=$KEPTNEAR_SYSTEM_PATH" \
+    LANG=C \
+    LC_ALL=C \
+    "$KEPTNEAR_SYSTEM_SHASUM" "$@"
+}
+
 keptnear_toolchain_sha256() {
-  "$KEPTNEAR_SYSTEM_SHASUM" -a 256 "$1" |
+  keptnear_run_clean_shasum -a 256 "$1" |
     "$KEPTNEAR_SYSTEM_AWK" '{print $1}'
 }
 
@@ -151,6 +160,9 @@ keptnear_distribution_override_names() {
     CARGO_BUILD_JOBS \
     CARGO_NET_OFFLINE \
     CARGO_NET_GIT_FETCH_WITH_CLI \
+    PERL5OPT \
+    PERL5LIB \
+    PERLLIB \
     SDKROOT \
     DEVELOPER_DIR \
     MACOSX_DEPLOYMENT_TARGET \
@@ -696,7 +708,7 @@ keptnear_run_reviewed_distribution_cargo() {
   keptnear_prepare_distribution_cargo_arguments "$@" || return 1
   keptnear_prepare_isolated_cargo_home || return 1
 
-  environment_command=("$KEPTNEAR_SYSTEM_ENV")
+  environment_command=("$KEPTNEAR_SYSTEM_ENV" -i)
   while IFS= read -r variable_name; do
     environment_command+=(-u "$variable_name")
   done < <(keptnear_distribution_override_names)

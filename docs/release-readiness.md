@@ -58,8 +58,10 @@ macOS SDK build, fixed C flags, and the macOS 13 deployment target. Ambient
 OpenSSL selection, and `libsqlite3-sys` build-script overrides are removed
 before Cargo starts. The receipt also binds the gate, toolchain runner,
 packaging, and artifact-verification scripts. Toolchain identity is established
-with fixed macOS system utility paths. Distribution Cargo runs from `/` with an
-absolute manifest, system-only `PATH`, temporary private `HOME` and
+with fixed macOS system utility paths; every `shasum` identity and receipt hash
+runs under a minimal environment that excludes Perl loader overrides.
+Distribution Cargo starts from an empty process environment and runs from `/`
+with an absolute manifest, system-only `PATH`, temporary private `HOME` and
 `CARGO_HOME`, offline registry archive/index cache access, dependency source
 re-extraction, and no discoverable user, workspace, or parent Cargo
 configuration. Until then, strict unsigned and signed gates must exit non-zero.
