@@ -35,17 +35,18 @@ Both binary profiles are currently blocked by their artifact decisions and by
 an independent dependency gate. `script/verify_sqlcipher_distribution_gate.sh`
 reads the actual `libsqlite3-sys` lock entry, requires the reviewed
 `bundled-sqlcipher` mapping, and verifies
-`docs/sqlcipher-distribution-evidence.json` against the current lockfile,
-Broker manifest, complete Broker source tree, SQLCipher FFI key bridge,
-encrypted state implementation, schema, and regression suite. The bundled
-SQLCipher 4.5.3 mapping is hard-blocked until the dependency is upgraded and
-the source-bound suite is revalidated. Editing either Markdown artifact
-decision cannot bypass this gate. Release Cargo builds use `--locked`, a fixed
-target triple, and a repository-owned target directory, so the dependency graph
-and selected output path cannot change after the receipt check. Until then,
-strict unsigned and signed gates must exit non-zero. `local-test` may still
-create a development DMG, but its manifest must retain `Distribution ready:
-false`.
+`docs/sqlcipher-distribution-evidence.json` against the workspace manifest,
+current lockfile, complete first-party Rust workspace source tree, Broker
+manifest, complete Broker source tree, SQLCipher FFI key bridge, encrypted
+state implementation, schema, and regression suite. This includes Broker path
+dependencies such as `psw-core`. The bundled SQLCipher 4.5.3 mapping is
+hard-blocked until the dependency is upgraded and the source-bound suite is
+revalidated. Editing either Markdown artifact decision cannot bypass this gate.
+Release Cargo builds use `--locked`, a fixed target triple, and a
+repository-owned target directory, so the dependency graph and selected output
+path cannot change after the receipt check. Until then, strict unsigned and
+signed gates must exit non-zero. `local-test` may still create a development
+DMG, but its manifest must retain `Distribution ready: false`.
 
 ## Dependency Review
 

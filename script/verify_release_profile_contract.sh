@@ -57,6 +57,7 @@ grep -F 'SQLCipher distribution evidence SHA-256' "$ROOT_DIR/script/package_maco
 grep -F 'distribution artifact source revision' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
 grep -F 'SQLCIPHER_FFI_PATH=' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'BROKER_SOURCE_DIR=' "$SQLCIPHER_GATE" >/dev/null
+grep -F 'RUST_WORKSPACE_SOURCE_DIR="$ROOT_DIR/crates"' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'CARGO_TARGET_ROOT="$ROOT_DIR/target"' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
 grep -F 'CARGO_TARGET_ROOT="$ROOT_DIR/target"' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
 grep -F 'script/verify_source_preview_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null

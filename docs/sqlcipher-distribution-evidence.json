@@ -7,7 +7,9 @@
     "bundledSqlcipherVersion": "4.5.3"
   },
   "source": {
+    "workspaceManifestSha256": "7025524f303e23c4937470884012c604b6f7d7654d6899ec0c5071df777a20a8",
     "cargoLockSha256": "04ae521c9029852afb74faea3f0948174d4848ceeb2a84bf1d1d5e4f8ab2c959",
+    "rustWorkspaceSourceTreeSha256": "4369d213a611bc4a4475ccf58ca317d99e5449e4e1cadad65f6a603455559efa",
     "brokerManifestSha256": "13b1aed3aefcc3634eab55e9ac4775aa0fa671d4e9b465286626c014aad84c53",
     "brokerSourceTreeSha256": "9d06e4da035004a478cf80ed0a80a6a6781e5d8da829260f09a9dfef1165b692",
     "sqlcipherFfiSha256": "8278e9c015e38981d8c0ffaeaef00be3812124652ccccd422c72350d98ce09fe",

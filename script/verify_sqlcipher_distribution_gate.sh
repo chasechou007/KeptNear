@@ -3,7 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
+WORKSPACE_MANIFEST_PATH="$ROOT_DIR/Cargo.toml"
 LOCK_PATH="$ROOT_DIR/Cargo.lock"
+RUST_WORKSPACE_SOURCE_DIR="$ROOT_DIR/crates"
 BROKER_MANIFEST_PATH="$ROOT_DIR/crates/psw-broker/Cargo.toml"
 BROKER_SOURCE_DIR="$ROOT_DIR/crates/psw-broker/src"
 SQLCIPHER_FFI_PATH="$ROOT_DIR/crates/psw-broker/src/sqlcipher_ffi.rs"
@@ -67,6 +69,7 @@ require_command() {
 
 for required_file in \
   "$EVIDENCE_PATH" \
+  "$WORKSPACE_MANIFEST_PATH" \
   "$LOCK_PATH" \
   "$BROKER_MANIFEST_PATH" \
   "$SQLCIPHER_FFI_PATH" \
@@ -135,22 +138,24 @@ sha256_file() {
   shasum -a 256 "$1" | awk '{print $1}'
 }
 
-broker_source_tree_sha256() {
+source_tree_sha256() {
+  local source_root="$1"
+  local description="$2"
   local source_files
   local source_file
   local relative_path
 
-  if [[ ! -d "$BROKER_SOURCE_DIR" || -L "$BROKER_SOURCE_DIR" ]]; then
-    echo "SQLCipher distribution gate failed: Broker source root must be a real directory" >&2
+  if [[ ! -d "$source_root" || -L "$source_root" ]]; then
+    echo "SQLCipher distribution gate failed: $description source root must be a real directory" >&2
     return 1
   fi
-  if find "$BROKER_SOURCE_DIR" -type l -print -quit | grep -q .; then
-    echo "SQLCipher distribution gate failed: Broker source tree must not contain symbolic links" >&2
+  if find "$source_root" -type l -print -quit | grep -q .; then
+    echo "SQLCipher distribution gate failed: $description source tree must not contain symbolic links" >&2
     return 1
   fi
-  source_files="$(find "$BROKER_SOURCE_DIR" -type f -print | LC_ALL=C sort)"
+  source_files="$(find "$source_root" -type f -print | LC_ALL=C sort)"
   if [[ -z "$source_files" ]]; then
-    echo "SQLCipher distribution gate failed: Broker source tree is empty" >&2
+    echo "SQLCipher distribution gate failed: $description source tree is empty" >&2
     return 1
   fi
 
@@ -162,9 +167,11 @@ broker_source_tree_sha256() {
     awk '{print $1}'
 }
 
+WORKSPACE_MANIFEST_SHA256="$(sha256_file "$WORKSPACE_MANIFEST_PATH")"
 CARGO_LOCK_SHA256="$(sha256_file "$LOCK_PATH")"
+RUST_WORKSPACE_SOURCE_TREE_SHA256="$(source_tree_sha256 "$RUST_WORKSPACE_SOURCE_DIR" "Rust workspace")"
 BROKER_MANIFEST_SHA256="$(sha256_file "$BROKER_MANIFEST_PATH")"
-BROKER_SOURCE_TREE_SHA256="$(broker_source_tree_sha256)"
+BROKER_SOURCE_TREE_SHA256="$(source_tree_sha256 "$BROKER_SOURCE_DIR" "Broker")"
 SQLCIPHER_FFI_SHA256="$(sha256_file "$SQLCIPHER_FFI_PATH")"
 STATE_STORE_SHA256="$(sha256_file "$STATE_STORE_PATH")"
 STATE_SCHEMA_SHA256="$(sha256_file "$STATE_SCHEMA_PATH")"
@@ -174,7 +181,9 @@ python3 - \
   "$EVIDENCE_PATH" \
   "$LIBSQLITE3_SYS_VERSION" \
   "$BUNDLED_SQLCIPHER_VERSION" \
+  "$WORKSPACE_MANIFEST_SHA256" \
   "$CARGO_LOCK_SHA256" \
+  "$RUST_WORKSPACE_SOURCE_TREE_SHA256" \
   "$BROKER_MANIFEST_SHA256" \
   "$BROKER_SOURCE_TREE_SHA256" \
   "$SQLCIPHER_FFI_SHA256" \
@@ -191,7 +200,9 @@ import sys
     evidence_path,
     libsqlite3_sys_version,
     bundled_sqlcipher_version,
+    workspace_manifest_sha256,
     cargo_lock_sha256,
+    rust_workspace_source_tree_sha256,
     broker_manifest_sha256,
     broker_source_tree_sha256,
     sqlcipher_ffi_sha256,
@@ -239,7 +250,9 @@ if dependency["bundledSqlcipherVersion"] != bundled_sqlcipher_version:
 
 source = evidence["source"]
 expected_source = {
+    "workspaceManifestSha256": workspace_manifest_sha256,
     "cargoLockSha256": cargo_lock_sha256,
+    "rustWorkspaceSourceTreeSha256": rust_workspace_source_tree_sha256,
     "brokerManifestSha256": broker_manifest_sha256,
     "brokerSourceTreeSha256": broker_source_tree_sha256,
     "sqlcipherFfiSha256": sqlcipher_ffi_sha256,
