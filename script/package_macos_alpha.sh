@@ -1,5 +1,8 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
+
+PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 APP_NAME="KeptNear"
 BUILD_PRODUCT_NAME="PSWMac"
@@ -17,7 +20,7 @@ APPLE_ID="${APPLE_ID:-}"
 APPLE_TEAM_ID="${APPLE_TEAM_ID:-}"
 APPLE_APP_SPECIFIC_PASSWORD="${APPLE_APP_SPECIFIC_PASSWORD:-}"
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")/.." && /bin/pwd -P)"
 source "$ROOT_DIR/script/macos_info_plist.sh"
 source "$ROOT_DIR/script/swiftpm_local_env.sh"
 source "$ROOT_DIR/script/reviewed_distribution_toolchain.sh"

@@ -1,7 +1,10 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
+ROOT_DIR="$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")/.." && /bin/pwd -P)"
 source "$ROOT_DIR/script/reviewed_distribution_toolchain.sh"
 
 usage() {
@@ -10,7 +13,8 @@ usage: script/run_reviewed_distribution_cargo.sh CARGO_ARGS...
 
 Runs Cargo with the source-bound Apple Silicon Rust and native toolchains.
 Environment overrides, Rust compiler wrappers, custom compiler flags, and
-SQLCipher build-script overrides are ignored and replaced.
+SQLCipher build-script overrides are ignored and replaced. Cargo runs from a
+configuration-free location with an isolated HOME and CARGO_HOME.
 USAGE
 }
 

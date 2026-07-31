@@ -113,7 +113,9 @@ script/verify_public_documentation_set.sh
 ```
 
 On the reviewed Apple Silicon release host, also run the source-bound Rust and
-native toolchain smoke check:
+native toolchain smoke check. This includes a from-scratch bundled SQLCipher
+build while hostile Rust, C, `PATH`, `HOME`, and Cargo configuration inputs are
+present:
 
 ```sh
 script/verify_release_profile_contract.sh --distribution-toolchain-smoke

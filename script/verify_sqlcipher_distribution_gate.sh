@@ -1,7 +1,10 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
+ROOT_DIR="$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")/.." && /bin/pwd -P)"
 TOOLCHAIN_LIBRARY_PATH="$ROOT_DIR/script/reviewed_distribution_toolchain.sh"
 DISTRIBUTION_CARGO_RUNNER_PATH="$ROOT_DIR/script/run_reviewed_distribution_cargo.sh"
 source "$TOOLCHAIN_LIBRARY_PATH"
@@ -262,7 +265,8 @@ case "$LIBSQLITE3_SYS_VERSION" in
 esac
 
 sha256_file() {
-  shasum -a 256 "$1" | awk '{print $1}'
+  "$KEPTNEAR_SYSTEM_SHASUM" -a 256 "$1" |
+    "$KEPTNEAR_SYSTEM_AWK" '{print $1}'
 }
 
 source_tree_sha256() {
@@ -290,8 +294,8 @@ source_tree_sha256() {
     relative_path="${source_file#$ROOT_DIR/}"
     printf '%s  %s\n' "$(sha256_file "$source_file")" "$relative_path"
   done <<<"$source_files" |
-    shasum -a 256 |
-    awk '{print $1}'
+    "$KEPTNEAR_SYSTEM_SHASUM" -a 256 |
+    "$KEPTNEAR_SYSTEM_AWK" '{print $1}'
 }
 
 RUST_TOOLCHAIN_SHA256="$(sha256_file "$RUST_TOOLCHAIN_PATH")"

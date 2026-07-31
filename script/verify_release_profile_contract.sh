@@ -1,7 +1,10 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
+ROOT_DIR="$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")/.." && /bin/pwd -P)"
 SOURCE_PROFILE="$ROOT_DIR/script/verify_source_preview_ready.sh"
 UNSIGNED_PROFILE="$ROOT_DIR/script/verify_unsigned_alpha_release_ready.sh"
 SIGNED_PROFILE="$ROOT_DIR/script/verify_public_alpha_release_ready.sh"
@@ -118,9 +121,16 @@ grep -F 'KEPTNEAR_REVIEWED_APPLE_CLANG_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/
 grep -F 'KEPTNEAR_REVIEWED_APPLE_AR_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_REVIEWED_APPLE_RANLIB_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_REVIEWED_XCODEBUILD_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_SYSTEM_SHASUM="/usr/bin/shasum"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_SYSTEM_XCODE_SELECT="/usr/bin/xcode-select"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_SYSTEM_XCRUN="/usr/bin/xcrun"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F '"CC=$KEPTNEAR_ACTIVE_CLANG_PATH"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F '"CFLAGS=$KEPTNEAR_ACTIVE_CFLAGS"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F '"PATH=$KEPTNEAR_SYSTEM_PATH"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F '"HOME=$KEPTNEAR_ISOLATED_HOME"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F '"CARGO_HOME=$KEPTNEAR_ISOLATED_CARGO_HOME"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F -- '--manifest-path' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'LIBSQLITE3_SYS_USE_PKG_CONFIG' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'SQLCIPHER_LIB_DIR' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'script/verify_source_preview_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
@@ -215,9 +225,34 @@ for RUST_TOOLCHAIN_OVERRIDE in \
   fi
 done
 
+TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/keptnear-release-contract.XXXXXX")"
+UNTRUSTED_TARGET="$ROOT_DIR/target/release-contract-smoke"
+trap 'rm -rf "$TMP_DIR" "$UNTRUSTED_TARGET"' EXIT
+
 if [[ "$RUN_DISTRIBUTION_TOOLCHAIN_SMOKE" == "1" ]]; then
+  UNTRUSTED_CARGO_HOME="$TMP_DIR/untrusted-cargo-home"
+  UNTRUSTED_HOME="$TMP_DIR/untrusted-home"
+  rm -rf "$UNTRUSTED_TARGET"
+  mkdir -p "$UNTRUSTED_CARGO_HOME" "$UNTRUSTED_HOME"
+  python3 - "$UNTRUSTED_CARGO_HOME/config.toml" <<'PY'
+import pathlib
+import sys
+
+pathlib.Path(sys.argv[1]).write_text(
+    """[env]
+CC = { value = "/usr/bin/false", force = true }
+CFLAGS = { value = "-include /private/tmp/keptnear-untrusted.h", force = true }
+KEPTNEAR_UNTRUSTED_CARGO_CONFIG = { value = "loaded", force = true }
+""",
+    encoding="utf-8",
+)
+PY
+
   ISOLATED_CARGO_VERSION="$(
     env \
+      HOME="$UNTRUSTED_HOME" \
+      CARGO_HOME="$UNTRUSTED_CARGO_HOME" \
+      PATH="$TMP_DIR/untrusted-path" \
       RUSTC=/usr/bin/false \
       CARGO_BUILD_RUSTC=/usr/bin/false \
       RUSTC_WRAPPER=/usr/bin/false \
@@ -231,10 +266,41 @@ if [[ "$RUN_DISTRIBUTION_TOOLCHAIN_SMOKE" == "1" ]]; then
     "$ISOLATED_CARGO_VERSION" \
     "cargo 1.75.0 (1d8b05cdd 2023-11-20)" \
     "isolated Rust and native distribution environment"
+
+  env \
+    HOME="$UNTRUSTED_HOME" \
+    CARGO_HOME="$UNTRUSTED_CARGO_HOME" \
+    PATH="$TMP_DIR/untrusted-path" \
+    RUSTC=/usr/bin/false \
+    CARGO_BUILD_RUSTC=/usr/bin/false \
+    RUSTC_WRAPPER=/usr/bin/false \
+    CC=/usr/bin/false \
+    CFLAGS="-include /private/tmp/keptnear-untrusted.h" \
+    CPPFLAGS="-I/private/tmp/keptnear-untrusted" \
+    LIBSQLITE3_FLAGS="-DSQLITE_UNTRUSTED" \
+    "$DISTRIBUTION_CARGO_RUNNER" \
+      build \
+      --locked \
+      --target-dir "$UNTRUSTED_TARGET" \
+      --target aarch64-apple-darwin \
+      --release \
+      -p psw-broker \
+      --lib
+
+  if CONFIG_INJECTION_OUTPUT="$(
+    "$DISTRIBUTION_CARGO_RUNNER" \
+      build \
+      --config "$UNTRUSTED_CARGO_HOME/config.toml" 2>&1
+  )"; then
+    echo "release profile contract violation: distribution runner accepted --config" >&2
+    exit 1
+  fi
+  require_text \
+    "$CONFIG_INJECTION_OUTPUT" \
+    "--config is controlled by the distribution runner" \
+    "Cargo configuration injection rejection"
 fi
 
-TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/keptnear-release-contract.XXXXXX")"
-trap 'rm -rf "$TMP_DIR"' EXIT
 TAMPERED_SQLCIPHER_EVIDENCE="$TMP_DIR/sqlcipher-approved.json"
 python3 - \
   "$ROOT_DIR/docs/sqlcipher-distribution-evidence.json" \

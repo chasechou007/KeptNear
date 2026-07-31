@@ -1,5 +1,8 @@
-#!/usr/bin/env bash
+#!/bin/bash
 set -euo pipefail
+
+PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
 
 APP_NAME="KeptNear"
 VERSION="${VERSION:-0.1.0-alpha}"
@@ -8,7 +11,7 @@ RUST_TARGET="aarch64-apple-darwin"
 VAULT_TYPE_IDENTIFIER="app.psw.local.vault"
 VAULT_EXTENSION="pswvault"
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(/usr/bin/dirname "${BASH_SOURCE[0]}")/.." && /bin/pwd -P)"
 source "$ROOT_DIR/script/reviewed_distribution_toolchain.sh"
 CARGO_TARGET_ROOT="$ROOT_DIR/target"
 CARGO_RELEASE_DIR="$CARGO_TARGET_ROOT/$RUST_TARGET/release"
@@ -156,7 +159,6 @@ require_file "$PROTOCOL_MANIFEST_PATH" "protocol manifest"
 require_file "$SQLCIPHER_EVIDENCE_PATH" "SQLCipher distribution evidence"
 require_command codesign
 require_command cmp
-require_command cargo
 require_command git
 require_command hdiutil
 require_command lipo

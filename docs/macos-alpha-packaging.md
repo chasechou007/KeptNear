@@ -119,8 +119,14 @@ Non-local packaging routes every Cargo command through
 the exact Rust/Cargo and Xcode native tools recorded in the SQLCipher receipt,
 removes ambient compiler, wrapper, flags, linker, SDK, OpenSSL, and SQLite build
 overrides, and supplies the reviewed Apple Clang, SDK, deployment target, and
-C flags explicitly. `local-test` remains a development-only path and does not
-claim this distribution evidence.
+C flags explicitly. It also runs Cargo from `/` with an absolute workspace
+manifest, a private temporary `HOME` and `CARGO_HOME`, the reviewed dependency
+archive/index cache in offline mode, and a system-only `PATH`. Registry sources
+are re-extracted into that temporary Cargo home so Cargo rechecks the locked
+package archives instead of trusting mutable previously extracted source. User,
+workspace, and parent Cargo configuration therefore cannot inject forced
+build-script environment values. `local-test` remains a development-only path
+and does not claim this distribution evidence.
 
 The protocol manifest records the exact App, Broker, MCP, CLI, and FFI paths
 and SHA-256 values, their component versions, the shared
