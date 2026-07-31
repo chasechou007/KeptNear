@@ -123,8 +123,9 @@ struct PSWMacApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
+                .environment(\.locale, text.locale)
                 .tint(KeptNearBrand.primary)
-                .frame(minWidth: 980, minHeight: 640)
+                .frame(minWidth: 1_040, minHeight: 680)
                 .onAppear {
                     appDelegate.installOpenVaultHandler { urls in
                         SystemVaultOpenHandler.openFirstVault(from: urls, store: store)
@@ -151,6 +152,7 @@ struct PSWMacApp: App {
         Settings {
             SettingsView()
                 .environmentObject(store)
+                .environment(\.locale, text.locale)
                 .tint(KeptNearBrand.primary)
         }
     }

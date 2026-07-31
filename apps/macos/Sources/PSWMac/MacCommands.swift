@@ -66,7 +66,11 @@ enum MenuBarLocalization {
 }
 
 enum PSWMacCommand: CaseIterable {
+    case newVault
+    case openVault
+    case openRecentVault
     case newItem
+    case editItem
     case saveCurrentEditor
     case focusSearch
     case copyUsername
@@ -81,7 +85,11 @@ enum PSWMacCommand: CaseIterable {
 }
 
 struct PSWMacCommandAvailability: Equatable {
+    var canCreateNewVault: Bool
+    var canOpenVault: Bool
+    var canOpenRecentVault: Bool
     var canCreateNewItem: Bool
+    var canEditItem: Bool
     var canSaveCurrentEditor: Bool
     var canFocusSearch: Bool
     var canCopyUsername: Bool
@@ -97,6 +105,8 @@ struct PSWMacCommandAvailability: Equatable {
     init(
         isUnlocked: Bool,
         canSaveCurrentEditor: Bool,
+        canEditItem: Bool = false,
+        hasRecentVault: Bool = false,
         canCopyUsername: Bool = false,
         canCopyPassword: Bool = false,
         canCopyTotp: Bool = false,
@@ -105,7 +115,11 @@ struct PSWMacCommandAvailability: Equatable {
         canCopyCardVerificationCode: Bool = false,
         canCopyLicenseKey: Bool = false
     ) {
+        self.canCreateNewVault = true
+        self.canOpenVault = true
+        self.canOpenRecentVault = hasRecentVault
         self.canCreateNewItem = isUnlocked
+        self.canEditItem = isUnlocked && canEditItem
         self.canSaveCurrentEditor = isUnlocked && canSaveCurrentEditor
         self.canFocusSearch = isUnlocked
         self.canCopyUsername = isUnlocked && canCopyUsername
@@ -121,8 +135,16 @@ struct PSWMacCommandAvailability: Equatable {
 
     func isEnabled(_ command: PSWMacCommand) -> Bool {
         switch command {
+        case .newVault:
+            return canCreateNewVault
+        case .openVault:
+            return canOpenVault
+        case .openRecentVault:
+            return canOpenRecentVault
         case .newItem:
             return canCreateNewItem
+        case .editItem:
+            return canEditItem
         case .saveCurrentEditor:
             return canSaveCurrentEditor
         case .focusSearch:
@@ -151,6 +173,9 @@ struct PSWMacCommandAvailability: Equatable {
 
 struct PSWMacCommandHandler {
     var availability: PSWMacCommandAvailability
+    var createNewVault: () -> Void
+    var openVault: () -> Void
+    var openRecentVault: () -> Void
     var createNewItem: () -> Void
     var saveCurrentEditor: () -> Void
     var focusSearch: () -> Void
@@ -163,13 +188,22 @@ struct PSWMacCommandHandler {
     var copyLicenseKey: () -> Void
     var refreshSync: () -> Void
     var lockVault: () -> Void
+    var editCurrentItem: () -> Void = {}
 
     func perform(_ command: PSWMacCommand) {
         guard availability.isEnabled(command) else { return }
 
         switch command {
+        case .newVault:
+            createNewVault()
+        case .openVault:
+            openVault()
+        case .openRecentVault:
+            openRecentVault()
         case .newItem:
             createNewItem()
+        case .editItem:
+            editCurrentItem()
         case .saveCurrentEditor:
             saveCurrentEditor()
         case .focusSearch:
@@ -214,6 +248,25 @@ struct PSWMacCommands: Commands {
 
     var body: some Commands {
         CommandGroup(after: .newItem) {
+            Button(text.newVault) {
+                commandHandler?.perform(.newVault)
+            }
+            .keyboardShortcut("n", modifiers: [.command, .shift])
+            .disabled(!isEnabled(.newVault))
+
+            Button(text.openVault) {
+                commandHandler?.perform(.openVault)
+            }
+            .keyboardShortcut("o", modifiers: [.command])
+            .disabled(!isEnabled(.openVault))
+
+            Button(text.openRecentVault) {
+                commandHandler?.perform(.openRecentVault)
+            }
+            .disabled(!isEnabled(.openRecentVault))
+
+            Divider()
+
             Button(text.newItem) {
                 commandHandler?.perform(.newItem)
             }
@@ -238,6 +291,14 @@ struct PSWMacCommands: Commands {
         }
 
         CommandMenu(text.itemMenu) {
+            Button(text.editItem) {
+                commandHandler?.perform(.editItem)
+            }
+            .keyboardShortcut(.return, modifiers: [.command])
+            .disabled(!isEnabled(.editItem))
+
+            Divider()
+
             Button(text.copyUsername) {
                 commandHandler?.perform(.copyUsername)
             }

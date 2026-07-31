@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_NAME="KeptNear"
 VERSION="${VERSION:-0.1.0-alpha}"
+PACKAGE_RELEASE_MODE="${PACKAGE_RELEASE_MODE:-local-test}"
 ALLOW_MISSING=0
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,6 +26,9 @@ Strict mode verifies the full local alpha readiness gate:
 Options:
   --allow-missing                  report current local blockers but do not approve readiness
   -h, --help                       show this help
+
+Environment:
+  PACKAGE_RELEASE_MODE             local-test or unsigned-experimental
 USAGE
 }
 
@@ -45,6 +49,14 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+case "$PACKAGE_RELEASE_MODE" in
+  local-test|unsigned-experimental) ;;
+  *)
+    echo "PACKAGE_RELEASE_MODE must be local-test or unsigned-experimental" >&2
+    exit 2
+    ;;
+esac
 
 require_file() {
   local path="$1"
@@ -106,7 +118,7 @@ REPORT
   report_step "Vault-format readiness" "$ROOT_DIR/script/verify_vault_format_readiness.sh"
   report_step "Vault doctor readiness" "$ROOT_DIR/script/verify_vault_doctor_readiness.sh"
   report_step "macOS security-state readiness" "$ROOT_DIR/script/verify_macos_security_state.sh"
-  report_step "Unsigned Apple Silicon DMG" env VERSION="$VERSION" SIGNING_IDENTITY="" NOTARIZE=0 "$ROOT_DIR/script/package_macos_alpha.sh"
+  report_step "Unsigned Apple Silicon DMG" env VERSION="$VERSION" RELEASE_MODE="$PACKAGE_RELEASE_MODE" SIGNING_IDENTITY="" NOTARIZE=0 "$ROOT_DIR/script/package_macos_alpha.sh"
   report_step "Apple Silicon DMG verification" "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" "$ARCHIVE_PATH"
   report_step "Launch Services vault type verification" "$ROOT_DIR/script/verify_macos_launch_services_vault_type.sh" "$APP_BUNDLE"
 
@@ -131,7 +143,7 @@ run_step "Broad repository checks" "$ROOT_DIR/scripts/check.sh"
 run_step "Vault-format readiness" "$ROOT_DIR/script/verify_vault_format_readiness.sh"
 run_step "Vault doctor readiness" "$ROOT_DIR/script/verify_vault_doctor_readiness.sh"
 run_step "macOS security-state readiness" "$ROOT_DIR/script/verify_macos_security_state.sh"
-run_step "Unsigned Apple Silicon DMG" env VERSION="$VERSION" SIGNING_IDENTITY="" NOTARIZE=0 "$ROOT_DIR/script/package_macos_alpha.sh"
+run_step "Unsigned Apple Silicon DMG" env VERSION="$VERSION" RELEASE_MODE="$PACKAGE_RELEASE_MODE" SIGNING_IDENTITY="" NOTARIZE=0 "$ROOT_DIR/script/package_macos_alpha.sh"
 run_step "Apple Silicon DMG verification" "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" "$ARCHIVE_PATH"
 run_step "Launch Services vault type verification" "$ROOT_DIR/script/verify_macos_launch_services_vault_type.sh" "$APP_BUNDLE"
 cat <<'SUMMARY'

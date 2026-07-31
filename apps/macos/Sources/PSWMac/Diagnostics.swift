@@ -1,5 +1,10 @@
 import Foundation
 
+enum CoreDiagnosticsStatus: String, Equatable {
+    case connected
+    case unavailable
+}
+
 struct SyncDiagnosticsSnapshot: Equatable {
     let loadedItems: Int
     let appliedTombstones: Int
@@ -22,7 +27,7 @@ struct DiagnosticsSnapshot: Equatable {
     let appVersion: String
     let appBuild: String
     let coreAvailable: Bool
-    let coreStatus: String
+    let coreStatus: CoreDiagnosticsStatus
     let vaultSelected: Bool
     let vaultName: String?
     let unlocked: Bool
@@ -46,7 +51,7 @@ enum DiagnosticsFormatter {
             "App version: \(snapshot.appVersion)",
             "App build: \(snapshot.appBuild)",
             "Core available: \(yesNo(snapshot.coreAvailable))",
-            "Core status: \(snapshot.coreStatus)",
+            "Core status: \(snapshot.coreStatus.rawValue)",
             "Vault selected: \(yesNo(snapshot.vaultSelected))",
             "Vault name: \(snapshot.vaultName ?? "none")",
             "Vault unlocked: \(yesNo(snapshot.unlocked))",

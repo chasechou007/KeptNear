@@ -1,0 +1,13 @@
+{
+  "registryVersion": 1,
+  "releasedFormats": [
+    {
+      "formatId": "vault-v2-record-v2",
+      "releaseStatus": "prealpha",
+      "vaultFormatVersion": 2,
+      "recordFormatVersion": 2,
+      "manifestPath": "golden-vault-v2-manifest.json",
+      "fixturePath": "golden-vault-v2.pswvault"
+    }
+  ]
+}

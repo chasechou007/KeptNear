@@ -2,6 +2,8 @@ import Foundation
 
 enum ItemEditorKind: Equatable, CaseIterable {
     case login
+    case templateCredential
+    case credential
     case secureNote
     case creditCard
     case softwareLicense
@@ -10,6 +12,10 @@ enum ItemEditorKind: Equatable, CaseIterable {
 struct EditorDraftState: Equatable {
     var login: LoginForm = LoginForm()
     var baselineLogin: LoginForm = LoginForm()
+    var templateCredential: TemplateCredentialForm = TemplateCredentialForm()
+    var baselineTemplateCredential: TemplateCredentialForm = TemplateCredentialForm()
+    var credential: CredentialEditorForm = CredentialEditorForm()
+    var baselineCredential: CredentialEditorForm = CredentialEditorForm()
     var secureNote: SecureNoteForm = SecureNoteForm()
     var baselineSecureNote: SecureNoteForm = SecureNoteForm()
     var creditCard: CreditCardForm = CreditCardForm()
@@ -22,6 +28,10 @@ struct EditorDraftState: Equatable {
         switch activeKind {
         case .login:
             return login != baselineLogin
+        case .templateCredential:
+            return templateCredential != baselineTemplateCredential
+        case .credential:
+            return credential != baselineCredential
         case .secureNote:
             return secureNote != baselineSecureNote
         case .creditCard:

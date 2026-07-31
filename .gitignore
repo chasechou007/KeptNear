@@ -7,6 +7,8 @@ DerivedData/
 *.pswvault/
 !fixtures/vaults/golden-vault-v1.pswvault/
 !fixtures/vaults/golden-vault-v1.pswvault/**
+!fixtures/vaults/golden-vault-v2.pswvault/
+!fixtures/vaults/golden-vault-v2.pswvault/**
 *.log
 
 # Local plaintext password-manager data

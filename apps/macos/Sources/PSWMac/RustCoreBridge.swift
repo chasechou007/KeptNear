@@ -7,16 +7,88 @@ protocol CoreService {
 
     func createVault(path: String, displayName: String?, password: String) throws
     func openVault(path: String) throws
+    func lockedRecoveryStatus(path: String) throws -> RecoveryStatusPayload
     func unlock(path: String, password: String) throws -> UnlockedPayload
     func unlockWithLocalMaterial(path: String, localMaterial: String) throws -> UnlockedPayload
+    func recoverVault(path: String, recoveryCode: String, newPassword: String) throws -> UnlockedPayload
     func localUnlockMaterial(sessionId: UInt64) throws -> String
     func changeMasterPassword(sessionId: UInt64, currentPassword: String, newPassword: String) throws
+    func recoveryStatus(sessionId: UInt64) throws -> RecoveryStatusPayload
+    func beginRecoverySetup(sessionId: UInt64) throws -> RecoveryKitPayload
+    func beginRecoveryRotation(sessionId: UInt64) throws -> RecoveryKitPayload
+    func confirmRecoveryWorkflow(sessionId: UInt64, workflowId: UInt64, recoveryCode: String) throws -> RecoveryConfirmationPayload
+    func cancelRecoveryWorkflow(sessionId: UInt64, workflowId: UInt64) throws
     func lock(sessionId: UInt64) throws
     func listItems(sessionId: UInt64) throws -> [VaultItemView]
     func passwordHealth(sessionId: UInt64) throws -> PasswordHealthPayload
     func refreshFromDisk(sessionId: UInt64) throws -> SyncRefreshPayload
     func quarantineRejectedRecords(sessionId: UInt64) throws -> SyncQuarantinePayload
     func search(sessionId: UInt64, text: String, includeArchived: Bool) throws -> [VaultItemView]
+    func listAuthorizedCredentialIds(sessionId: UInt64) throws -> Set<String>
+    func appsToolsPendingRequests() throws -> AppsToolsPendingRequestQueue
+    func denyAppsToolsPendingRequest(
+        requestSource: String,
+        requestId: String
+    ) throws -> AppsToolsPendingRequestDecision
+    func approveAppsToolsPairing(
+        requestId: String,
+        label: String
+    ) throws -> AppsToolsPendingRequestDecision
+    func approveAppsToolsPendingUnlock(
+        sessionId: UInt64,
+        requestId: String
+    ) throws -> AppsToolsPendingRequestDecision
+    func reviewAppsToolsPendingCredential(
+        sessionId: UInt64,
+        requestId: String
+    ) throws -> AppsToolsCredentialReview
+    func allowAppsToolsPendingRequestOnce(
+        sessionId: UInt64,
+        requestId: String,
+        credentialId: String?,
+        secretFieldId: String?
+    ) throws -> AppsToolsPendingRequestDecision
+    func configureAppsToolsLongTermAccess(
+        sessionId: UInt64,
+        requestId: String,
+        credentialId: String?,
+        secretFieldId: String?,
+        confirmationPolicy: AppsToolsConfirmationPolicy
+    ) throws -> AppsToolsPendingRequestDecision
+    func appsToolsSnapshot(sessionId: UInt64) throws -> AppsToolsSnapshot
+    func appsToolsConsumerDetail(
+        sessionId: UInt64,
+        consumerId: String
+    ) throws -> AppsToolsConsumerDetail
+    func appsToolsUsageProfileSetup(
+        sessionId: UInt64,
+        consumerId: String
+    ) throws -> AppsToolsUsageProfileSetup
+    func createAppsToolsUsageProfile(
+        sessionId: UInt64,
+        consumerId: String,
+        draft: AppsToolsUsageProfileDraft
+    ) throws -> AppsToolsUsageProfile
+    func removeAppsToolsUsageProfile(
+        sessionId: UInt64,
+        consumerId: String,
+        usageProfileId: String
+    ) throws -> Bool
+    func setAppsToolsPaused(sessionId: UInt64, paused: Bool) throws -> AppsToolsSnapshot
+    func revokeAppsToolsField(
+        sessionId: UInt64,
+        consumerId: String,
+        field: AppsToolsFieldReference
+    ) throws -> AppsToolsSnapshot
+    func revokeAppsToolsConsumer(
+        sessionId: UInt64,
+        consumerId: String
+    ) throws -> AppsToolsSnapshot
+    func createCredentialFromTemplate(sessionId: UInt64, form: TemplateCredentialForm) throws -> [VaultItemView]
+    func updateCredential(sessionId: UInt64, credentialId: String, form: CredentialEditorForm) throws -> [VaultItemView]
+    func duplicateCredential(sessionId: UInt64, credentialId: String, expectedRevision: String, title: String) throws -> [VaultItemView]
+    func getCredential(sessionId: UInt64, credentialId: String) throws -> CredentialDetail
+    func getCredentialSecretField(sessionId: UInt64, credentialId: String, secretFieldId: String) throws -> String
     func createLogin(sessionId: UInt64, form: LoginForm) throws -> [VaultItemView]
     func updateLogin(sessionId: UInt64, itemId: String, form: LoginForm) throws -> [VaultItemView]
     func getLogin(sessionId: UInt64, itemId: String) throws -> LoginDetail
@@ -43,7 +115,12 @@ protocol CoreService {
     func totpCode(sessionId: UInt64, itemId: String) throws -> TotpPayload
     func previewImport(sessionId: UInt64, sourcePath: String, sourceFormat: String) throws -> ImportPreviewPayload
     func commitImport(sessionId: UInt64, sourcePath: String, sourceFormat: String, keepDuplicates: Bool) throws -> ImportPreviewPayload
-    func exportItems(sessionId: UInt64, destinationPath: String, exportFormat: String) throws -> ExportResultPayload
+    func exportItems(
+        sessionId: UInt64,
+        destinationPath: String,
+        exportFormat: String,
+        currentPassword: String
+    ) throws -> ExportResultPayload
     func backupVault(sessionId: UInt64, destinationPath: String) throws -> BackupResultPayload
     func restoreVaultBackup(sourcePath: String, destinationPath: String) throws -> RestoreBackupResultPayload
 }
@@ -59,7 +136,13 @@ final class RustCoreBridge: CoreService {
     private let freeFunction: FreeFunction?
 
     init() {
-        let candidates = RustCoreBridge.libraryCandidates()
+        let candidates = RustCoreBridge.libraryCandidates(
+            privateFrameworksPath: Bundle.main.privateFrameworksPath,
+            bundlePath: Bundle.main.bundlePath,
+            environment: ProcessInfo.processInfo.environment,
+            currentDirectoryPath: FileManager.default.currentDirectoryPath,
+            includeDevelopmentOverrides: RustCoreBridge.developmentLibraryOverridesEnabled
+        )
         var loadedHandle: UnsafeMutableRawPointer?
         for candidate in candidates {
             if let handle = dlopen(candidate, RTLD_NOW) {
@@ -111,6 +194,16 @@ final class RustCoreBridge: CoreService {
         ])
     }
 
+    func lockedRecoveryStatus(path: String) throws -> RecoveryStatusPayload {
+        guard case let .recoveryStatus(payload) = try send([
+            "command": "lockedRecoveryStatus",
+            "path": path
+        ]) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload
+    }
+
     func unlock(path: String, password: String) throws -> UnlockedPayload {
         guard case let .unlocked(payload) = try send([
             "command": "unlock",
@@ -133,6 +226,22 @@ final class RustCoreBridge: CoreService {
         return payload
     }
 
+    func recoverVault(
+        path: String,
+        recoveryCode: String,
+        newPassword: String
+    ) throws -> UnlockedPayload {
+        guard case let .unlocked(payload) = try send([
+            "command": "recoverVault",
+            "path": path,
+            "recovery_code": recoveryCode,
+            "new_password": newPassword
+        ]) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload
+    }
+
     func localUnlockMaterial(sessionId: UInt64) throws -> String {
         guard case let .secret(payload) = try send([
             "command": "localUnlockMaterial",
@@ -149,6 +258,60 @@ final class RustCoreBridge: CoreService {
             "session_id": sessionId,
             "current_password": currentPassword,
             "new_password": newPassword
+        ])
+    }
+
+    func recoveryStatus(sessionId: UInt64) throws -> RecoveryStatusPayload {
+        guard case let .recoveryStatus(payload) = try send([
+            "command": "recoveryStatus",
+            "session_id": sessionId
+        ]) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload
+    }
+
+    func beginRecoverySetup(sessionId: UInt64) throws -> RecoveryKitPayload {
+        guard case let .recoveryKit(payload) = try send([
+            "command": "beginRecoverySetup",
+            "session_id": sessionId
+        ]) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload
+    }
+
+    func beginRecoveryRotation(sessionId: UInt64) throws -> RecoveryKitPayload {
+        guard case let .recoveryKit(payload) = try send([
+            "command": "beginRecoveryRotation",
+            "session_id": sessionId
+        ]) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload
+    }
+
+    func confirmRecoveryWorkflow(
+        sessionId: UInt64,
+        workflowId: UInt64,
+        recoveryCode: String
+    ) throws -> RecoveryConfirmationPayload {
+        guard case let .recoveryConfirmed(payload) = try send([
+            "command": "confirmRecoveryWorkflow",
+            "session_id": sessionId,
+            "workflow_id": workflowId,
+            "recovery_code": recoveryCode
+        ]) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload
+    }
+
+    func cancelRecoveryWorkflow(sessionId: UInt64, workflowId: UInt64) throws {
+        _ = try send([
+            "command": "cancelRecoveryWorkflow",
+            "session_id": sessionId,
+            "workflow_id": workflowId
         ])
     }
 
@@ -209,6 +372,313 @@ final class RustCoreBridge: CoreService {
             throw CoreBridgeError.unexpectedResponse
         }
         return payload.items
+    }
+
+    func listAuthorizedCredentialIds(sessionId: UInt64) throws -> Set<String> {
+        guard case let .authorizedCredentialIds(payload) = try send([
+            "command": "listAuthorizedCredentialIds",
+            "session_id": sessionId
+        ]) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return Set(payload.credentialIds)
+    }
+
+    func appsToolsPendingRequests() throws -> AppsToolsPendingRequestQueue {
+        guard case let .appsToolsPendingRequests(payload) = try send([
+            "command": "appsToolsPendingRequests"
+        ]) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload.queue
+    }
+
+    func denyAppsToolsPendingRequest(
+        requestSource: String,
+        requestId: String
+    ) throws -> AppsToolsPendingRequestDecision {
+        try appsToolsPendingRequestDecisionResponse([
+            "command": "appsToolsDenyPendingRequest",
+            "request_source": requestSource,
+            "request_id": requestId
+        ])
+    }
+
+    func approveAppsToolsPairing(
+        requestId: String,
+        label: String
+    ) throws -> AppsToolsPendingRequestDecision {
+        try appsToolsPendingRequestDecisionResponse([
+            "command": "appsToolsApprovePairing",
+            "request_id": requestId,
+            "label": label
+        ])
+    }
+
+    func approveAppsToolsPendingUnlock(
+        sessionId: UInt64,
+        requestId: String
+    ) throws -> AppsToolsPendingRequestDecision {
+        try appsToolsPendingRequestDecisionResponse([
+            "command": "appsToolsApprovePendingUnlock",
+            "session_id": sessionId,
+            "request_id": requestId
+        ])
+    }
+
+    func reviewAppsToolsPendingCredential(
+        sessionId: UInt64,
+        requestId: String
+    ) throws -> AppsToolsCredentialReview {
+        guard case let .appsToolsCredentialReview(payload) = try send([
+            "command": "appsToolsReviewPendingCredential",
+            "session_id": sessionId,
+            "request_id": requestId
+        ]) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload.review
+    }
+
+    func allowAppsToolsPendingRequestOnce(
+        sessionId: UInt64,
+        requestId: String,
+        credentialId: String?,
+        secretFieldId: String?
+    ) throws -> AppsToolsPendingRequestDecision {
+        try appsToolsPendingRequestDecisionResponse([
+            "command": "appsToolsAllowOnce",
+            "session_id": sessionId,
+            "request_id": requestId,
+            "credential_id": credentialId as Any,
+            "secret_field_id": secretFieldId as Any
+        ])
+    }
+
+    func configureAppsToolsLongTermAccess(
+        sessionId: UInt64,
+        requestId: String,
+        credentialId: String?,
+        secretFieldId: String?,
+        confirmationPolicy: AppsToolsConfirmationPolicy
+    ) throws -> AppsToolsPendingRequestDecision {
+        try appsToolsPendingRequestDecisionResponse([
+            "command": "appsToolsConfigureLongTermAccess",
+            "session_id": sessionId,
+            "request_id": requestId,
+            "credential_id": credentialId as Any,
+            "secret_field_id": secretFieldId as Any,
+            "confirmation_policy": confirmationPolicy.rawValue
+        ])
+    }
+
+    func appsToolsSnapshot(sessionId: UInt64) throws -> AppsToolsSnapshot {
+        try appsToolsSnapshotResponse([
+            "command": "appsToolsSnapshot",
+            "session_id": sessionId
+        ])
+    }
+
+    func appsToolsConsumerDetail(
+        sessionId: UInt64,
+        consumerId: String
+    ) throws -> AppsToolsConsumerDetail {
+        guard case let .appsToolsConsumerDetail(payload) = try send([
+            "command": "appsToolsConsumerDetail",
+            "session_id": sessionId,
+            "consumer_id": consumerId
+        ]) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload.detail
+    }
+
+    func appsToolsUsageProfileSetup(
+        sessionId: UInt64,
+        consumerId: String
+    ) throws -> AppsToolsUsageProfileSetup {
+        guard case let .appsToolsUsageProfileSetup(payload) = try send([
+            "command": "appsToolsUsageProfileSetup",
+            "session_id": sessionId,
+            "consumer_id": consumerId
+        ]), payload.setup.consumerId == consumerId else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload.setup
+    }
+
+    func createAppsToolsUsageProfile(
+        sessionId: UInt64,
+        consumerId: String,
+        draft: AppsToolsUsageProfileDraft
+    ) throws -> AppsToolsUsageProfile {
+        guard case let .appsToolsUsageProfileCreated(payload) = try send([
+            "command": "createAppsToolsUsageProfile",
+            "session_id": sessionId,
+            "consumer_id": consumerId,
+            "label": draft.label,
+            "template_id": draft.templateId,
+            "technical_name": draft.technicalName as Any
+        ]), payload.consumerId == consumerId else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload.profile
+    }
+
+    func removeAppsToolsUsageProfile(
+        sessionId: UInt64,
+        consumerId: String,
+        usageProfileId: String
+    ) throws -> Bool {
+        guard case let .appsToolsUsageProfileRemoved(payload) = try send([
+            "command": "removeAppsToolsUsageProfile",
+            "session_id": sessionId,
+            "consumer_id": consumerId,
+            "usage_profile_id": usageProfileId
+        ]), payload.consumerId == consumerId,
+            payload.usageProfileId == usageProfileId
+        else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload.removed
+    }
+
+    func setAppsToolsPaused(sessionId: UInt64, paused: Bool) throws -> AppsToolsSnapshot {
+        try appsToolsSnapshotResponse([
+            "command": "setAppsToolsPaused",
+            "session_id": sessionId,
+            "paused": paused
+        ])
+    }
+
+    func revokeAppsToolsField(
+        sessionId: UInt64,
+        consumerId: String,
+        field: AppsToolsFieldReference
+    ) throws -> AppsToolsSnapshot {
+        try appsToolsSnapshotResponse([
+            "command": "revokeAppsToolsField",
+            "session_id": sessionId,
+            "consumer_id": consumerId,
+            "vault_id": field.vaultId,
+            "credential_id": field.credentialId,
+            "secret_field_id": field.secretFieldId
+        ])
+    }
+
+    func revokeAppsToolsConsumer(
+        sessionId: UInt64,
+        consumerId: String
+    ) throws -> AppsToolsSnapshot {
+        try appsToolsSnapshotResponse([
+            "command": "revokeAppsToolsConsumer",
+            "session_id": sessionId,
+            "consumer_id": consumerId
+        ])
+    }
+
+    func createCredentialFromTemplate(
+        sessionId: UInt64,
+        form: TemplateCredentialForm
+    ) throws -> [VaultItemView] {
+        try itemsResponse([
+            "command": "createCredentialFromTemplate",
+            "session_id": sessionId,
+            "template_id": form.template.rawValue,
+            "title": form.title,
+            "secret": form.secret,
+            "expiry": form.template.supportsExpiry ? form.expiry.nilIfEmpty as Any : NSNull(),
+            "notes": form.notes.nilIfEmpty as Any,
+            "tags": form.tags,
+            "favorite": form.favorite
+        ])
+    }
+
+    func updateCredential(
+        sessionId: UInt64,
+        credentialId: String,
+        form: CredentialEditorForm
+    ) throws -> [VaultItemView] {
+        guard let expectedRevision = form.revision else {
+            throw CoreBridgeError.commandFailed("Credential revision is required")
+        }
+        let fields: [[String: Any]] = form.fields.map { field in
+            var value: [String: Any] = [
+                "role": field.normalizedRole
+            ]
+            if let label = field.normalizedLabel {
+                value["label"] = label
+            }
+            switch field.fieldType {
+            case .text:
+                value["value_type"] = "text"
+                value["text"] = field.text
+            case .existingSecret:
+                value["value_type"] = "existingSecret"
+                value["secret_field_id"] = field.secretFieldId ?? ""
+                if !field.secretInput.isEmpty {
+                    value["replacement"] = field.secretInput
+                }
+            case .newSecret:
+                value["value_type"] = "newSecret"
+                value["secret_kind"] = field.secretKind
+                value["secret"] = field.secretInput
+            }
+            return value
+        }
+        return try itemsResponse([
+            "command": "updateCredential",
+            "session_id": sessionId,
+            "credential_id": credentialId,
+            "expected_revision": expectedRevision,
+            "title": form.normalizedTitle,
+            "template_id": form.templateId ?? NSNull(),
+            "fields": fields,
+            "tags": form.tags,
+            "favorite": form.favorite
+        ])
+    }
+
+    func duplicateCredential(
+        sessionId: UInt64,
+        credentialId: String,
+        expectedRevision: String,
+        title: String
+    ) throws -> [VaultItemView] {
+        try itemsResponse([
+            "command": "duplicateCredential",
+            "session_id": sessionId,
+            "credential_id": credentialId,
+            "expected_revision": expectedRevision,
+            "title": title
+        ])
+    }
+
+    func getCredential(sessionId: UInt64, credentialId: String) throws -> CredentialDetail {
+        guard case let .credentialDetail(payload) = try send([
+            "command": "getCredential",
+            "session_id": sessionId,
+            "credential_id": credentialId
+        ]) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload.detail
+    }
+
+    func getCredentialSecretField(
+        sessionId: UInt64,
+        credentialId: String,
+        secretFieldId: String
+    ) throws -> String {
+        guard case let .secret(payload) = try send([
+            "command": "getCredentialSecretField",
+            "session_id": sessionId,
+            "credential_id": credentialId,
+            "secret_field_id": secretFieldId
+        ]) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload.value
     }
 
     func createLogin(sessionId: UInt64, form: LoginForm) throws -> [VaultItemView] {
@@ -517,12 +987,18 @@ final class RustCoreBridge: CoreService {
         ])
     }
 
-    func exportItems(sessionId: UInt64, destinationPath: String, exportFormat: String) throws -> ExportResultPayload {
+    func exportItems(
+        sessionId: UInt64,
+        destinationPath: String,
+        exportFormat: String,
+        currentPassword: String
+    ) throws -> ExportResultPayload {
         guard case let .exportResult(payload) = try send([
             "command": "exportItems",
             "session_id": sessionId,
             "destination_path": destinationPath,
-            "export_format": exportFormat
+            "export_format": exportFormat,
+            "current_password": currentPassword
         ]) else {
             throw CoreBridgeError.unexpectedResponse
         }
@@ -556,6 +1032,22 @@ final class RustCoreBridge: CoreService {
             throw CoreBridgeError.unexpectedResponse
         }
         return payload.items
+    }
+
+    private func appsToolsSnapshotResponse(_ command: [String: Any]) throws -> AppsToolsSnapshot {
+        guard case let .appsToolsSnapshot(payload) = try send(command) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload.snapshot
+    }
+
+    private func appsToolsPendingRequestDecisionResponse(
+        _ command: [String: Any]
+    ) throws -> AppsToolsPendingRequestDecision {
+        guard case let .appsToolsPendingRequestDecision(payload) = try send(command) else {
+            throw CoreBridgeError.unexpectedResponse
+        }
+        return payload.decision
     }
 
     private func importPreviewResponse(_ command: [String: Any]) throws -> ImportPreviewPayload {
@@ -593,19 +1085,39 @@ final class RustCoreBridge: CoreService {
         }
     }
 
-    private static func libraryCandidates() -> [String] {
+    private static var developmentLibraryOverridesEnabled: Bool {
+        #if DEBUG
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    static func libraryCandidates(
+        privateFrameworksPath: String?,
+        bundlePath: String,
+        environment: [String: String],
+        currentDirectoryPath: String,
+        includeDevelopmentOverrides: Bool
+    ) -> [String] {
         var candidates: [String] = []
-        if let env = ProcessInfo.processInfo.environment["PSW_FFI_LIBRARY"], !env.isEmpty {
+        if includeDevelopmentOverrides,
+           let env = environment["PSW_FFI_LIBRARY"],
+           !env.isEmpty {
             candidates.append(env)
         }
-        if let frameworksPath = Bundle.main.privateFrameworksPath {
+        if let frameworksPath = privateFrameworksPath {
             candidates.append("\(frameworksPath)/libpsw_ffi.dylib")
         }
-        candidates.append("\(Bundle.main.bundlePath)/Contents/Frameworks/libpsw_ffi.dylib")
-        let cwd = FileManager.default.currentDirectoryPath
-        candidates.append("\(cwd)/target/debug/libpsw_ffi.dylib")
-        candidates.append("\(cwd)/../../target/debug/libpsw_ffi.dylib")
-        candidates.append("\(cwd)/../../../target/debug/libpsw_ffi.dylib")
+        let bundleCandidate = "\(bundlePath)/Contents/Frameworks/libpsw_ffi.dylib"
+        if !candidates.contains(bundleCandidate) {
+            candidates.append(bundleCandidate)
+        }
+        if includeDevelopmentOverrides {
+            candidates.append("\(currentDirectoryPath)/target/debug/libpsw_ffi.dylib")
+            candidates.append("\(currentDirectoryPath)/../../target/debug/libpsw_ffi.dylib")
+            candidates.append("\(currentDirectoryPath)/../../../target/debug/libpsw_ffi.dylib")
+        }
         return candidates
     }
 }
@@ -645,6 +1157,15 @@ enum CorePayload: Decodable {
     case vault(VaultPayload)
     case unlocked(UnlockedPayload)
     case items(ItemsPayload)
+    case authorizedCredentialIds(AuthorizedCredentialIdsPayload)
+    case appsToolsPendingRequests(AppsToolsPendingRequestQueuePayload)
+    case appsToolsPendingRequestDecision(AppsToolsPendingRequestDecisionPayload)
+    case appsToolsCredentialReview(AppsToolsCredentialReviewPayload)
+    case appsToolsSnapshot(AppsToolsSnapshotPayload)
+    case appsToolsConsumerDetail(AppsToolsConsumerDetailPayload)
+    case appsToolsUsageProfileSetup(AppsToolsUsageProfileSetupPayload)
+    case appsToolsUsageProfileCreated(AppsToolsUsageProfileCreatedPayload)
+    case appsToolsUsageProfileRemoved(AppsToolsUsageProfileRemovedPayload)
     case passwordHealth(PasswordHealthPayload)
     case syncRefreshReport(SyncRefreshPayload)
     case syncQuarantineReport(SyncQuarantinePayload)
@@ -652,12 +1173,16 @@ enum CorePayload: Decodable {
     case secureNoteDetail(SecureNoteDetail)
     case creditCardDetail(CreditCardDetail)
     case softwareLicenseDetail(SoftwareLicenseDetail)
+    case credentialDetail(CredentialDetailPayload)
     case secret(SecretPayload)
     case totp(TotpPayload)
     case importPreview(ImportPreviewPayload)
     case exportResult(ExportResultPayload)
     case backupResult(BackupResultPayload)
     case restoreBackupResult(RestoreBackupResultPayload)
+    case recoveryStatus(RecoveryStatusPayload)
+    case recoveryKit(RecoveryKitPayload)
+    case recoveryConfirmed(RecoveryConfirmationPayload)
     case conflictCandidates(ConflictCandidatesPayload)
 
     enum CodingKeys: CodingKey {
@@ -678,6 +1203,36 @@ enum CorePayload: Decodable {
             self = .unlocked(try UnlockedPayload(from: decoder))
         case "items":
             self = .items(try ItemsPayload(from: decoder))
+        case "authorizedCredentialIds":
+            self = .authorizedCredentialIds(try AuthorizedCredentialIdsPayload(from: decoder))
+        case "appsToolsPendingRequests":
+            self = .appsToolsPendingRequests(
+                try AppsToolsPendingRequestQueuePayload(from: decoder)
+            )
+        case "appsToolsPendingRequestDecision":
+            self = .appsToolsPendingRequestDecision(
+                try AppsToolsPendingRequestDecisionPayload(from: decoder)
+            )
+        case "appsToolsCredentialReview":
+            self = .appsToolsCredentialReview(
+                try AppsToolsCredentialReviewPayload(from: decoder)
+            )
+        case "appsToolsSnapshot":
+            self = .appsToolsSnapshot(try AppsToolsSnapshotPayload(from: decoder))
+        case "appsToolsConsumerDetail":
+            self = .appsToolsConsumerDetail(try AppsToolsConsumerDetailPayload(from: decoder))
+        case "appsToolsUsageProfileSetup":
+            self = .appsToolsUsageProfileSetup(
+                try AppsToolsUsageProfileSetupPayload(from: decoder)
+            )
+        case "appsToolsUsageProfileCreated":
+            self = .appsToolsUsageProfileCreated(
+                try AppsToolsUsageProfileCreatedPayload(from: decoder)
+            )
+        case "appsToolsUsageProfileRemoved":
+            self = .appsToolsUsageProfileRemoved(
+                try AppsToolsUsageProfileRemovedPayload(from: decoder)
+            )
         case "passwordHealth":
             self = .passwordHealth(try PasswordHealthPayload(from: decoder))
         case "syncRefreshReport":
@@ -692,6 +1247,8 @@ enum CorePayload: Decodable {
             self = .creditCardDetail(try CreditCardDetail(from: decoder))
         case "softwareLicenseDetail":
             self = .softwareLicenseDetail(try SoftwareLicenseDetail(from: decoder))
+        case "credentialDetail":
+            self = .credentialDetail(try CredentialDetailPayload(from: decoder))
         case "secret":
             self = .secret(try SecretPayload(from: decoder))
         case "totp":
@@ -704,6 +1261,12 @@ enum CorePayload: Decodable {
             self = .backupResult(try BackupResultPayload(from: decoder))
         case "restoreBackupResult":
             self = .restoreBackupResult(try RestoreBackupResultPayload(from: decoder))
+        case "recoveryStatus":
+            self = .recoveryStatus(try RecoveryStatusPayload(from: decoder))
+        case "recoveryKit":
+            self = .recoveryKit(try RecoveryKitPayload(from: decoder))
+        case "recoveryConfirmed":
+            self = .recoveryConfirmed(try RecoveryConfirmationPayload(from: decoder))
         case "conflictCandidates":
             self = .conflictCandidates(try ConflictCandidatesPayload(from: decoder))
         default:
@@ -731,15 +1294,461 @@ struct VaultPayload: Decodable {
 struct UnlockedPayload: Decodable {
     let sessionId: UInt64
     let items: [VaultItemView]
+    let appsToolsVaultPathConflict: Bool
 
     enum CodingKeys: String, CodingKey {
         case sessionId = "session_id"
         case items
+        case appsToolsVaultPathConflict = "apps_tools_vault_path_conflict"
+    }
+
+    init(
+        sessionId: UInt64,
+        items: [VaultItemView],
+        appsToolsVaultPathConflict: Bool = false
+    ) {
+        self.sessionId = sessionId
+        self.items = items
+        self.appsToolsVaultPathConflict = appsToolsVaultPathConflict
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sessionId = try container.decode(UInt64.self, forKey: .sessionId)
+        items = try container.decode([VaultItemView].self, forKey: .items)
+        appsToolsVaultPathConflict = try container.decodeIfPresent(
+            Bool.self,
+            forKey: .appsToolsVaultPathConflict
+        ) ?? false
     }
 }
 
 struct ItemsPayload: Decodable {
     let items: [VaultItemView]
+}
+
+struct AuthorizedCredentialIdsPayload: Decodable, Equatable {
+    let credentialIds: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case credentialIds = "credential_ids"
+    }
+}
+
+struct AppsToolsPendingRequestQueuePayload: Decodable, Equatable {
+    let queue: AppsToolsPendingRequestQueue
+}
+
+struct AppsToolsPendingRequestDecisionPayload: Decodable, Equatable {
+    let decision: AppsToolsPendingRequestDecision
+}
+
+struct AppsToolsPendingRequestDecision: Decodable, Equatable {
+    let action: String
+    let status: String
+    let useGrantId: String?
+    let accessRuleId: String?
+
+    enum CodingKeys: String, CodingKey {
+        case action
+        case status
+        case useGrantId = "use_grant_id"
+        case accessRuleId = "access_rule_id"
+    }
+}
+
+struct AppsToolsCredentialReviewPayload: Decodable, Equatable {
+    let review: AppsToolsCredentialReview
+}
+
+struct AppsToolsCredentialReview: Decodable, Equatable {
+    let requestId: String
+    let requestDescription: String
+    let capability: String
+    let capabilityVersion: UInt16
+    let truncated: Bool
+    let candidates: [AppsToolsCredentialCandidate]
+
+    enum CodingKeys: String, CodingKey {
+        case requestId = "request_id"
+        case requestDescription = "request_description"
+        case capability
+        case capabilityVersion = "capability_version"
+        case truncated
+        case candidates
+    }
+}
+
+struct AppsToolsCredentialCandidate: Decodable, Equatable, Identifiable {
+    let credentialId: String
+    let title: String
+    let templateId: String?
+    let tags: [String]
+    let favorite: Bool
+    let secretFields: [AppsToolsCredentialFieldCandidate]
+
+    var id: String { credentialId }
+
+    enum CodingKeys: String, CodingKey {
+        case credentialId = "credential_id"
+        case title
+        case templateId = "template_id"
+        case tags
+        case favorite
+        case secretFields = "secret_fields"
+    }
+}
+
+struct AppsToolsCredentialFieldCandidate: Decodable, Equatable, Identifiable {
+    let secretFieldId: String
+    let role: String
+    let label: String?
+    let kind: String
+
+    var id: String { secretFieldId }
+
+    enum CodingKeys: String, CodingKey {
+        case secretFieldId = "secret_field_id"
+        case role
+        case label
+        case kind
+    }
+}
+
+struct AppsToolsCredentialSelection: Equatable, Hashable {
+    let credentialId: String
+    let secretFieldId: String
+}
+
+enum AppsToolsConfirmationPolicy: String, CaseIterable, Identifiable {
+    case everyUse = "every-use"
+    case oncePerUnlockSession = "once-per-unlock-session"
+    case automaticWhileUnlocked = "automatic-while-unlocked"
+
+    var id: String { rawValue }
+}
+
+struct AppsToolsPendingRequestQueue: Decodable, Equatable {
+    let pendingCount: Int
+    let requests: [AppsToolsPendingRequest]
+
+    static let empty = AppsToolsPendingRequestQueue(
+        pendingCount: 0,
+        requests: []
+    )
+
+    enum CodingKeys: String, CodingKey {
+        case pendingCount = "pending_count"
+        case requests
+    }
+}
+
+struct AppsToolsPendingRequest: Decodable, Equatable, Identifiable {
+    let requestSource: String
+    let requestId: String
+    let kind: String
+    let consumerId: String?
+    let consumerLabel: String?
+    let identity: AppsToolsConsumerIdentity?
+    let pairingComparisonCode: String?
+    let pairingKeyFingerprint: String?
+    let vaultId: String?
+    let credentialId: String?
+    let secretFieldId: String?
+    let capability: String?
+    let capabilityVersion: UInt16?
+    let requestDescription: String?
+    let createdAtMilliseconds: Int64?
+    let expiresAtMilliseconds: Int64?
+    let remainingMilliseconds: UInt64?
+
+    var id: String { "\(requestSource):\(requestId)" }
+
+    enum CodingKeys: String, CodingKey {
+        case requestSource = "request_source"
+        case requestId = "request_id"
+        case kind
+        case consumerId = "consumer_id"
+        case consumerLabel = "consumer_label"
+        case identity
+        case pairingComparisonCode = "pairing_comparison_code"
+        case pairingKeyFingerprint = "pairing_key_fingerprint"
+        case vaultId = "vault_id"
+        case credentialId = "credential_id"
+        case secretFieldId = "secret_field_id"
+        case capability
+        case capabilityVersion = "capability_version"
+        case requestDescription = "request_description"
+        case createdAtMilliseconds = "created_at_ms"
+        case expiresAtMilliseconds = "expires_at_ms"
+        case remainingMilliseconds = "remaining_ms"
+    }
+}
+
+struct AppsToolsSnapshotPayload: Decodable, Equatable {
+    let snapshot: AppsToolsSnapshot
+}
+
+struct AppsToolsConsumerDetailPayload: Decodable, Equatable {
+    let detail: AppsToolsConsumerDetail
+}
+
+struct AppsToolsUsageProfileSetupPayload: Decodable, Equatable {
+    let setup: AppsToolsUsageProfileSetup
+}
+
+struct AppsToolsUsageProfileCreatedPayload: Decodable, Equatable {
+    let consumerId: String
+    let profile: AppsToolsUsageProfile
+
+    enum CodingKeys: String, CodingKey {
+        case consumerId = "consumer_id"
+        case profile
+    }
+}
+
+struct AppsToolsUsageProfileRemovedPayload: Decodable, Equatable {
+    let consumerId: String
+    let usageProfileId: String
+    let removed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case consumerId = "consumer_id"
+        case usageProfileId = "usage_profile_id"
+        case removed
+    }
+}
+
+struct AppsToolsSnapshot: Decodable, Equatable {
+    let paused: Bool
+    let authorizedCredentialIds: [String]
+    let consumers: [AppsToolsConsumerSummary]
+
+    static let empty = AppsToolsSnapshot(
+        paused: false,
+        authorizedCredentialIds: [],
+        consumers: []
+    )
+
+    enum CodingKeys: String, CodingKey {
+        case paused
+        case authorizedCredentialIds = "authorized_credential_ids"
+        case consumers
+    }
+}
+
+struct AppsToolsConsumerIdentity: Decodable, Equatable {
+    let executableName: String?
+    let bundleIdentifier: String?
+    let teamIdentifier: String?
+    let codeSigningEvidence: String
+    let codeSignatureFingerprint: String?
+
+    enum CodingKeys: String, CodingKey {
+        case executableName = "executable_name"
+        case bundleIdentifier = "bundle_identifier"
+        case teamIdentifier = "team_identifier"
+        case codeSigningEvidence = "code_signing_evidence"
+        case codeSignatureFingerprint = "code_signature_fingerprint"
+    }
+}
+
+struct AppsToolsConsumerSummary: Decodable, Equatable, Identifiable {
+    let consumerId: String
+    let label: String
+    let identity: AppsToolsConsumerIdentity
+    let accessRuleCount: Int
+    let usageProfileCount: Int
+    let createdAtMilliseconds: Int64
+
+    var id: String { consumerId }
+
+    enum CodingKeys: String, CodingKey {
+        case consumerId = "consumer_id"
+        case label
+        case identity
+        case accessRuleCount = "access_rule_count"
+        case usageProfileCount = "usage_profile_count"
+        case createdAtMilliseconds = "created_at_ms"
+    }
+}
+
+struct AppsToolsFieldReference: Decodable, Equatable {
+    let vaultId: String
+    let credentialId: String
+    let secretFieldId: String
+    let currentVault: Bool
+    let credentialTitle: String?
+    let fieldLabel: String?
+    let secretKind: String?
+
+    enum CodingKeys: String, CodingKey {
+        case vaultId = "vault_id"
+        case credentialId = "credential_id"
+        case secretFieldId = "secret_field_id"
+        case currentVault = "current_vault"
+        case credentialTitle = "credential_title"
+        case fieldLabel = "field_label"
+        case secretKind = "secret_kind"
+    }
+}
+
+struct AppsToolsFieldGrant: Decodable, Equatable, Identifiable {
+    let accessRuleId: String
+    let field: AppsToolsFieldReference
+    let capability: String
+    let capabilityVersion: UInt16
+    let confirmationPolicy: String
+    let lifetime: String
+    let expiresAtMilliseconds: Int64?
+    let createdAtMilliseconds: Int64
+    let active: Bool
+
+    var id: String { accessRuleId }
+
+    enum CodingKeys: String, CodingKey {
+        case accessRuleId = "access_rule_id"
+        case field
+        case capability
+        case capabilityVersion = "capability_version"
+        case confirmationPolicy = "confirmation_policy"
+        case lifetime
+        case expiresAtMilliseconds = "expires_at_ms"
+        case createdAtMilliseconds = "created_at_ms"
+        case active
+    }
+}
+
+struct AppsToolsUsagePlacement: Decodable, Equatable {
+    let kind: String
+    let variableName: String?
+    let appendNewline: Bool?
+    let referenceVariableName: String?
+    let renderDevFdPath: Bool?
+    let headerName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case variableName = "variable_name"
+        case appendNewline = "append_newline"
+        case referenceVariableName = "reference_variable_name"
+        case renderDevFdPath = "render_dev_fd_path"
+        case headerName = "header_name"
+    }
+}
+
+struct AppsToolsUsageProfile: Decodable, Equatable, Identifiable {
+    let usageProfileId: String
+    let label: String
+    let capability: String
+    let capabilityVersion: UInt16
+    let placement: AppsToolsUsagePlacement
+    let createdAtMilliseconds: Int64
+
+    var id: String { usageProfileId }
+
+    enum CodingKeys: String, CodingKey {
+        case usageProfileId = "usage_profile_id"
+        case label
+        case capability
+        case capabilityVersion = "capability_version"
+        case placement
+        case createdAtMilliseconds = "created_at_ms"
+    }
+}
+
+struct AppsToolsUsageProfileTemplate: Decodable, Equatable, Identifiable {
+    let templateId: String
+    let capability: String
+    let capabilityVersion: UInt16
+    let technicalField: String
+    let suggestedValue: String?
+
+    var id: String { templateId }
+
+    enum CodingKeys: String, CodingKey {
+        case templateId = "template_id"
+        case capability
+        case capabilityVersion = "capability_version"
+        case technicalField = "technical_field"
+        case suggestedValue = "suggested_value"
+    }
+}
+
+struct AppsToolsUsageProfileRecommendation: Decodable, Equatable {
+    let recommendationId: String
+    let templateId: String
+    let technicalName: String
+
+    enum CodingKeys: String, CodingKey {
+        case recommendationId = "recommendation_id"
+        case templateId = "template_id"
+        case technicalName = "technical_name"
+    }
+}
+
+struct AppsToolsUsageProfileSetup: Decodable, Equatable {
+    let consumerId: String
+    let templates: [AppsToolsUsageProfileTemplate]
+    let recommendation: AppsToolsUsageProfileRecommendation?
+
+    enum CodingKeys: String, CodingKey {
+        case consumerId = "consumer_id"
+        case templates
+        case recommendation
+    }
+
+    func template(_ templateId: String) -> AppsToolsUsageProfileTemplate? {
+        templates.first { $0.templateId == templateId }
+    }
+}
+
+struct AppsToolsUsageProfileDraft: Equatable {
+    let label: String
+    let templateId: String
+    let technicalName: String?
+}
+
+struct AppsToolsAuditEvent: Decodable, Equatable, Identifiable {
+    let auditEventId: String
+    let occurredAtMilliseconds: Int64
+    let kind: String
+    let field: AppsToolsFieldReference?
+    let capability: String?
+    let capabilityVersion: UInt16?
+    let decision: String
+    let confirmationMethod: String
+
+    var id: String { auditEventId }
+
+    enum CodingKeys: String, CodingKey {
+        case auditEventId = "audit_event_id"
+        case occurredAtMilliseconds = "occurred_at_ms"
+        case kind
+        case field
+        case capability
+        case capabilityVersion = "capability_version"
+        case decision
+        case confirmationMethod = "confirmation_method"
+    }
+}
+
+struct AppsToolsConsumerDetail: Decodable, Equatable {
+    let consumer: AppsToolsConsumerSummary
+    let fieldGrants: [AppsToolsFieldGrant]
+    let usageProfiles: [AppsToolsUsageProfile]
+    let recentAuditEvents: [AppsToolsAuditEvent]
+
+    enum CodingKeys: String, CodingKey {
+        case consumer
+        case fieldGrants = "field_grants"
+        case usageProfiles = "usage_profiles"
+        case recentAuditEvents = "recent_audit_events"
+    }
+}
+
+struct CredentialDetailPayload: Decodable, Equatable {
+    let detail: CredentialDetail
 }
 
 struct PasswordHealthPayload: Decodable, Equatable {
@@ -910,13 +1919,43 @@ struct ImportPreviewPayload: Decodable, Equatable {
 struct ExportResultPayload: Decodable, Equatable {
     let exportedRecords: Int
     let skippedRecords: Int
+    let omissions: [ExportOmissionPayload]
     let warnings: [String]
 
     enum CodingKeys: String, CodingKey {
         case exportedRecords = "exported_records"
         case skippedRecords = "skipped_records"
+        case omissions
         case warnings
     }
+
+    init(
+        exportedRecords: Int,
+        skippedRecords: Int,
+        warnings: [String],
+        omissions: [ExportOmissionPayload] = []
+    ) {
+        self.exportedRecords = exportedRecords
+        self.skippedRecords = skippedRecords
+        self.omissions = omissions
+        self.warnings = warnings
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        exportedRecords = try container.decode(Int.self, forKey: .exportedRecords)
+        skippedRecords = try container.decode(Int.self, forKey: .skippedRecords)
+        omissions = try container.decodeIfPresent(
+            [ExportOmissionPayload].self,
+            forKey: .omissions
+        ) ?? []
+        warnings = try container.decode([String].self, forKey: .warnings)
+    }
+}
+
+struct ExportOmissionPayload: Decodable, Equatable {
+    let reason: String
+    let count: Int
 }
 
 struct BackupResultPayload: Decodable, Equatable {
@@ -940,6 +1979,86 @@ struct RestoreBackupResultPayload: Decodable, Equatable {
         case copiedItemFiles = "copied_item_files"
         case copiedAttachmentFiles = "copied_attachment_files"
         case copiedTombstoneFiles = "copied_tombstone_files"
+    }
+}
+
+struct RecoveryStatusPayload: Decodable, Equatable {
+    let hasRecoveryEnvelope: Bool
+    let recoveryKeyId: String?
+
+    init(hasRecoveryEnvelope: Bool, recoveryKeyId: String?) {
+        self.hasRecoveryEnvelope = hasRecoveryEnvelope
+        self.recoveryKeyId = recoveryKeyId
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case hasRecoveryEnvelope = "has_recovery_envelope"
+        case recoveryKeyId = "recovery_key_id"
+    }
+}
+
+enum RecoveryWorkflowKind: String, Decodable, Equatable {
+    case setup
+    case rotation
+}
+
+struct RecoveryKitPayload: Decodable, Equatable, Identifiable {
+    let workflowId: UInt64
+    let workflowKind: RecoveryWorkflowKind
+    let vaultId: String
+    let recoveryKeyId: String
+    let generatedAtUnixSeconds: UInt64
+    let canonicalCode: String
+    let groupedCode: String
+    let qrPayload: String
+    let verificationGroups: [String]
+
+    var id: UInt64 {
+        workflowId
+    }
+
+    init(
+        workflowId: UInt64,
+        workflowKind: RecoveryWorkflowKind,
+        vaultId: String,
+        recoveryKeyId: String,
+        generatedAtUnixSeconds: UInt64,
+        canonicalCode: String,
+        groupedCode: String,
+        qrPayload: String,
+        verificationGroups: [String]
+    ) {
+        self.workflowId = workflowId
+        self.workflowKind = workflowKind
+        self.vaultId = vaultId
+        self.recoveryKeyId = recoveryKeyId
+        self.generatedAtUnixSeconds = generatedAtUnixSeconds
+        self.canonicalCode = canonicalCode
+        self.groupedCode = groupedCode
+        self.qrPayload = qrPayload
+        self.verificationGroups = verificationGroups
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case workflowId = "workflow_id"
+        case workflowKind = "workflow_kind"
+        case vaultId = "vault_id"
+        case recoveryKeyId = "recovery_key_id"
+        case generatedAtUnixSeconds = "generated_at_unix_seconds"
+        case canonicalCode = "canonical_code"
+        case groupedCode = "grouped_code"
+        case qrPayload = "qr_payload"
+        case verificationGroups = "verification_groups"
+    }
+}
+
+struct RecoveryConfirmationPayload: Decodable, Equatable {
+    let workflowKind: RecoveryWorkflowKind
+    let recoveryKeyId: String
+
+    enum CodingKeys: String, CodingKey {
+        case workflowKind = "workflow_kind"
+        case recoveryKeyId = "recovery_key_id"
     }
 }
 

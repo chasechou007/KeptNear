@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var store: VaultStore
     @AppStorage(AppLanguage.storageKey) private var languageRaw = AppLanguage.english.rawValue
     @State private var masterPasswordRotationForm = MasterPasswordRotationForm()
@@ -94,6 +95,44 @@ struct SettingsView: View {
 
                     Divider()
 
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(text.recoverySettingsTitle)
+                            .font(.headline)
+
+                        Text(text.recoverySettingsHint)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        Text(recoveryStatusMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: 300, alignment: .leading)
+
+                    Button {
+                        let didBegin = store.recoveryStatus?.hasRecoveryEnvelope == true
+                            ? store.beginRecoveryRotation()
+                            : store.beginRecoverySetup()
+                        if didBegin {
+                            dismiss()
+                        }
+                    } label: {
+                        Label(
+                            store.recoveryStatus?.hasRecoveryEnvelope == true
+                                ? text.rotateRecoveryKey
+                                : text.setUpRecovery,
+                            systemImage: store.recoveryStatus?.hasRecoveryEnvelope == true
+                                ? "arrow.triangle.2.circlepath"
+                                : "key.viewfinder"
+                        )
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!store.isUnlocked || store.isBusy || store.recoveryKit != nil)
+
+                    Divider()
+
                     Text(text.cleanupLegacyKeychainHint)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -159,6 +198,15 @@ struct SettingsView: View {
         .onDisappear {
             masterPasswordRotationForm.clear()
         }
+    }
+
+    private var recoveryStatusMessage: String {
+        guard store.isUnlocked else {
+            return text.unlockVaultFirst
+        }
+        return store.recoveryStatus?.hasRecoveryEnvelope == true
+            ? text.recoveryEnvelopePresent
+            : text.recoveryNotConfigured
     }
 }
 

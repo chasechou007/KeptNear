@@ -17,6 +17,19 @@ security-sensitive unless it is clearly documentation-only.
 - Issue responses, fixes, and roadmap commitments are best effort; this is a
   personal-interest project without a support service level.
 
+## Maintainer Integration Workflow
+
+KeptNear uses a hybrid workflow for maintainer-owned changes:
+
+- Small, low-risk documentation or maintenance changes may be committed and
+  pushed directly to the primary branch after the applicable checks pass.
+- Security-sensitive, release-related, milestone-sized, or otherwise
+  consequential changes use a task branch and a maintainer pull request so the
+  complete diff, CI evidence, and code review are visible before merge.
+- A maintainer pull request is an integration and review checkpoint; it does
+  not change the policy that external pull requests are not currently
+  accepted.
+
 ## Before You Start
 
 - Read `README.md`, `docs/architecture.md`, `docs/security-model.md`, and

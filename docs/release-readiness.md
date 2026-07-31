@@ -1,5 +1,73 @@
 # Release Readiness Notes
 
+## Release Profiles
+
+KeptNear has three explicit, non-interchangeable readiness profiles:
+
+```sh
+# Source only; no DMG, Apple signing, or external review prerequisite.
+script/verify_source_preview_ready.sh
+
+# Clean-source Apple Silicon DMG; explicitly unsigned and unaudited.
+script/verify_unsigned_alpha_release_ready.sh
+
+# Optional Developer ID signed, notarized, and stapled distribution.
+script/verify_public_alpha_release_ready.sh
+```
+
+Each command supports `--allow-missing` report mode. Report mode lists blockers
+and never approves publication. Strict source and unsigned profiles always
+report `Audit status: unaudited` while external review is absent. That status
+does not block those two bounded profiles, but every profile keeps the
+production-use recommendation at `Not recommended`.
+
+The source profile verifies a clean revision, broad Rust/Swift checks,
+public-tree exclusions and repository secret patterns, dependency licenses,
+strict OpenSpec state, and the source review policy without building an
+artifact. The unsigned profile adds AR-002, local macOS and vault-format gates,
+Launch Services verification, clean-source packaging in
+`unsigned-experimental` mode, checksum and protocol-manifest verification, and
+explicit unsigned installation warnings. The signed profile alone performs
+Developer ID, hardened-runtime, notarization, stapling, Gatekeeper, and signed
+install checks.
+
+Both binary profiles are currently blocked by their artifact decisions and by
+an independent dependency gate. `script/verify_sqlcipher_distribution_gate.sh`
+reads the actual `libsqlite3-sys` lock entry, requires the reviewed
+`bundled-sqlcipher` mapping, and verifies
+`docs/sqlcipher-distribution-evidence.json` against the workspace manifest,
+current lockfile, complete first-party Rust workspace source tree, Broker
+manifest, complete Broker source tree, SQLCipher FFI key bridge, encrypted
+state implementation, schema, and regression suite. This includes Broker path
+dependencies such as `psw-core`. The bundled SQLCipher 4.5.3 mapping is
+hard-blocked until the dependency is upgraded and the source-bound suite is
+revalidated. Editing either Markdown artifact decision cannot bypass this gate.
+Release Cargo builds use `--locked`, a fixed target triple, and a
+repository-owned target directory, so the dependency graph and selected output
+path cannot change after the receipt check. The receipt also binds
+`rust-toolchain.toml`, the exact Rust and Cargo release/commit identities, the
+LLVM version, and the Apple Silicon compiler host/target required by
+distribution packaging. The Rust identity comes from a locked `cargo rustc`
+probe under the reviewed target and release profile. The receipt binds the
+actual Rust and Cargo executable hashes, and every distribution Cargo command
+selects those resolved binaries directly while removing compiler shims,
+wrappers, custom Rust flags, and linker overrides. Bundled SQLCipher builds also
+use source-bound Apple Clang, `ar`, and `ranlib` binaries, a reviewed Xcode and
+macOS SDK build, fixed C flags, and the macOS 13 deployment target. Ambient
+`CC`, target-specific compiler variables, `CFLAGS`, include/library paths,
+OpenSSL selection, and `libsqlite3-sys` build-script overrides are removed
+before Cargo starts. The receipt also binds the gate, toolchain runner,
+packaging, and artifact-verification scripts. Toolchain identity is established
+with fixed macOS system utility paths; every `shasum` identity and receipt hash
+runs under a minimal environment that excludes Perl loader overrides and passes
+through a fixed `/usr/bin/awk` digest parser. Distribution Cargo starts from an
+empty process environment and runs from `/` with an absolute manifest,
+system-only `PATH`, temporary private `HOME` and `CARGO_HOME`, offline registry
+archive/index cache access, dependency source re-extraction, and no discoverable
+user, workspace, or parent Cargo configuration. Until then, strict unsigned and
+signed gates must exit non-zero. `local-test` may still create a development
+DMG, but its manifest must retain `Distribution ready: false`.
+
 ## Dependency Review
 
 Current security-sensitive Rust dependencies:
@@ -10,13 +78,36 @@ Current security-sensitive Rust dependencies:
 - `hmac` and `sha1`: TOTP generation per RFC 6238 SHA-1 compatibility.
 - `serde` and `serde_json`: vault metadata, record encoding, and import parsing.
 - `zeroize`: pinned for Rust 1.75 compatibility; `SecretBytes` also clears its allocation on drop.
+- `hkdf` and `sha2`: domain-separated SQLCipher database-key derivation.
+- `rusqlite` and bundled SQLCipher Community Edition: authenticated encrypted
+  device-state pages, WAL, transactions, and schema migration support.
+- `core-foundation` and `security-framework-sys`: Rust 1.75-compatible,
+  macOS-only bindings for the Broker's device-bound Data Protection Keychain
+  item.
 
 Current compatibility pins:
 
 - `base64ct = 1.6.0`
+- `core-foundation = 0.9.4`
+- `rusqlite = 0.31.0`, embedding SQLCipher 4.5.3
+- `security-framework-sys = 2.9.1`
+- `rustls = 0.23.43`, selecting `rustls-webpki = 0.103.13`
 - `zeroize = 1.8.1`
 
 These pins avoid transitive crates that require Rust 2024 edition and newer compilers than the current workspace Rust 1.75 toolchain.
+The SQLCipher pin is older than the current upstream line and is not approved
+for distribution of the new device-state feature. Before enabling that feature
+in any DMG, raise the Rust toolchain, refresh `rusqlite` and bundled SQLCipher,
+repeat wrong-key/tamper/format/permission tests, rerun the dependency audit, and
+verify schema compatibility. Source distributions and future binaries must
+retain `THIRD_PARTY_NOTICES.md`.
+
+The 2026-07-31 local review upgraded the TLS chain after the prior
+`rustls-webpki` selection matched four RustSec advisories. The resulting
+lockfile reports no known vulnerability against the available local
+`cargo-audit` snapshot. The attempted online advisory refresh did not complete,
+and the snapshot did not expose its last-update timestamp, so this is not
+represented as a live online audit. See `docs/local-security-review.md`.
 
 ## macOS Target
 
@@ -25,10 +116,15 @@ The first binary release target is macOS 13 or newer on Apple Silicon
 first distribution scope. The reusable Rust core remains structured so later
 platform work does not require changing the portable vault format.
 
-Before public alpha, confirm:
+Before recommending the macOS app for production use or publishing a signed
+distribution, confirm:
 
 - signing identity and hardened runtime requirements
 - Keychain access group behavior
+- Broker device-root-key continuity across reinstall and signed, ad-hoc, and
+  unsigned upgrade paths, with no file fallback
+- current SQLCipher dependency, encrypted database/WAL/SHM behavior, and
+  schema-version compatibility after raising the Rust toolchain
 - local convenience unlock review, including the Keychain local-key plus
   `local_unlock.enc` envelope boundary and cleanup behavior for old alpha
   Keychain entries that stored master passwords
@@ -46,8 +142,30 @@ DMG with a checksum and manifest:
 script/package_macos_alpha.sh
 ```
 
-This is suitable for local testing and trusted alpha testers. Public
-distribution still requires:
+The project uses three separate publication profiles:
+
+- **Source preview:** publish source only. This does not require Apple signing,
+  notarization, or an external security review.
+- **Unsigned experimental DMG:** publish an Apple Silicon DMG only after local
+  build, integrity, privacy, license, disclosure, and clean-install checks pass.
+  The download and installation instructions must state `unsigned`,
+  `unaudited`, `experimental`, and `do not use production secrets`.
+- **Signed distribution:** optionally publish a Developer ID signed and
+  notarized DMG after the stricter signed-distribution checks pass.
+
+The packaging command defaults to `local-test`, which cannot claim distribution
+readiness. The unsigned readiness command selects
+`RELEASE_MODE=unsigned-experimental`; that mode forbids a signing identity and
+notarization, requires a clean worktree and the AR-002 policy gate, and records
+`unsigned`, `unaudited`, and non-production status in the artifact manifest.
+Every DMG also carries the exact SQLCipher distribution receipt used by its
+source checkout. The verifier compares that in-image receipt, its manifest
+digest, the protocol-manifest Git revision, and the current clean checkout.
+This prevents a release-mode artifact from being approved against a different
+source revision.
+
+The existing strict public-alpha scripts implement the signed-distribution
+profile and require:
 
 - passing strict public alpha release readiness with
   `script/verify_public_alpha_release_ready.sh`
@@ -64,16 +182,32 @@ distribution still requires:
   against the signed/notarized DMG
 - completed external security review evidence or explicit accepted-risk records
 
+The unsigned experimental profile uses
+`script/verify_unsigned_alpha_release_ready.sh` and its own release-mode label.
+It must not reuse a signed-distribution readiness result or imply that
+Gatekeeper, Developer ID, notarization, or external audit checks passed.
+
 ## Security Review
 
 An external security review plan exists at
 `docs/security-review-plan.md`. This is a readiness artifact for preparing an
 independent review; it is not evidence that external review has been completed.
 Review evidence, findings, accepted risks, validation, and release decision
-status are tracked in `docs/security-review-evidence.md`. The current register
-keeps external review marked incomplete while `AR-001` approves only the
-security-policy component of a signed and notarized experimental pre-release.
-It does not recommend production use.
+status are tracked in `docs/security-review-evidence.md`.
+
+No external security review evidence has been attached. External review remains
+valuable before recommending production use, but it is not a prerequisite for
+the source-preview or explicitly unsigned experimental-DMG profiles.
+
+The accepted-risk register distinguishes the signed and unsigned profiles:
+
+- `AR-001` covers an externally unaudited, signed and notarized experimental
+  pre-release.
+- `AR-002` covers an externally unaudited and unsigned experimental DMG with
+  stronger disclosure and installation requirements.
+
+Neither decision recommends production use. Artifact readiness remains
+separate from accepting the policy risk.
 
 Use the evidence gate to check the current status:
 
@@ -92,7 +226,8 @@ The generated archive, manifest, and SHA-256 checksum live under
 replace reviewer findings, accepted-risk records, validation, or release
 approval.
 
-Before public alpha approval, strict mode must pass:
+Before using the existing signed-distribution approval path, strict mode must
+pass:
 
 ```sh
 script/verify_security_review_evidence.sh
@@ -106,8 +241,53 @@ The strict evidence gate passes through either of these paths:
   user-facing implications, mitigations, owner, revisit triggers, and
   validation
 
-The accepted-risk path does not bypass Developer ID signing, notarization,
-signed-install verification, or experimental user warnings.
+For the signed profile, the accepted-risk path does not bypass Developer ID
+signing, notarization, signed-install verification, or experimental user
+warnings. The unsigned profile intentionally omits those Apple trust-chain
+claims and instead requires explicit unsigned installation guidance, checksum
+and manifest publication, local artifact verification, and adjacent
+experimental warnings.
+
+## First-Version Closure Limitations
+
+The macOS first-version closure keeps these limitations explicit:
+
+- The project is locally reviewed but externally unaudited. No source or DMG is
+  recommended for production credentials.
+- The current local-test DMG is unsigned and not notarized. macOS may warn or
+  block normal launch, Apple does not attest its publisher identity, and
+  unsigned/ad-hoc Keychain continuity across replacement or reinstall is not a
+  release guarantee.
+- A dirty-worktree `local-test` DMG is test evidence only. Public source
+  preview and unsigned experimental packaging each require a clean committed
+  revision and their own strict profile.
+- Broker, MCP adapter, and CLI executables are packaged but are not installed
+  or activated as an end-user service. The complete first-run pairing,
+  approval, restart, upgrade, and uninstall lifecycle is not shipped.
+- The bundled SQLCipher 4.5.3 compatibility pin must be upgraded and
+  revalidated before machine-access state is enabled in a distributed DMG.
+- KeptNear does not operate iCloud Drive, Dropbox, Syncthing, WebDAV, or any
+  other sync provider. Provider upload, deletion, ordering, and availability
+  behavior has not been validated by the two-device filesystem matrix.
+- `keptnear-json` is currently the complete plaintext export format but is not
+  an import format. Plaintext export and import files remain outside vault
+  protection.
+- Rust secret byte containers and selected serialization buffers are cleared,
+  but Swift strings, Foundation data, parser-owned strings, OS clipboard
+  history, child processes, and crash-memory snapshots cannot be promised to
+  zeroize deterministically.
+- An authorized Consumer can misuse the exact field and capability the user
+  granted. KeptNear enforces its Broker scope; it does not edit agent policy
+  files, interpret prompts, or police behavior outside that scope. A direct
+  child or descendant may retain a delivered secret after the Broker operation
+  ends.
+- Duplicate portable vault identity is detected when a path is presented to
+  one Broker process, not by a filesystem-wide scan. The user may need to close
+  an unintended copied vault and reopen the authoritative path.
+- Updates are manual. There is no automatic security-update channel, signed
+  update feed, or rollback service in the first version.
+- The exact final DMG still requires human launch and workflow acceptance.
+  Automated build and artifact verification do not replace that check.
 
 ## Pre-Alpha Gates
 
@@ -125,13 +305,15 @@ Do not recommend production use until these gates are complete:
   local evidence only and does not replace signed/notarized clean-install
   testing or the selected external-review or accepted-risk decision path
 - local vault-format readiness verification passes with
-  `script/verify_vault_format_readiness.sh`, while the format remains
-  experimental until a separate public alpha freeze decision
+  `script/verify_vault_format_readiness.sh`, proving the frozen v1 migration
+  source and released pre-alpha v2 schema remain aligned with their sanitized
+  fixtures
 - vault doctor readiness verification passes with
-  `script/verify_vault_doctor_readiness.sh`, proving the local support CLI can
+  `script/verify_vault_doctor_readiness.sh`, proving both the public
+  `keptnear vault doctor` namespace and legacy `psw doctor` entrypoint can
   inspect generated supported vaults, reject incomplete and unsupported future
-  vaults, emit JSON, and avoid known plaintext item output without checking
-  provider sync state
+  vaults, emit equivalent JSON, omit full paths, and avoid known plaintext item
+  output without checking provider sync state
 - vault format documented and reviewed
 - golden vectors checked in and stable
 - parser hardening tests pass
@@ -327,6 +509,8 @@ Do not recommend production use until these gates are complete:
   maintainer accepted-risk paths; strict mode passes when common validation is
   complete and either path is complete
 
-External review itself is a separate public-alpha readiness decision and should
-not be treated as complete until review evidence is attached. `AR-001` does not
-change that status.
+External review must not be treated as complete until review evidence is
+attached. Its absence does not block source publication or the dedicated
+unsigned experimental-DMG profile, but both remain unaudited and unsuitable for
+production secrets. `AR-001` and `AR-002` accept bounded release-policy risk;
+they do not prove artifact readiness.

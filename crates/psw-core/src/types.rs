@@ -2,14 +2,42 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
 
-/// Current public vault format version supported by this crate.
-pub const CURRENT_VAULT_FORMAT_VERSION: u32 = 1;
+use crate::stable_id::VaultId;
 
-/// Current encrypted item record format version supported by this crate.
-pub const CURRENT_RECORD_FORMAT_VERSION: u32 = 1;
+/// Public format name used by supported KeptNear vault metadata.
+pub(crate) const VAULT_FORMAT_NAME: &str = "psw-local-vault";
+
+/// Current released vault format version readable and written by this crate.
+pub const CURRENT_VAULT_FORMAT_VERSION: u32 = 2;
+
+/// Current released encrypted record format version readable and written by this crate.
+pub const CURRENT_RECORD_FORMAT_VERSION: u32 = 2;
+
+/// Frozen experimental vault format accepted as the one-way migration source.
+pub(crate) const SOURCE_VAULT_FORMAT_VERSION: u32 = 1;
+
+/// Frozen experimental record format accepted as the one-way migration source.
+pub(crate) const SOURCE_RECORD_FORMAT_VERSION: u32 = 1;
+
+/// Current vault format used by new vaults and the migration target.
+pub(crate) const TARGET_VAULT_FORMAT_VERSION: u32 = CURRENT_VAULT_FORMAT_VERSION;
+
+/// Current credential-record format used by new vaults and migration.
+pub(crate) const TARGET_RECORD_FORMAT_VERSION: u32 = CURRENT_RECORD_FORMAT_VERSION;
+
+/// Vault and record format pairs readable by this crate.
+pub(crate) const SUPPORTED_VAULT_FORMAT_PAIRS: &[(u32, u32)] = &[
+    (SOURCE_VAULT_FORMAT_VERSION, SOURCE_RECORD_FORMAT_VERSION),
+    (TARGET_VAULT_FORMAT_VERSION, TARGET_RECORD_FORMAT_VERSION),
+];
+
+/// Older format pairs accepted by the explicit one-way migration transaction.
+pub(crate) const MIGRATION_SOURCE_FORMAT_PAIRS: &[(u32, u32)] =
+    &[(SOURCE_VAULT_FORMAT_VERSION, SOURCE_RECORD_FORMAT_VERSION)];
 
 /// Public vault metadata that can be read before unlock.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct VaultMetadata {
     /// Human-readable format name.
     pub format_name: String,
@@ -19,16 +47,35 @@ pub struct VaultMetadata {
     pub record_format_version: u32,
     /// Optional user-visible vault display name.
     pub display_name: Option<String>,
+    /// Stable vault identity, required by target formats and absent from frozen v1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault_id: Option<VaultId>,
 }
 
 impl VaultMetadata {
-    /// Creates metadata for a new experimental vault.
-    pub fn experimental(display_name: Option<String>) -> Self {
+    /// Creates metadata for a new vault in the current released format.
+    pub fn current(display_name: Option<String>) -> Self {
+        Self::current_with_vault_id(display_name, VaultId::generate())
+    }
+
+    pub(crate) fn current_with_vault_id(display_name: Option<String>, vault_id: VaultId) -> Self {
         Self {
-            format_name: "psw-local-vault".to_owned(),
-            vault_format_version: CURRENT_VAULT_FORMAT_VERSION,
-            record_format_version: CURRENT_RECORD_FORMAT_VERSION,
+            format_name: VAULT_FORMAT_NAME.to_owned(),
+            vault_format_version: TARGET_VAULT_FORMAT_VERSION,
+            record_format_version: TARGET_RECORD_FORMAT_VERSION,
             display_name,
+            vault_id: Some(vault_id),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn migration_source(display_name: Option<String>) -> Self {
+        Self {
+            format_name: VAULT_FORMAT_NAME.to_owned(),
+            vault_format_version: SOURCE_VAULT_FORMAT_VERSION,
+            record_format_version: SOURCE_RECORD_FORMAT_VERSION,
+            display_name,
+            vault_id: None,
         }
     }
 }
@@ -82,7 +129,7 @@ pub enum ItemStatus {
 }
 
 /// Secret byte container that clears its allocation on drop.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SecretBytes(Vec<u8>);
 
 impl SecretBytes {
@@ -100,6 +147,26 @@ impl SecretBytes {
 impl Drop for SecretBytes {
     fn drop(&mut self) {
         self.0.fill(0);
+    }
+}
+
+impl std::fmt::Debug for SecretBytes {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("SecretBytes([REDACTED])")
+    }
+}
+
+#[cfg(test)]
+mod secret_bytes_tests {
+    use super::SecretBytes;
+
+    #[test]
+    fn secret_bytes_debug_is_redacted() {
+        let secret = SecretBytes::new(b"debug-secret-marker".to_vec());
+        let debug = format!("{secret:?}");
+
+        assert_eq!(debug, "SecretBytes([REDACTED])");
+        assert!(!debug.contains("debug-secret-marker"));
     }
 }
 

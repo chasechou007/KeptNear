@@ -143,12 +143,13 @@ struct VaultSyncReadiness: Equatable {
     }
 }
 
-enum SavedSecretRevealField: String, Hashable {
+enum SavedSecretRevealField: Hashable {
     case loginPassword
     case loginTotpSecret
     case creditCardNumber
     case creditCardVerificationCode
     case softwareLicenseKey
+    case credential(String)
 }
 
 struct SavedSecretRevealKey: Hashable {
@@ -209,6 +210,8 @@ struct VaultItemView: Identifiable, Decodable, Equatable {
     let revision: String
     let title: String
     let itemType: String
+    let templateId: String?
+    let secretKinds: [String]
     let status: String
     let conflictId: String?
     let favorite: Bool
@@ -219,6 +222,8 @@ struct VaultItemView: Identifiable, Decodable, Equatable {
         revision: String = "rev_test",
         title: String,
         itemType: String,
+        templateId: String? = nil,
+        secretKinds: [String] = [],
         status: String,
         conflictId: String? = nil,
         favorite: Bool,
@@ -228,6 +233,8 @@ struct VaultItemView: Identifiable, Decodable, Equatable {
         self.revision = revision
         self.title = title
         self.itemType = itemType
+        self.templateId = templateId
+        self.secretKinds = secretKinds
         self.status = status
         self.conflictId = conflictId
         self.favorite = favorite
@@ -239,10 +246,26 @@ struct VaultItemView: Identifiable, Decodable, Equatable {
         case revision
         case title
         case itemType = "item_type"
+        case templateId = "template_id"
+        case secretKinds = "secret_kinds"
         case status
         case conflictId = "conflict_id"
         case favorite
         case tags
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
+        revision = try container.decode(String.self, forKey: .revision)
+        title = try container.decode(String.self, forKey: .title)
+        itemType = try container.decode(String.self, forKey: .itemType)
+        templateId = try container.decodeIfPresent(String.self, forKey: .templateId)
+        secretKinds = try container.decodeIfPresent([String].self, forKey: .secretKinds) ?? []
+        status = try container.decode(String.self, forKey: .status)
+        conflictId = try container.decodeIfPresent(String.self, forKey: .conflictId)
+        favorite = try container.decode(Bool.self, forKey: .favorite)
+        tags = try container.decode([String].self, forKey: .tags)
     }
 
     var isConflicted: Bool {
@@ -254,19 +277,28 @@ struct VaultItemView: Identifiable, Decodable, Equatable {
     }
 
     var isLogin: Bool {
-        itemType == "login"
+        credentialTemplateKind == .login || itemType == "login"
     }
 
     var isSecureNote: Bool {
-        itemType == "secure note"
+        credentialTemplateKind == .secureNote || itemType == "secure note"
     }
 
     var isCreditCard: Bool {
-        itemType == "credit card"
+        credentialTemplateKind == .creditCard || itemType == "credit card"
     }
 
     var isSoftwareLicense: Bool {
-        itemType == "software license"
+        credentialTemplateKind == .softwareLicense || itemType == "software license"
+    }
+
+    var credentialTemplateKind: CredentialTemplateKind? {
+        guard let templateId else { return nil }
+        return CredentialTemplateKind(rawValue: templateId)
+    }
+
+    var isTemplateCredential: Bool {
+        credentialTemplateKind?.usesTemplateCredentialForm == true
     }
 }
 
@@ -470,6 +502,129 @@ struct SecureNoteForm: Equatable {
     }
 }
 
+struct TemplateCredentialForm: Equatable {
+    var template: CredentialTemplateKind = .apiToken
+    var title: String = ""
+    var secret: String = ""
+    var expiry: String = ""
+    var notes: String = ""
+    var tagsText: String = ""
+    var favorite = false
+
+    var tags: [String] {
+        deduplicatedTags(from: tagsText)
+    }
+
+    var normalizedTitle: String {
+        title.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var isValidForSave: Bool {
+        template.usesTemplateCredentialForm
+            && !normalizedTitle.isEmpty
+            && !secret.isEmpty
+    }
+}
+
+struct CredentialDetail: Decodable, Equatable {
+    let id: String
+    let revision: String
+    let title: String
+    let templateId: String?
+    let fields: [CredentialDetailField]
+    let favorite: Bool
+    let tags: [String]
+    let status: String
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case revision
+        case title
+        case templateId = "template_id"
+        case fields
+        case favorite
+        case tags
+        case status
+    }
+
+    var textFields: [CredentialDetailField.TextField] {
+        fields.compactMap(\.textField)
+    }
+
+    var secretFields: [CredentialDetailField.SecretField] {
+        fields.compactMap(\.secretField)
+    }
+}
+
+enum CredentialDetailField: Decodable, Equatable {
+    struct TextField: Equatable, Identifiable {
+        let role: String
+        let label: String?
+        let text: String
+
+        var id: String { "text:\(role):\(label ?? "")" }
+    }
+
+    struct SecretField: Equatable, Identifiable {
+        let role: String
+        let label: String?
+        let secretFieldId: String
+        let secretKind: String
+        let hasValue: Bool
+
+        var id: String { secretFieldId }
+    }
+
+    case text(TextField)
+    case secret(SecretField)
+
+    private enum CodingKeys: String, CodingKey {
+        case valueType = "value_type"
+        case role
+        case label
+        case text
+        case secretFieldId = "secret_field_id"
+        case secretKind = "secret_kind"
+        case hasValue = "has_value"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(String.self, forKey: .valueType) {
+        case "text":
+            self = .text(TextField(
+                role: try container.decode(String.self, forKey: .role),
+                label: try container.decodeIfPresent(String.self, forKey: .label),
+                text: try container.decode(String.self, forKey: .text)
+            ))
+        case "secret":
+            self = .secret(SecretField(
+                role: try container.decode(String.self, forKey: .role),
+                label: try container.decodeIfPresent(String.self, forKey: .label),
+                secretFieldId: try container.decode(String.self, forKey: .secretFieldId),
+                secretKind: try container.decode(String.self, forKey: .secretKind),
+                hasValue: try container.decode(Bool.self, forKey: .hasValue)
+            ))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .valueType,
+                in: container,
+                debugDescription: "Unknown credential field value type"
+            )
+        }
+    }
+
+    var textField: TextField? {
+        guard case let .text(field) = self else { return nil }
+        return field
+    }
+
+    var secretField: SecretField? {
+        guard case let .secret(field) = self else { return nil }
+        return field
+    }
+}
+
 struct CreditCardDetail: Decodable, Equatable {
     let id: String
     var revision: String
@@ -636,7 +791,7 @@ private func deduplicatedTags(from tagsText: String) -> [String] {
         }
 }
 
-struct ConflictCandidateView: Identifiable, Decodable, Equatable {
+struct ConflictCandidateView: Identifiable, Equatable {
     let itemId: String
     let revision: String
     let title: String
@@ -647,8 +802,44 @@ struct ConflictCandidateView: Identifiable, Decodable, Equatable {
     let comparisonFields: [ConflictCandidateField]
     let changedFields: [String]
     let preview: String?
+    let templateId: String?
+    let credentialFields: [ConflictCandidateCredentialField]
+    let fieldShapeChanged: Bool
+    let supportsSafeFieldMerge: Bool
 
     var id: String { revision }
+
+    init(
+        itemId: String,
+        revision: String,
+        title: String,
+        itemType: String,
+        status: String,
+        favorite: Bool,
+        tags: [String],
+        comparisonFields: [ConflictCandidateField],
+        changedFields: [String],
+        preview: String?,
+        templateId: String? = nil,
+        credentialFields: [ConflictCandidateCredentialField] = [],
+        fieldShapeChanged: Bool = false,
+        supportsSafeFieldMerge: Bool = true
+    ) {
+        self.itemId = itemId
+        self.revision = revision
+        self.title = title
+        self.itemType = itemType
+        self.status = status
+        self.favorite = favorite
+        self.tags = tags
+        self.comparisonFields = comparisonFields
+        self.changedFields = changedFields
+        self.preview = preview
+        self.templateId = templateId
+        self.credentialFields = credentialFields
+        self.fieldShapeChanged = fieldShapeChanged
+        self.supportsSafeFieldMerge = supportsSafeFieldMerge
+    }
 
     enum CodingKeys: String, CodingKey {
         case itemId = "item_id"
@@ -661,6 +852,38 @@ struct ConflictCandidateView: Identifiable, Decodable, Equatable {
         case comparisonFields = "comparison_fields"
         case changedFields = "changed_fields"
         case preview
+        case templateId = "template_id"
+        case credentialFields = "credential_fields"
+        case fieldShapeChanged = "field_shape_changed"
+        case supportsSafeFieldMerge = "supports_safe_field_merge"
+    }
+}
+
+extension ConflictCandidateView: Decodable {
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            itemId: try container.decode(String.self, forKey: .itemId),
+            revision: try container.decode(String.self, forKey: .revision),
+            title: try container.decode(String.self, forKey: .title),
+            itemType: try container.decode(String.self, forKey: .itemType),
+            status: try container.decode(String.self, forKey: .status),
+            favorite: try container.decode(Bool.self, forKey: .favorite),
+            tags: try container.decode([String].self, forKey: .tags),
+            comparisonFields: try container.decode([ConflictCandidateField].self, forKey: .comparisonFields),
+            changedFields: try container.decode([String].self, forKey: .changedFields),
+            preview: try container.decodeIfPresent(String.self, forKey: .preview),
+            templateId: try container.decodeIfPresent(String.self, forKey: .templateId),
+            credentialFields: try container.decodeIfPresent(
+                [ConflictCandidateCredentialField].self,
+                forKey: .credentialFields
+            ) ?? [],
+            fieldShapeChanged: try container.decodeIfPresent(Bool.self, forKey: .fieldShapeChanged) ?? false,
+            supportsSafeFieldMerge: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .supportsSafeFieldMerge
+            ) ?? true
+        )
     }
 }
 
@@ -668,6 +891,89 @@ struct ConflictCandidateField: Decodable, Equatable {
     let label: String
     let value: String?
     let redacted: Bool
+}
+
+enum ConflictCandidateCredentialField: Decodable, Equatable, Identifiable {
+    struct TextField: Equatable {
+        let index: Int
+        let role: String
+        let label: String?
+        let text: String
+        let changed: Bool
+    }
+
+    struct SecretField: Equatable {
+        let index: Int
+        let role: String
+        let label: String?
+        let secretFieldId: String
+        let secretKind: String
+        let hasValue: Bool
+        let changed: Bool
+    }
+
+    case text(TextField)
+    case secret(SecretField)
+
+    var id: String {
+        switch self {
+        case let .text(field):
+            return "text:\(field.index)"
+        case let .secret(field):
+            return field.secretFieldId
+        }
+    }
+
+    var changed: Bool {
+        switch self {
+        case let .text(field):
+            return field.changed
+        case let .secret(field):
+            return field.changed
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case valueType = "value_type"
+        case index
+        case role
+        case label
+        case text
+        case secretFieldId = "secret_field_id"
+        case secretKind = "secret_kind"
+        case hasValue = "has_value"
+        case changed
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(String.self, forKey: .valueType) {
+        case "text":
+            self = .text(TextField(
+                index: try container.decode(Int.self, forKey: .index),
+                role: try container.decode(String.self, forKey: .role),
+                label: try container.decodeIfPresent(String.self, forKey: .label),
+                text: try container.decode(String.self, forKey: .text),
+                changed: try container.decode(Bool.self, forKey: .changed)
+            ))
+        case "secret":
+            self = .secret(SecretField(
+                index: try container.decode(Int.self, forKey: .index),
+                role: try container.decode(String.self, forKey: .role),
+                label: try container.decodeIfPresent(String.self, forKey: .label),
+                secretFieldId: try container.decode(String.self, forKey: .secretFieldId),
+                secretKind: try container.decode(String.self, forKey: .secretKind),
+                hasValue: try container.decode(Bool.self, forKey: .hasValue),
+                changed: try container.decode(Bool.self, forKey: .changed)
+            ))
+        default:
+            throw DecodingError.dataCorruptedError(
+                forKey: .valueType,
+                in: container,
+                debugDescription: "Unknown conflict credential field value type"
+            )
+        }
+    }
 }
 
 struct ConflictMergeFieldSelection: Encodable, Equatable {

@@ -3,8 +3,8 @@ import SwiftUI
 
 enum KeptNearBrand {
     static let name = "KeptNear"
-    static let englishDescriptor = "Local-first password manager"
-    static let simplifiedChineseDescriptor = "本地密码管理器"
+    static let englishDescriptor = "Local Password & Token Manager"
+    static let simplifiedChineseDescriptor = "本地密码与令牌管理器"
 
     static let primary = adaptiveColor(
         name: "KeptNearPrimary",

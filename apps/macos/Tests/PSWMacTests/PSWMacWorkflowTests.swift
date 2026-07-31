@@ -19,6 +19,7 @@ final class PSWMacWorkflowTests: XCTestCase {
         store.selectedSecureNoteDetail = nil
         store.selectedCreditCardDetail = nil
         store.selectedSoftwareLicenseDetail = nil
+        store.selectedCredentialDetail = nil
     }
 
     private func makeUnlockedSeededLoginStore(path: String) -> (store: VaultStore, service: FakeCoreService) {
@@ -78,6 +79,34 @@ final class PSWMacWorkflowTests: XCTestCase {
         )
     }
 
+    func testReleaseFFICandidatesAreRestrictedToTheApplicationBundle() {
+        let candidates = RustCoreBridge.libraryCandidates(
+            privateFrameworksPath: "/Applications/KeptNear.app/Contents/Frameworks",
+            bundlePath: "/Applications/KeptNear.app",
+            environment: ["PSW_FFI_LIBRARY": "/tmp/untrusted/libpsw_ffi.dylib"],
+            currentDirectoryPath: "/tmp/untrusted",
+            includeDevelopmentOverrides: false
+        )
+
+        XCTAssertEqual(candidates, [
+            "/Applications/KeptNear.app/Contents/Frameworks/libpsw_ffi.dylib"
+        ])
+        XCTAssertFalse(candidates.contains { $0.hasPrefix("/tmp/untrusted") })
+    }
+
+    func testDevelopmentFFICandidatesRetainExplicitLocalOverrides() {
+        let candidates = RustCoreBridge.libraryCandidates(
+            privateFrameworksPath: nil,
+            bundlePath: "/workspace/.build/debug",
+            environment: ["PSW_FFI_LIBRARY": "/workspace/target/debug/custom.dylib"],
+            currentDirectoryPath: "/workspace",
+            includeDevelopmentOverrides: true
+        )
+
+        XCTAssertEqual(candidates.first, "/workspace/target/debug/custom.dylib")
+        XCTAssertTrue(candidates.contains("/workspace/target/debug/libpsw_ffi.dylib"))
+    }
+
     private func sampleLoginConflictCandidates() -> [ConflictCandidateView] {
         [
             ConflictCandidateView(
@@ -134,16 +163,51 @@ final class PSWMacWorkflowTests: XCTestCase {
             .write(to: vaultURL.appendingPathComponent("keys.enc"))
     }
 
+    func testAppPresentationStateUsesVaultSelectionAndUnlockState() {
+        XCTAssertEqual(
+            AppPresentationState(hasSelectedVault: false, isUnlocked: false),
+            .welcome
+        )
+        XCTAssertEqual(
+            AppPresentationState(hasSelectedVault: false, isUnlocked: true),
+            .welcome
+        )
+        XCTAssertEqual(
+            AppPresentationState(hasSelectedVault: true, isUnlocked: false),
+            .locked
+        )
+        XCTAssertEqual(
+            AppPresentationState(hasSelectedVault: true, isUnlocked: true),
+            .unlocked
+        )
+    }
+
     func testLanguageTextSupportsEnglishAndSimplifiedChinese() {
         let english = AppText(AppLanguage.english.rawValue)
         let chinese = AppText(AppLanguage.simplifiedChinese.rawValue)
 
+        XCTAssertEqual(english.welcomeHeadline, "Your passwords, always kept near.")
+        XCTAssertEqual(chinese.welcomeHeadline, "你的密码，始终在你身边。")
+        XCTAssertEqual(english.localPasswordManager, "Local Password & Token Manager")
+        XCTAssertEqual(chinese.localPasswordManager, "本地密码与令牌管理器")
+        XCTAssertEqual(english.openExistingVault, "Open Existing Vault")
+        XCTAssertEqual(chinese.openExistingVault, "打开现有密码库")
+        XCTAssertEqual(english.unlockVaultNamed("Personal"), "Unlock Personal")
+        XCTAssertEqual(chinese.unlockVaultNamed("Personal"), "解锁 Personal")
         XCTAssertEqual(english.newVault, "New Vault")
         XCTAssertEqual(chinese.newVault, "新建密码库")
         XCTAssertEqual(english.exportItems, "Export")
         XCTAssertEqual(chinese.exportItems, "导出")
         XCTAssertEqual(chinese.exported, "已导出")
         XCTAssertEqual(chinese.plaintextExportTitle, "要导出明文秘密吗？")
+        XCTAssertEqual(
+            chinese.exportOmission(reason: "unsupported-template", count: 2),
+            "已省略 2 个模板不受支持的凭据"
+        )
+        XCTAssertEqual(
+            english.exportOmission(reason: "conflicted-credential", count: 1),
+            "1 conflicted credential(s) omitted"
+        )
         XCTAssertEqual(english.unlockWithKeychain, "Unlock with Keychain")
         XCTAssertEqual(chinese.unlockWithKeychain, "使用钥匙串解锁")
         XCTAssertEqual(english.enterMasterPasswordToUnlock, "Enter Master Password")
@@ -155,6 +219,13 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(chinese.statusMessage("invalid vault credentials"), "主密码不正确，请重试。")
         XCTAssertTrue(chinese.isErrorStatusMessage("invalid vault credentials"))
         XCTAssertFalse(chinese.isErrorStatusMessage("Vault locked"))
+        XCTAssertEqual(
+            chinese.statusMessage(VaultStore.appsToolsVaultPathConflictStatus),
+            "检测到密码库副本冲突；“应用与工具”访问已停用"
+        )
+        XCTAssertTrue(
+            chinese.isErrorStatusMessage(VaultStore.appsToolsVaultPathConflictStatus)
+        )
         XCTAssertEqual(english.closeVault, "Close Vault")
         XCTAssertEqual(chinese.closeVault, "关闭密码库")
         XCTAssertEqual(chinese.statusMessage("Vault closed"), "密码库已关闭")
@@ -179,6 +250,20 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(chinese.lockedVaultTitle, "密码库已锁定")
         XCTAssertEqual(english.emptyVaultTitle, "No Items Yet")
         XCTAssertEqual(chinese.emptyVaultTitle, "还没有项目")
+        XCTAssertEqual(english.browse, "Browse")
+        XCTAssertEqual(chinese.browse, "浏览")
+        XCTAssertEqual(english.itemTypes, "Types")
+        XCTAssertEqual(chinese.itemTypes, "类型")
+        XCTAssertEqual(english.securityAndMaintenance, "Security & Maintenance")
+        XCTAssertEqual(chinese.securityAndMaintenance, "安全与维护")
+        XCTAssertEqual(english.itemCount(1), "1 item")
+        XCTAssertEqual(english.itemCount(2), "2 items")
+        XCTAssertEqual(chinese.itemCount(2), "2 个项目")
+        XCTAssertEqual(english.sidebarSyncReady, "Sync ready")
+        XCTAssertEqual(chinese.sidebarSyncReady, "同步就绪")
+        XCTAssertEqual(chinese.sidebarSyncNeedsAttention, "同步需要处理")
+        XCTAssertEqual(chinese.sidebarSyncWaiting, "等待完成编辑")
+        XCTAssertEqual(chinese.notRefreshedYet, "尚未刷新")
         XCTAssertEqual(english.login, "Login")
         XCTAssertEqual(chinese.login, "登录项")
         XCTAssertEqual(english.secureNote, "Secure Note")
@@ -334,6 +419,14 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(chinese.changeMasterPassword, "更改主密码")
         XCTAssertEqual(english.confirmMasterPassword, "Confirm Master Password")
         XCTAssertEqual(chinese.confirmMasterPassword, "确认主密码")
+        XCTAssertEqual(
+            english.plaintextExportMessage("backup.json"),
+            "Enter your current master password to write plaintext vault data to backup.json. Anyone with this file can read the exported secrets."
+        )
+        XCTAssertEqual(
+            chinese.plaintextExportMessage("backup.json"),
+            "请输入当前主密码，将密码库数据以明文写入 backup.json。任何拥有此文件的人都可以读取导出的秘密。"
+        )
         let weakStrength = MasterPasswordStrength.evaluate("password12345")
         let strongStrength = MasterPasswordStrength.evaluate("LocalVaults-2026")
         XCTAssertEqual(english.masterPasswordStrengthLabel(weakStrength), "Strength: Weak")
@@ -577,6 +670,13 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(AppLanguage.resolve("ja"), .japanese)
         XCTAssertEqual(AppLanguage.resolve("unknown"), .english)
 
+        XCTAssertEqual(japanese.welcomeHeadline, "パスワードを、いつも手元に。")
+        XCTAssertEqual(
+            japanese.localPasswordManager,
+            "ローカルパスワード・トークンマネージャー"
+        )
+        XCTAssertEqual(japanese.openExistingVault, "既存の保管庫を開く")
+        XCTAssertEqual(japanese.unlockVaultNamed("Personal"), "Personalのロックを解除")
         XCTAssertEqual(japanese.newVault, "新規保管庫")
         XCTAssertEqual(japanese.openRecentVault, "最近使った保管庫を開く")
         XCTAssertEqual(japanese.languageLabel, "言語")
@@ -591,6 +691,12 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(japanese.settings, "設定")
         XCTAssertEqual(japanese.login, "ログイン")
         XCTAssertEqual(japanese.secureNote, "セキュアノート")
+        XCTAssertEqual(japanese.browse, "ブラウズ")
+        XCTAssertEqual(japanese.itemTypes, "種類")
+        XCTAssertEqual(japanese.securityAndMaintenance, "セキュリティと管理")
+        XCTAssertEqual(japanese.itemCount(2), "2件")
+        XCTAssertEqual(japanese.sidebarSyncReady, "同期準備完了")
+        XCTAssertEqual(japanese.notRefreshedYet, "まだ更新されていません")
         XCTAssertEqual(japanese.masterPassword, "マスターパスワード")
         XCTAssertEqual(japanese.enterMasterPasswordToUnlock, "マスターパスワードを入力")
         XCTAssertEqual(japanese.forgotMasterPassword, "マスターパスワードを忘れた場合")
@@ -601,6 +707,10 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(
             japanese.statusMessage("invalid vault credentials"),
             "マスターパスワードが正しくありません。もう一度お試しください。"
+        )
+        XCTAssertEqual(
+            japanese.statusMessage(VaultStore.appsToolsVaultPathConflictStatus),
+            "保管庫のコピー競合を検出しました。アプリとツールからのアクセスは利用できません。"
         )
         XCTAssertEqual(
             japanese.statusMessage("Vault moved to Trash"),
@@ -629,7 +739,7 @@ final class PSWMacWorkflowTests: XCTestCase {
         )
         XCTAssertEqual(
             japanese.plaintextExportMessage("backup.json"),
-            "backup.json に保管庫データを平文で書き込みますか？このファイルを入手した人は誰でも、エクスポートした秘密情報を読み取れます。"
+            "現在のマスターパスワードを入力して、backup.json に保管庫データを平文で書き込みます。このファイルを入手した人は誰でも、エクスポートした秘密情報を読み取れます。"
         )
 
         XCTAssertEqual(japanese.statusMessage("Vault created"), "保管庫を作成しました")
@@ -669,6 +779,75 @@ final class PSWMacWorkflowTests: XCTestCase {
         )
     }
 
+    func testCredentialTemplateCatalogContainsRequiredProviderNeutralTypes() {
+        XCTAssertEqual(
+            CredentialTemplateKind.requiredTemplates.map(\.rawValue),
+            [
+                "login",
+                "api-token",
+                "api-key",
+                "ssh-key",
+                "certificate",
+                "secure-note",
+                "custom"
+            ]
+        )
+        XCTAssertEqual(
+            Set(CredentialTemplateKind.requiredTemplates.map(\.rawValue)).count,
+            CredentialTemplateKind.requiredTemplates.count
+        )
+        XCTAssertEqual(
+            CredentialTemplateKind.credentialTemplates.filter(\.usesTemplateCredentialForm),
+            [.apiToken, .apiKey, .sshKey, .certificate, .custom]
+        )
+        XCTAssertEqual(CredentialTemplateKind.apiToken.primarySecretKind, "api-token")
+        XCTAssertEqual(CredentialTemplateKind.apiKey.primarySecretKind, "api-key")
+        XCTAssertEqual(CredentialTemplateKind.sshKey.primarySecretKind, "private-key")
+        XCTAssertEqual(CredentialTemplateKind.certificate.primarySecretKind, "certificate")
+        XCTAssertEqual(CredentialTemplateKind.custom.primarySecretKind, "generic-secret")
+        XCTAssertTrue(CredentialTemplateKind.apiToken.supportsExpiry)
+        XCTAssertTrue(CredentialTemplateKind.apiKey.supportsExpiry)
+        XCTAssertTrue(CredentialTemplateKind.certificate.supportsExpiry)
+        XCTAssertFalse(CredentialTemplateKind.sshKey.supportsExpiry)
+        XCTAssertFalse(CredentialTemplateKind.custom.supportsExpiry)
+    }
+
+    func testSimpleAPITokenTemplateRequiresOnlyTitleAndSecret() {
+        var form = TemplateCredentialForm(template: .apiToken)
+        XCTAssertFalse(form.isValidForSave)
+
+        form.title = "Git hosting token"
+        XCTAssertFalse(form.isValidForSave)
+
+        form.secret = "token-marker"
+        XCTAssertTrue(form.isValidForSave)
+        XCTAssertTrue(form.expiry.isEmpty)
+        XCTAssertTrue(form.notes.isEmpty)
+        XCTAssertTrue(form.tags.isEmpty)
+    }
+
+    func testCredentialTemplateLabelsCoverEnglishChineseAndJapanese() {
+        let expectedAPITokenLabels: [AppLanguage: String] = [
+            .english: "API Token",
+            .simplifiedChinese: "API 令牌",
+            .japanese: "APIトークン"
+        ]
+        for language in AppLanguage.allCases {
+            let text = AppText(language.rawValue)
+            XCTAssertEqual(
+                text.credentialTemplateName(.apiToken),
+                expectedAPITokenLabels[language]
+            )
+            for template in CredentialTemplateKind.requiredTemplates {
+                XCTAssertFalse(
+                    text.credentialTemplateName(template)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty
+                )
+            }
+        }
+    }
+
     func testMacCommandAvailabilityTracksUnlockedAndSaveGuardState() {
         let locked = PSWMacCommandAvailability(
             isUnlocked: false,
@@ -682,13 +861,17 @@ final class PSWMacWorkflowTests: XCTestCase {
             canCopyLicenseKey: true
         )
 
-        for command in PSWMacCommand.allCases {
+        XCTAssertTrue(locked.isEnabled(.newVault))
+        XCTAssertTrue(locked.isEnabled(.openVault))
+        for command in PSWMacCommand.allCases where ![.newVault, .openVault].contains(command) {
             XCTAssertFalse(locked.isEnabled(command))
         }
 
         let unlocked = PSWMacCommandAvailability(
             isUnlocked: true,
             canSaveCurrentEditor: true,
+            canEditItem: true,
+            hasRecentVault: true,
             canCopyUsername: true,
             canCopyPassword: true,
             canCopyTotp: true,
@@ -705,6 +888,7 @@ final class PSWMacWorkflowTests: XCTestCase {
         let ineligibleLoginSelection = PSWMacCommandAvailability(
             isUnlocked: true,
             canSaveCurrentEditor: false,
+            hasRecentVault: true,
             canCopyUsername: false,
             canCopyPassword: false,
             canCopyTotp: false,
@@ -714,7 +898,11 @@ final class PSWMacWorkflowTests: XCTestCase {
             canCopyLicenseKey: false
         )
 
+        XCTAssertTrue(ineligibleLoginSelection.isEnabled(.newVault))
+        XCTAssertTrue(ineligibleLoginSelection.isEnabled(.openVault))
+        XCTAssertTrue(ineligibleLoginSelection.isEnabled(.openRecentVault))
         XCTAssertTrue(ineligibleLoginSelection.isEnabled(.newItem))
+        XCTAssertFalse(ineligibleLoginSelection.isEnabled(.editItem))
         XCTAssertFalse(ineligibleLoginSelection.isEnabled(.saveCurrentEditor))
         XCTAssertTrue(ineligibleLoginSelection.isEnabled(.focusSearch))
         XCTAssertFalse(ineligibleLoginSelection.isEnabled(.copyUsername))
@@ -733,6 +921,9 @@ final class PSWMacWorkflowTests: XCTestCase {
 
         let lockedHandler = PSWMacCommandHandler(
             availability: PSWMacCommandAvailability(isUnlocked: false, canSaveCurrentEditor: true),
+            createNewVault: { performedCommands.append(.newVault) },
+            openVault: { performedCommands.append(.openVault) },
+            openRecentVault: { performedCommands.append(.openRecentVault) },
             createNewItem: { performedCommands.append(.newItem) },
             saveCurrentEditor: { performedCommands.append(.saveCurrentEditor) },
             focusSearch: { performedCommands.append(.focusSearch) },
@@ -751,12 +942,15 @@ final class PSWMacWorkflowTests: XCTestCase {
             lockedHandler.perform(command)
         }
 
-        XCTAssertTrue(performedCommands.isEmpty)
+        XCTAssertEqual(performedCommands, [.newVault, .openVault])
+        performedCommands.removeAll()
 
         let guardedHandler = PSWMacCommandHandler(
             availability: PSWMacCommandAvailability(
                 isUnlocked: true,
                 canSaveCurrentEditor: false,
+                canEditItem: true,
+                hasRecentVault: true,
                 canCopyUsername: true,
                 canCopyPassword: true,
                 canCopyTotp: false,
@@ -765,6 +959,9 @@ final class PSWMacWorkflowTests: XCTestCase {
                 canCopyCardVerificationCode: false,
                 canCopyLicenseKey: true
             ),
+            createNewVault: { performedCommands.append(.newVault) },
+            openVault: { performedCommands.append(.openVault) },
+            openRecentVault: { performedCommands.append(.openRecentVault) },
             createNewItem: { performedCommands.append(.newItem) },
             saveCurrentEditor: { performedCommands.append(.saveCurrentEditor) },
             focusSearch: { performedCommands.append(.focusSearch) },
@@ -776,7 +973,8 @@ final class PSWMacWorkflowTests: XCTestCase {
             copyCardVerificationCode: { performedCommands.append(.copyCardVerificationCode) },
             copyLicenseKey: { performedCommands.append(.copyLicenseKey) },
             refreshSync: { performedCommands.append(.refreshSync) },
-            lockVault: { performedCommands.append(.lockVault) }
+            lockVault: { performedCommands.append(.lockVault) },
+            editCurrentItem: { performedCommands.append(.editItem) }
         )
 
         for command in PSWMacCommand.allCases {
@@ -784,7 +982,11 @@ final class PSWMacWorkflowTests: XCTestCase {
         }
 
         XCTAssertEqual(performedCommands, [
+            .newVault,
+            .openVault,
+            .openRecentVault,
             .newItem,
+            .editItem,
             .focusSearch,
             .copyUsername,
             .copyPassword,
@@ -853,6 +1055,652 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertNil(ItemListRowAction.copyPassword.destructiveAction)
     }
 
+    func testVaultItemSummarySubtitleKeepsNormalRowsQuietAndHighlightsSpecialStatus() {
+        let active = VaultItemView(
+            id: "active",
+            title: "Email",
+            itemType: "login",
+            status: "active",
+            favorite: false,
+            tags: ["personal", "mail", "ignored"]
+        )
+        let archived = VaultItemView(
+            id: "archived",
+            title: "Old Note",
+            itemType: "secure note",
+            status: "archived",
+            favorite: false,
+            tags: ["old"]
+        )
+
+        XCTAssertEqual(
+            VaultItemSummaryRow.subtitle(for: active, text: AppText("en")),
+            "Login · personal · mail"
+        )
+        XCTAssertEqual(
+            VaultItemSummaryRow.subtitle(for: archived, text: AppText("zh-Hans")),
+            "安全笔记 · 已归档"
+        )
+    }
+
+    func testVaultWorkspaceLayoutPreservesThreeUsableColumnsAtMinimumWindowWidth() {
+        XCTAssertEqual(VaultWorkspaceLayout.sidebarIdeal, 220)
+        XCTAssertEqual(VaultWorkspaceLayout.itemListIdeal, 340)
+        XCTAssertGreaterThanOrEqual(VaultWorkspaceLayout.detailMinimum, 480)
+        XCTAssertLessThanOrEqual(
+            VaultWorkspaceLayout.sidebarMinimum
+                + VaultWorkspaceLayout.itemListMinimum
+                + VaultWorkspaceLayout.detailMinimum,
+            1_040
+        )
+    }
+
+    func testVaultDetailModeDefaultsSelectedItemsToReadOnly() {
+        XCTAssertEqual(
+            VaultDetailMode(hasSelection: false, isEditing: false, isCreating: false),
+            .empty
+        )
+        XCTAssertEqual(
+            VaultDetailMode(hasSelection: true, isEditing: false, isCreating: false),
+            .readOnly
+        )
+        XCTAssertEqual(
+            VaultDetailMode(hasSelection: true, isEditing: true, isCreating: false),
+            .editing
+        )
+        XCTAssertEqual(
+            VaultDetailMode(hasSelection: false, isEditing: false, isCreating: true),
+            .creating
+        )
+        XCTAssertEqual(
+            VaultDetailMode(hasSelection: true, isEditing: true, isCreating: true),
+            .creating
+        )
+    }
+
+    func testVaultItemDetailModelKeepsProtectedValuesOutOfReadOnlyPresentation() throws {
+        let item = VaultItemView(
+            id: "login_1",
+            title: "Email",
+            itemType: "login",
+            status: "active",
+            favorite: true,
+            tags: ["personal"]
+        )
+        let detail = LoginDetail(
+            id: "login_1",
+            revision: "rev_1",
+            title: "Email",
+            username: "me@example.com",
+            url: "https://mail.example.com",
+            notes: "Primary inbox",
+            totpSecret: "JBSWY3DPEHPK3PXP",
+            favorite: true,
+            tags: ["personal"],
+            status: "active"
+        )
+
+        let model = try XCTUnwrap(VaultItemDetailModel(
+            item: item,
+            login: detail,
+            credential: nil,
+            secureNote: nil,
+            creditCard: nil,
+            softwareLicense: nil
+        ))
+        guard case let .login(login) = model.content else {
+            return XCTFail("Expected login read-only content")
+        }
+
+        XCTAssertEqual(login.username, "me@example.com")
+        XCTAssertEqual(login.urls, ["https://mail.example.com"])
+        XCTAssertEqual(login.notes, "Primary inbox")
+        XCTAssertTrue(login.hasTotpSecret)
+        XCTAssertFalse(String(reflecting: model).contains("JBSWY3DPEHPK3PXP"))
+    }
+
+    func testCredentialSummaryAndDetailDecodeStableSecretFieldIdentityWithoutValue() throws {
+        let itemData = Data(
+            """
+            {
+              "id": "credential_1",
+              "revision": "revision_1",
+              "title": "Build API",
+              "item_type": "api token",
+              "template_id": "api-token",
+              "secret_kinds": ["api-token"],
+              "status": "active",
+              "conflict_id": null,
+              "favorite": true,
+              "tags": ["automation"]
+            }
+            """.utf8
+        )
+        let item = try JSONDecoder().decode(VaultItemView.self, from: itemData)
+        XCTAssertEqual(item.credentialTemplateKind, .apiToken)
+        XCTAssertTrue(item.isTemplateCredential)
+        XCTAssertEqual(item.secretKinds, ["api-token"])
+
+        let detailData = Data(
+            """
+            {
+              "id": "credential_1",
+              "revision": "revision_1",
+              "title": "Build API",
+              "template_id": "api-token",
+              "fields": [
+                {
+                  "value_type": "secret",
+                  "role": "token",
+                  "label": null,
+                  "secret_field_id": "field_01J_STABLE",
+                  "secret_kind": "api-token",
+                  "has_value": true
+                },
+                {
+                  "value_type": "text",
+                  "role": "expiry",
+                  "label": null,
+                  "text": "2027-12-31"
+                }
+              ],
+              "favorite": true,
+              "tags": ["automation"],
+              "status": "active"
+            }
+            """.utf8
+        )
+        let detail = try JSONDecoder().decode(CredentialDetail.self, from: detailData)
+        XCTAssertEqual(detail.secretFields.map(\.secretFieldId), ["field_01J_STABLE"])
+        XCTAssertEqual(detail.secretFields.map(\.secretKind), ["api-token"])
+        XCTAssertEqual(detail.textFields.map(\.text), ["2027-12-31"])
+
+        let model = try XCTUnwrap(VaultItemDetailModel(
+            item: item,
+            login: nil,
+            credential: detail,
+            secureNote: nil,
+            creditCard: nil,
+            softwareLicense: nil
+        ))
+        guard case let .credential(credential) = model.content else {
+            return XCTFail("Expected generic credential read-only content")
+        }
+        XCTAssertEqual(credential.secretFields.map(\.secretFieldId), ["field_01J_STABLE"])
+        XCTAssertFalse(String(reflecting: model).contains("token-marker"))
+    }
+
+    func testTypedConflictCandidateDecodesRedactedSecretAndDeletionState() throws {
+        let data = Data(
+            """
+            {
+              "item_id": "credential_1",
+              "revision": "revision_deleted",
+              "title": "Deployment token",
+              "item_type": "api token",
+              "template_id": "api-token",
+              "status": "deleted",
+              "favorite": false,
+              "tags": ["automation"],
+              "comparison_fields": [],
+              "changed_fields": ["fields"],
+              "credential_fields": [
+                {
+                  "value_type": "secret",
+                  "index": 0,
+                  "role": "token",
+                  "label": "Deploy token",
+                  "secret_field_id": "secret_field_01J_STABLE",
+                  "secret_kind": "api-token",
+                  "has_value": true,
+                  "changed": true
+                },
+                {
+                  "value_type": "text",
+                  "index": 1,
+                  "role": "notes",
+                  "label": null,
+                  "text": "Production deploy",
+                  "changed": false
+                }
+              ],
+              "field_shape_changed": true,
+              "supports_safe_field_merge": false
+            }
+            """.utf8
+        )
+
+        let candidate = try JSONDecoder().decode(ConflictCandidateView.self, from: data)
+
+        XCTAssertEqual(candidate.status, "deleted")
+        XCTAssertEqual(candidate.templateId, "api-token")
+        XCTAssertTrue(candidate.fieldShapeChanged)
+        XCTAssertFalse(candidate.supportsSafeFieldMerge)
+        XCTAssertEqual(candidate.credentialFields.count, 2)
+        guard case let .secret(secret) = candidate.credentialFields[0] else {
+            return XCTFail("Expected redacted typed secret field")
+        }
+        XCTAssertEqual(secret.secretFieldId, "secret_field_01J_STABLE")
+        XCTAssertEqual(secret.secretKind, "api-token")
+        XCTAssertTrue(secret.hasValue)
+        XCTAssertTrue(secret.changed)
+        guard case let .text(textField) = candidate.credentialFields[1] else {
+            return XCTFail("Expected typed text field")
+        }
+        XCTAssertEqual(textField.text, "Production deploy")
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("private-token-marker"))
+    }
+
+    func testUnlockedPayloadDecodesPathFreeAppsToolsConflictWithLegacyDefault() throws {
+        let currentData = Data(
+            """
+            {
+              "type": "unlocked",
+              "session_id": 7,
+              "items": [],
+              "apps_tools_vault_path_conflict": true
+            }
+            """.utf8
+        )
+        guard case let .unlocked(current) = try JSONDecoder().decode(
+            CorePayload.self,
+            from: currentData
+        ) else {
+            return XCTFail("Expected unlocked payload")
+        }
+        XCTAssertTrue(current.appsToolsVaultPathConflict)
+
+        let legacyData = Data(
+            """
+            {
+              "type": "unlocked",
+              "session_id": 8,
+              "items": []
+            }
+            """.utf8
+        )
+        guard case let .unlocked(legacy) = try JSONDecoder().decode(
+            CorePayload.self,
+            from: legacyData
+        ) else {
+            return XCTFail("Expected legacy unlocked payload")
+        }
+        XCTAssertFalse(legacy.appsToolsVaultPathConflict)
+        XCTAssertFalse(String(decoding: currentData, as: UTF8.self).contains("/Users/"))
+    }
+
+    func testAuthorizedCredentialIdsPayloadDecodesStableIdentitiesOnly() throws {
+        let data = Data(
+            """
+            {
+              "type": "authorizedCredentialIds",
+              "credential_ids": [
+                "credential_01J_AUTHORIZED",
+                "credential_01J_SECOND"
+              ]
+            }
+            """.utf8
+        )
+
+        guard case let .authorizedCredentialIds(payload) = try JSONDecoder().decode(
+            CorePayload.self,
+            from: data
+        ) else {
+            return XCTFail("Expected authorized credential identity payload")
+        }
+        XCTAssertEqual(
+            payload.credentialIds,
+            ["credential_01J_AUTHORIZED", "credential_01J_SECOND"]
+        )
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("secret-marker"))
+    }
+
+    func testAppsToolsConsumerDetailPayloadDecodesOnlyManagementMetadata() throws {
+        let data = Data(
+            """
+            {
+              "type": "appsToolsConsumerDetail",
+              "detail": {
+                "consumer": {
+                  "consumer_id": "consumer_01",
+                  "label": "Local adapter",
+                  "identity": {
+                    "executable_name": "adapter",
+                    "bundle_identifier": "com.example.adapter",
+                    "team_identifier": "EXAMPLE",
+                    "code_signing_evidence": "verified-with-team-identifier",
+                    "code_signature_fingerprint": "0102-0304-0506-0708"
+                  },
+                  "access_rule_count": 1,
+                  "usage_profile_count": 1,
+                  "created_at_ms": 100
+                },
+                "field_grants": [{
+                  "access_rule_id": "access_rule_01",
+                  "field": {
+                    "vault_id": "vault_01",
+                    "credential_id": "credential_01",
+                    "secret_field_id": "secret_field_01",
+                    "current_vault": true,
+                    "credential_title": "Deploy Token",
+                    "field_label": "Token",
+                    "secret_kind": "api-token"
+                  },
+                  "capability": "process.run",
+                  "capability_version": 1,
+                  "confirmation_policy": "every-use",
+                  "lifetime": "persistent",
+                  "expires_at_ms": null,
+                  "created_at_ms": 110,
+                  "active": true
+                }],
+                "usage_profiles": [{
+                  "usage_profile_id": "usage_profile_01",
+                  "label": "Child environment",
+                  "capability": "process.run",
+                  "capability_version": 1,
+                  "placement": {
+                    "kind": "process-environment",
+                    "variable_name": "SERVICE_TOKEN",
+                    "append_newline": null,
+                    "reference_variable_name": null,
+                    "render_dev_fd_path": null,
+                    "header_name": null
+                  },
+                  "created_at_ms": 120
+                }],
+                "recent_audit_events": [{
+                  "audit_event_id": "audit_event_01",
+                  "occurred_at_ms": 130,
+                  "kind": "credential-use",
+                  "field": null,
+                  "capability": "process.run",
+                  "capability_version": 1,
+                  "decision": "allowed",
+                  "confirmation_method": "user-approval"
+                }]
+              }
+            }
+            """.utf8
+        )
+
+        guard case let .appsToolsConsumerDetail(payload) = try JSONDecoder().decode(
+            CorePayload.self,
+            from: data
+        ) else {
+            return XCTFail("Expected Apps & Tools Consumer detail payload")
+        }
+        XCTAssertEqual(payload.detail.consumer.identity.executableName, "adapter")
+        XCTAssertEqual(payload.detail.fieldGrants.first?.confirmationPolicy, "every-use")
+        XCTAssertEqual(
+            payload.detail.usageProfiles.first?.placement.variableName,
+            "SERVICE_TOKEN"
+        )
+        XCTAssertEqual(payload.detail.recentAuditEvents.first?.decision, "allowed")
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("seeded-secret-marker"))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("/Users/"))
+    }
+
+    func testAppsToolsUsageProfilePayloadsDecodeTemplatesRecommendationsAndReceipts() throws {
+        let setupData = Data(
+            """
+            {
+              "type": "appsToolsUsageProfileSetup",
+              "setup": {
+                "consumer_id": "consumer_01",
+                "templates": [{
+                  "template_id": "http-bearer-authorization",
+                  "capability": "http.request",
+                  "capability_version": 1,
+                  "technical_field": "none",
+                  "suggested_value": null
+                }, {
+                  "template_id": "http-api-key-header",
+                  "capability": "http.request",
+                  "capability_version": 1,
+                  "technical_field": "http-header-name",
+                  "suggested_value": "X-API-Key"
+                }, {
+                  "template_id": "cli-environment-variable",
+                  "capability": "process.run",
+                  "capability_version": 1,
+                  "technical_field": "environment-variable-name",
+                  "suggested_value": null
+                }],
+                "recommendation": {
+                  "recommendation_id": "github-cli",
+                  "template_id": "cli-environment-variable",
+                  "technical_name": "GH_TOKEN"
+                }
+              }
+            }
+            """.utf8
+        )
+        guard case let .appsToolsUsageProfileSetup(setupPayload) =
+            try JSONDecoder().decode(CorePayload.self, from: setupData)
+        else {
+            return XCTFail("Expected Usage Profile setup payload")
+        }
+        XCTAssertEqual(setupPayload.setup.consumerId, "consumer_01")
+        XCTAssertEqual(
+            setupPayload.setup.templates.map(\.templateId),
+            [
+                "http-bearer-authorization",
+                "http-api-key-header",
+                "cli-environment-variable",
+            ]
+        )
+        XCTAssertEqual(setupPayload.setup.recommendation?.recommendationId, "github-cli")
+        XCTAssertEqual(setupPayload.setup.recommendation?.technicalName, "GH_TOKEN")
+
+        let createdData = Data(
+            """
+            {
+              "type": "appsToolsUsageProfileCreated",
+              "consumer_id": "consumer_01",
+              "profile": {
+                "usage_profile_id": "usage_profile_01",
+                "label": "GitHub CLI",
+                "capability": "process.run",
+                "capability_version": 1,
+                "placement": {
+                  "kind": "process-environment",
+                  "variable_name": "GH_TOKEN",
+                  "append_newline": null,
+                  "reference_variable_name": null,
+                  "render_dev_fd_path": null,
+                  "header_name": null
+                },
+                "created_at_ms": 120
+              }
+            }
+            """.utf8
+        )
+        guard case let .appsToolsUsageProfileCreated(createdPayload) =
+            try JSONDecoder().decode(CorePayload.self, from: createdData)
+        else {
+            return XCTFail("Expected Usage Profile creation receipt")
+        }
+        XCTAssertEqual(createdPayload.consumerId, "consumer_01")
+        XCTAssertEqual(createdPayload.profile.usageProfileId, "usage_profile_01")
+        XCTAssertEqual(createdPayload.profile.placement.variableName, "GH_TOKEN")
+
+        let removedData = Data(
+            """
+            {
+              "type": "appsToolsUsageProfileRemoved",
+              "consumer_id": "consumer_01",
+              "usage_profile_id": "usage_profile_01",
+              "removed": true
+            }
+            """.utf8
+        )
+        guard case let .appsToolsUsageProfileRemoved(removedPayload) =
+            try JSONDecoder().decode(CorePayload.self, from: removedData)
+        else {
+            return XCTFail("Expected Usage Profile removal receipt")
+        }
+        XCTAssertEqual(removedPayload.consumerId, "consumer_01")
+        XCTAssertEqual(removedPayload.usageProfileId, "usage_profile_01")
+        XCTAssertTrue(removedPayload.removed)
+
+        for data in [setupData, createdData, removedData] {
+            let serialized = String(decoding: data, as: UTF8.self)
+            XCTAssertFalse(serialized.contains("seeded-secret-marker"))
+            XCTAssertFalse(serialized.contains("/Users/"))
+            XCTAssertFalse(serialized.contains("\"script\""))
+            XCTAssertFalse(serialized.contains("\"command\""))
+        }
+    }
+
+    func testAppsToolsPendingRequestQueuePayloadDecodesWithoutSecretOrPathMaterial() throws {
+        let data = Data(
+            """
+            {
+              "type": "appsToolsPendingRequests",
+              "queue": {
+                "pending_count": 1,
+                "requests": [{
+                  "request_source": "pairing",
+                  "request_id": "pairing_request_01",
+                  "kind": "pairing",
+                  "consumer_id": null,
+                  "consumer_label": null,
+                  "identity": {
+                    "executable_name": "local-adapter",
+                    "bundle_identifier": "com.example.adapter",
+                    "team_identifier": null,
+                    "code_signing_evidence": "verified-without-team-identifier",
+                    "code_signature_fingerprint": "0102-0304-0506-0708"
+                  },
+                  "pairing_comparison_code": "0123456789",
+                  "pairing_key_fingerprint": "1112-1314-1516-1718",
+                  "vault_id": null,
+                  "credential_id": null,
+                  "secret_field_id": null,
+                  "capability": null,
+                  "capability_version": null,
+                  "request_description": null,
+                  "created_at_ms": null,
+                  "expires_at_ms": null,
+                  "remaining_ms": 300000
+                }]
+              }
+            }
+            """.utf8
+        )
+
+        guard case let .appsToolsPendingRequests(payload) = try JSONDecoder().decode(
+            CorePayload.self,
+            from: data
+        ) else {
+            return XCTFail("Expected Apps & Tools pending request payload")
+        }
+        XCTAssertEqual(payload.queue.pendingCount, 1)
+        XCTAssertEqual(payload.queue.requests.first?.id, "pairing:pairing_request_01")
+        XCTAssertEqual(payload.queue.requests.first?.pairingComparisonCode, "0123456789")
+        XCTAssertEqual(payload.queue.requests.first?.identity?.executableName, "local-adapter")
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("seeded-secret-marker"))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("/Users/"))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("pairing_public_key"))
+    }
+
+    func testAppsToolsDecisionAndCredentialReviewPayloadsDecodeWithoutSecretMaterial() throws {
+        let decisionData = Data(
+            """
+            {
+              "type": "appsToolsPendingRequestDecision",
+              "decision": {
+                "action": "configure-long-term-access",
+                "status": "approved",
+                "use_grant_id": null,
+                "access_rule_id": "access_rule_01"
+              }
+            }
+            """.utf8
+        )
+        guard case let .appsToolsPendingRequestDecision(payload) = try JSONDecoder().decode(
+            CorePayload.self,
+            from: decisionData
+        ) else {
+            return XCTFail("Expected Apps & Tools decision payload")
+        }
+        XCTAssertEqual(payload.decision.action, "configure-long-term-access")
+        XCTAssertEqual(payload.decision.accessRuleId, "access_rule_01")
+        XCTAssertNil(payload.decision.useGrantId)
+
+        let reviewData = Data(
+            """
+            {
+              "type": "appsToolsCredentialReview",
+              "review": {
+                "request_id": "approval_request_01",
+                "request_description": "release credential",
+                "capability": "process.run",
+                "capability_version": 1,
+                "truncated": false,
+                "candidates": [{
+                  "credential_id": "credential_01",
+                  "title": "Release Token",
+                  "template_id": "api-token",
+                  "tags": ["release"],
+                  "favorite": true,
+                  "secret_fields": [{
+                    "secret_field_id": "secret_field_01",
+                    "role": "token",
+                    "label": "Production",
+                    "kind": "api-token"
+                  }]
+                }]
+              }
+            }
+            """.utf8
+        )
+        guard case let .appsToolsCredentialReview(reviewPayload) = try JSONDecoder().decode(
+            CorePayload.self,
+            from: reviewData
+        ) else {
+            return XCTFail("Expected Apps & Tools credential review payload")
+        }
+        XCTAssertEqual(reviewPayload.review.candidates.first?.title, "Release Token")
+        XCTAssertEqual(
+            reviewPayload.review.candidates.first?.secretFields.first?.kind,
+            "api-token"
+        )
+        let serialized = String(decoding: reviewData, as: UTF8.self)
+        XCTAssertFalse(serialized.contains("seeded-secret-marker"))
+        XCTAssertFalse(serialized.contains("/Users/"))
+    }
+
+    func testVaultItemDetailCapabilitiesMapFieldCopyActions() {
+        let capabilities = VaultItemDetailCapabilities(
+            canEdit: true,
+            canCopyLoginFields: true,
+            canCopyTotp: false,
+            canOpenURL: true,
+            canCopySecureNoteBody: false,
+            canCopyCreditCardFields: true,
+            canCopySoftwareLicenseFields: false,
+            canCopyCredentialFields: false,
+            canRevealSecrets: true,
+            canToggleFavorite: true,
+            canDuplicate: true,
+            canResolveConflict: false,
+            canRestoreArchive: false,
+            canArchive: true,
+            canDelete: true
+        )
+
+        XCTAssertTrue(capabilities.canCopy(.username))
+        XCTAssertTrue(capabilities.canCopy(.password))
+        XCTAssertTrue(capabilities.canCopy(.url("https://example.com")))
+        XCTAssertFalse(capabilities.canCopy(.totp))
+        XCTAssertFalse(capabilities.canCopy(.secureNoteBody))
+        XCTAssertTrue(capabilities.canCopy(.cardNumber))
+        XCTAssertTrue(capabilities.canCopy(.cardVerificationCode))
+        XCTAssertFalse(capabilities.canCopy(.licenseKey))
+    }
+
     func testSecretCopyCommandsUseExistingClipboardWorkflows() {
         let service = FakeCoreService(seedItems: [
             SeedLogin(
@@ -890,6 +1738,9 @@ final class PSWMacWorkflowTests: XCTestCase {
                     canCopyCardVerificationCode: store.canCopyCreditCardFields,
                     canCopyLicenseKey: store.canCopySoftwareLicenseFields
                 ),
+                createNewVault: {},
+                openVault: {},
+                openRecentVault: {},
                 createNewItem: {},
                 saveCurrentEditor: {},
                 focusSearch: {},
@@ -1308,6 +2159,36 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertTrue(loginDrafts.hasUnsavedChanges(isUnlocked: true, activeKind: .login))
         XCTAssertFalse(loginDrafts.hasUnsavedChanges(isUnlocked: true, activeKind: .secureNote))
 
+        var templateCredentialDrafts = EditorDraftState()
+        templateCredentialDrafts.templateCredential.title = "Build API"
+        XCTAssertTrue(
+            templateCredentialDrafts.hasUnsavedChanges(
+                isUnlocked: true,
+                activeKind: .templateCredential
+            )
+        )
+        XCTAssertFalse(
+            templateCredentialDrafts.hasUnsavedChanges(
+                isUnlocked: true,
+                activeKind: .login
+            )
+        )
+
+        var credentialDrafts = EditorDraftState()
+        credentialDrafts.credential.title = "Build API"
+        XCTAssertTrue(
+            credentialDrafts.hasUnsavedChanges(
+                isUnlocked: true,
+                activeKind: .credential
+            )
+        )
+        XCTAssertFalse(
+            credentialDrafts.hasUnsavedChanges(
+                isUnlocked: true,
+                activeKind: .templateCredential
+            )
+        )
+
         var secureNoteDrafts = EditorDraftState()
         secureNoteDrafts.secureNote.body = "offline backup codes"
         XCTAssertTrue(secureNoteDrafts.hasUnsavedChanges(isUnlocked: true, activeKind: .secureNote))
@@ -1325,6 +2206,8 @@ final class PSWMacWorkflowTests: XCTestCase {
 
         for kind in ItemEditorKind.allCases {
             XCTAssertFalse(loginDrafts.hasUnsavedChanges(isUnlocked: false, activeKind: kind))
+            XCTAssertFalse(templateCredentialDrafts.hasUnsavedChanges(isUnlocked: false, activeKind: kind))
+            XCTAssertFalse(credentialDrafts.hasUnsavedChanges(isUnlocked: false, activeKind: kind))
             XCTAssertFalse(secureNoteDrafts.hasUnsavedChanges(isUnlocked: false, activeKind: kind))
             XCTAssertFalse(cardDrafts.hasUnsavedChanges(isUnlocked: false, activeKind: kind))
             XCTAssertFalse(licenseDrafts.hasUnsavedChanges(isUnlocked: false, activeKind: kind))
@@ -4039,16 +4922,43 @@ final class PSWMacWorkflowTests: XCTestCase {
         let defaultsName = "PSWMacWorkflowTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: defaultsName)!
         defer { defaults.removePersistentDomain(forName: defaultsName) }
+        let rawSecretMarker = "KN_SECRET_63_C8B1"
+        let titleMarker = "KN_TITLE_63_28D4"
+        let urlMarker = "https://kn-url-63.invalid/9e71"
+        let requestBodyMarker = "KN_REQ_BODY_63_20AF"
+        let commandArgumentsMarker = "KN_ARGS_63_674C"
+        let executablePathMarker = "/Applications/KN_EXEC_PATH_63_447A/agent"
+        let standardOutputMarker = "KN_STDOUT_63_18E2"
+        let standardErrorMarker = "KN_STDERR_63_B039"
+        let responseBodyMarker = "KN_RESP_BODY_63_0D55"
+        let usernameMarker = "KN_USERNAME_63_5A91"
+        let notesMarker = "KN_NOTES_63_9FF0"
+        let tagMarker = "KN_TAG_63_407B"
+        let forbiddenMarkers = [
+            rawSecretMarker,
+            titleMarker,
+            urlMarker,
+            requestBodyMarker,
+            commandArgumentsMarker,
+            executablePathMarker,
+            standardOutputMarker,
+            standardErrorMarker,
+            responseBodyMarker,
+            usernameMarker,
+            notesMarker,
+            tagMarker
+        ]
         let service = FakeCoreService(seedItems: [
             SeedLogin(
-                title: "Email",
-                username: "me@example.com",
-                password: "email-password",
-                url: "https://mail.example.com",
-                notes: "Primary inbox",
-                tags: ["personal"]
+                title: titleMarker,
+                username: usernameMarker,
+                password: rawSecretMarker,
+                url: urlMarker,
+                notes: "\(notesMarker) \(requestBodyMarker) \(responseBodyMarker)",
+                tags: [tagMarker, commandArgumentsMarker, standardOutputMarker, standardErrorMarker]
             )
         ])
+        service.status = forbiddenMarkers.joined(separator: " | ")
         let store = VaultStore(
             service: service,
             clipboard: FakeClipboard(),
@@ -4075,7 +4985,7 @@ final class PSWMacWorkflowTests: XCTestCase {
             items: [
                 VaultItemView(
                     id: "sync_item",
-                    title: "Confidential Bank",
+                    title: titleMarker,
                     itemType: "login",
                     status: "active",
                     favorite: false,
@@ -4093,6 +5003,7 @@ final class PSWMacWorkflowTests: XCTestCase {
 
         XCTAssertTrue(report.contains("KeptNear Diagnostics"))
         XCTAssertTrue(report.contains("Core available: yes"))
+        XCTAssertTrue(report.contains("Core status: connected"))
         XCTAssertTrue(report.contains("Vault selected: yes"))
         XCTAssertTrue(report.contains("Vault name: Synced.pswvault"))
         XCTAssertTrue(report.contains("Vault unlocked: yes"))
@@ -4115,25 +5026,55 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertFalse(report.contains(vaultURL.path))
         XCTAssertFalse(report.contains("/Users/tester"))
         XCTAssertFalse(report.contains("CloudDocs"))
-        XCTAssertFalse(report.contains("Email"))
-        XCTAssertFalse(report.contains("Confidential Bank"))
-        XCTAssertFalse(report.contains("me@example.com"))
-        XCTAssertFalse(report.contains("email-password"))
         XCTAssertFalse(report.contains("correct horse"))
         XCTAssertFalse(report.contains("Strength"))
         XCTAssertFalse(report.contains("Weak"))
         XCTAssertFalse(report.contains("Very strong"))
-        XCTAssertFalse(report.contains("https://mail.example.com"))
-        XCTAssertFalse(report.contains("Primary inbox"))
         XCTAssertFalse(report.contains("bitwarden-export.json"))
         XCTAssertFalse(report.contains(importURL.path))
         XCTAssertFalse(report.contains("psw-plaintext-export.json"))
         XCTAssertFalse(report.contains(exportURL.path))
         XCTAssertFalse(report.contains("bad_bank.enc"))
         XCTAssertFalse(report.contains("bad_delete.enc"))
+        for marker in forbiddenMarkers {
+            XCTAssertFalse(report.contains(marker), "diagnostics leaked \(marker)")
+        }
 
         store.copyDiagnostics(languageRaw: AppLanguage.english.rawValue)
         XCTAssertEqual(store.statusMessage, "Diagnostics copied")
+    }
+
+    func testDiagnosticsSnapshotUsesOnlyApprovedSupportFields() {
+        let store = VaultStore(
+            service: FakeCoreService(),
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        let snapshot = store.diagnosticsSnapshot(languageRaw: AppLanguage.english.rawValue)
+        let labels = Set(Mirror(reflecting: snapshot).children.compactMap { $0.label })
+
+        XCTAssertEqual(labels, Set([
+            "appName",
+            "appVersion",
+            "appBuild",
+            "coreAvailable",
+            "coreStatus",
+            "vaultSelected",
+            "vaultName",
+            "unlocked",
+            "itemCount",
+            "plaintextImportCleanupPending",
+            "plaintextExportCleanupPending",
+            "convenienceUnlockAvailable",
+            "syncReadiness",
+            "sync",
+            "syncRefreshDeferredByUnsavedEdits",
+            "clipboardTimeoutSeconds",
+            "autoLockSeconds",
+            "language"
+        ]))
     }
 
     func testDiagnosticsReportIncludesConvenienceUnlockAvailabilityWithoutMaterial() {
@@ -4335,7 +5276,12 @@ final class PSWMacWorkflowTests: XCTestCase {
         let exportURL = URL(fileURLWithPath: "/tmp/export.json")
 
         XCTAssertFalse(store.canExport)
-        XCTAssertFalse(store.exportItems(destinationURL: exportURL))
+        XCTAssertFalse(
+            store.exportItems(
+                destinationURL: exportURL,
+                currentMasterPassword: "correct horse"
+            )
+        )
         XCTAssertNil(service.exportedPath)
 
         store.createVault(
@@ -4347,16 +5293,38 @@ final class PSWMacWorkflowTests: XCTestCase {
         service.nextExportResult = ExportResultPayload(
             exportedRecords: 2,
             skippedRecords: 1,
-            warnings: ["Export file contains plaintext secrets."]
+            warnings: ["Export file contains plaintext secrets."],
+            omissions: [
+                ExportOmissionPayload(reason: "conflicted-credential", count: 1)
+            ]
         )
 
         XCTAssertTrue(store.canExport)
-        XCTAssertTrue(store.exportItems(destinationURL: exportURL))
+        XCTAssertFalse(
+            store.exportItems(
+                destinationURL: exportURL,
+                currentMasterPassword: ""
+            )
+        )
+        XCTAssertEqual(store.statusMessage, "Current master password is required")
+        XCTAssertNil(service.exportedPath)
+        XCTAssertNil(service.exportedCurrentPassword)
+        XCTAssertTrue(
+            store.exportItems(
+                destinationURL: exportURL,
+                currentMasterPassword: "correct horse"
+            )
+        )
 
         XCTAssertEqual(service.exportedPath, exportURL.path)
-        XCTAssertEqual(service.exportedFormat, "bitwarden-json")
+        XCTAssertEqual(service.exportedFormat, "keptnear-json")
+        XCTAssertEqual(service.exportedCurrentPassword, "correct horse")
         XCTAssertEqual(store.exportResult?.exportedRecords, 2)
         XCTAssertEqual(store.exportResult?.skippedRecords, 1)
+        XCTAssertEqual(
+            store.exportResult?.omissions,
+            [ExportOmissionPayload(reason: "conflicted-credential", count: 1)]
+        )
         XCTAssertEqual(store.exportResult?.warnings, ["Export file contains plaintext secrets."])
         XCTAssertEqual(store.plaintextExportURL?.path, exportURL.path)
         XCTAssertEqual(store.statusMessage, "Export completed: 2 exported, 1 skipped")
@@ -4397,7 +5365,12 @@ final class PSWMacWorkflowTests: XCTestCase {
         store.setEditorHasUnsavedChanges(true)
 
         XCTAssertFalse(store.canExport)
-        XCTAssertFalse(store.exportItems(destinationURL: exportURL))
+        XCTAssertFalse(
+            store.exportItems(
+                destinationURL: exportURL,
+                currentMasterPassword: "correct horse"
+            )
+        )
         XCTAssertNil(service.exportedPath)
         XCTAssertNil(store.exportResult)
         XCTAssertNil(store.plaintextExportURL)
@@ -4755,7 +5728,12 @@ final class PSWMacWorkflowTests: XCTestCase {
             password: "correct horse",
             confirmation: "correct horse"
         )
-        XCTAssertTrue(store.exportItems(destinationURL: exportURL))
+        XCTAssertTrue(
+            store.exportItems(
+                destinationURL: exportURL,
+                currentMasterPassword: "correct horse"
+            )
+        )
 
         store.movePlaintextExportToTrash()
 
@@ -5127,7 +6105,13 @@ final class PSWMacWorkflowTests: XCTestCase {
             skippedRecords: 0,
             warnings: ["Software license items were exported as secure notes."]
         )
-        XCTAssertTrue(store.exportItems(destinationURL: URL(fileURLWithPath: "/tmp/structured-export.json")))
+        XCTAssertTrue(
+            store.exportItems(
+                destinationURL: URL(fileURLWithPath: "/tmp/structured-export.json"),
+                currentMasterPassword: "correct horse",
+                exportFormat: "bitwarden-json"
+            )
+        )
         XCTAssertEqual(service.exportedFormat, "bitwarden-json")
         XCTAssertEqual(store.exportResult?.exportedRecords, 2)
         XCTAssertEqual(store.statusMessage, "Export completed: 2 exported, 0 skipped")
@@ -6907,6 +7891,50 @@ final class PSWMacWorkflowTests: XCTestCase {
         wait(for: [locked], timeout: 1.0)
     }
 
+    func testVaultPathConflictKeepsHumanVaultUnlockedAndFailsAppsToolsClosed() {
+        let service = FakeCoreService(seedItems: [
+            SeedLogin(
+                title: "Email",
+                username: "me@example.com",
+                password: "email-password",
+                url: "https://mail.example.com",
+                notes: "",
+                tags: []
+            )
+        ])
+        service.appsToolsVaultPathConflict = true
+        service.nextAuthorizedCredentialIds = ["item_1"]
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+        let selectedPath = "/tmp/private-copy-marker/Personal.pswvault"
+
+        store.openVault(url: URL(fileURLWithPath: selectedPath))
+        store.unlock(password: "correct horse")
+
+        XCTAssertTrue(store.isUnlocked)
+        XCTAssertEqual(store.items.map(\.title), ["Email"])
+        XCTAssertTrue(store.appsToolsVaultPathConflict)
+        XCTAssertFalse(store.appsToolsAuthorizationInventoryAvailable)
+        XCTAssertTrue(store.authorizedCredentialIds.isEmpty)
+        XCTAssertEqual(store.appsToolsSnapshot, .empty)
+        XCTAssertEqual(service.authorizedCredentialIdsCallCount, 0)
+        XCTAssertEqual(store.statusMessage, VaultStore.appsToolsVaultPathConflictStatus)
+        XCTAssertFalse(store.statusMessage.contains(selectedPath))
+
+        XCTAssertTrue(store.applyNavigationDestination(.appsAndTools))
+        XCTAssertEqual(service.authorizedCredentialIdsCallCount, 0)
+        XCTAssertEqual(store.statusMessage, VaultStore.appsToolsVaultPathConflictStatus)
+
+        store.lock()
+        XCTAssertFalse(store.isUnlocked)
+        XCTAssertFalse(store.appsToolsVaultPathConflict)
+        XCTAssertTrue(store.appsToolsAuthorizationInventoryAvailable)
+    }
+
     func testCreateUnlockSearchCopyAndManualLockWorkflow() {
         let service = FakeCoreService()
         let clipboard = FakeClipboard()
@@ -6976,6 +8004,317 @@ final class PSWMacWorkflowTests: XCTestCase {
 
         store.disableConvenienceUnlock()
         XCTAssertFalse(store.convenienceUnlockAvailable)
+    }
+
+    func testTemplateCredentialCreateSearchRevealAndCopyWorkflow() throws {
+        let service = FakeCoreService()
+        let clipboard = FakeClipboard()
+        let store = VaultStore(
+            service: service,
+            clipboard: clipboard,
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: URL(fileURLWithPath: "/tmp/Developer.pswvault"))
+        store.unlock(password: "correct horse")
+
+        let secretMarker = "kn-test-api-token-never-index"
+        var form = TemplateCredentialForm(template: .apiToken)
+        form.title = "Build API"
+        form.secret = secretMarker
+        form.notes = "Integration environment"
+        form.tagsText = "automation, local"
+
+        XCTAssertEqual(store.saveTemplateCredential(form: form), .saved)
+        XCTAssertEqual(service.createCredentialCallCount, 1)
+        XCTAssertEqual(store.selectedItem?.credentialTemplateKind, .apiToken)
+        XCTAssertEqual(store.selectedItem?.secretKinds, ["api-token"])
+        let detail = try XCTUnwrap(store.selectedCredentialDetail)
+        XCTAssertEqual(detail.textFields.map(\.text), ["Integration environment"])
+        XCTAssertFalse(String(reflecting: detail).contains(secretMarker))
+
+        let secretFieldId = try XCTUnwrap(detail.secretFields.first?.secretFieldId)
+        XCTAssertEqual(
+            store.revealSelectedCredentialSecret(secretFieldId: secretFieldId),
+            secretMarker
+        )
+        XCTAssertNil(
+            store.revealSelectedCredentialSecret(secretFieldId: "field_not_authorized")
+        )
+        store.copyCredentialSecret(secretFieldId: secretFieldId)
+        XCTAssertEqual(clipboard.currentValue, secretMarker)
+        XCTAssertEqual(
+            service.credentialSecretFieldRequests,
+            [secretFieldId, secretFieldId]
+        )
+
+        store.searchText = "Integration environment"
+        XCTAssertTrue(store.search())
+        XCTAssertEqual(store.items.map(\.title), ["Build API"])
+
+        store.searchText = secretMarker
+        XCTAssertTrue(store.search())
+        XCTAssertTrue(store.items.isEmpty)
+    }
+
+    func testCredentialEditorFormKeepsSavedSecretsOutOfTheDraft() throws {
+        let detail = CredentialDetail(
+            id: "credential_stable",
+            revision: "revision_stable",
+            title: "Build API",
+            templateId: CredentialTemplateKind.apiToken.rawValue,
+            fields: [
+                .text(.init(role: "account", label: "Account", text: "chasechou007")),
+                .secret(.init(
+                    role: "token",
+                    label: "Build token",
+                    secretFieldId: "secret_field_stable",
+                    secretKind: CredentialSecretKind.apiToken.rawValue,
+                    hasValue: true
+                ))
+            ],
+            favorite: true,
+            tags: ["automation"],
+            status: "active"
+        )
+
+        var form = CredentialEditorForm(detail: detail)
+
+        XCTAssertEqual(form.revision, detail.revision)
+        XCTAssertEqual(form.fields.map(\.role), ["account", "token"])
+        XCTAssertEqual(form.fields[1].secretFieldId, "secret_field_stable")
+        XCTAssertEqual(form.fields[1].secretInput, "")
+        XCTAssertTrue(form.fields[1].hasSavedSecret)
+        XCTAssertTrue(form.isValidForSave)
+
+        form.addSecretField()
+        XCTAssertFalse(form.isValidForSave)
+        form.fields[2].secretInput = "new-secret-marker"
+        XCTAssertTrue(form.isValidForSave)
+        let originalSecretRowId = form.fields[1].id
+        form.moveField(id: originalSecretRowId, offset: -1)
+        XCTAssertEqual(form.fields[0].secretFieldId, "secret_field_stable")
+        form.fields[0].label = "Renamed token"
+        XCTAssertEqual(form.fields[0].secretFieldId, "secret_field_stable")
+    }
+
+    func testFieldAwareCredentialEditPreservesReplacesAddsAndRemovesSecrets() throws {
+        let service = FakeCoreService()
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: URL(fileURLWithPath: "/tmp/FieldAware.pswvault"))
+        store.unlock(password: "correct horse")
+
+        var creation = TemplateCredentialForm(template: .apiToken)
+        creation.title = "Build API"
+        creation.secret = "saved-secret-marker"
+        creation.notes = "Initial notes"
+        XCTAssertEqual(store.saveTemplateCredential(form: creation), .saved)
+        let originalDetail = try XCTUnwrap(store.selectedCredentialDetail)
+        let originalSecretFieldId = try XCTUnwrap(
+            originalDetail.secretFields.first?.secretFieldId
+        )
+
+        var edit = CredentialEditorForm(detail: originalDetail)
+        edit.title = "Build API Renamed"
+        edit.fields[0].role = "access-token"
+        edit.fields[0].label = "Build token"
+        XCTAssertEqual(edit.fields[0].secretInput, "")
+        edit.addTextField()
+        edit.fields[edit.fields.count - 1].role = "account"
+        edit.fields[edit.fields.count - 1].text = "chasechou007"
+        edit.addSecretField()
+        edit.fields[edit.fields.count - 1].role = "fallback"
+        edit.fields[edit.fields.count - 1].label = "Fallback"
+        edit.fields[edit.fields.count - 1].secretKind =
+            CredentialSecretKind.genericSecret.rawValue
+        edit.fields[edit.fields.count - 1].secretInput = "new-secret-marker"
+        edit.tagsText = "automation, local"
+        edit.favorite = true
+
+        XCTAssertEqual(store.saveCredential(form: edit), .saved)
+        XCTAssertEqual(service.updateCredentialCallCount, 1)
+        XCTAssertEqual(
+            service.lastCredentialUpdateForm?.fields.first?.secretInput,
+            ""
+        )
+        let updatedDetail = try XCTUnwrap(store.selectedCredentialDetail)
+        XCTAssertEqual(updatedDetail.title, "Build API Renamed")
+        XCTAssertEqual(updatedDetail.fields.map {
+            switch $0 {
+            case let .text(field): return field.role
+            case let .secret(field): return field.role
+            }
+        }, ["access-token", "notes", "account", "fallback"])
+        XCTAssertEqual(
+            updatedDetail.secretFields.first?.secretFieldId,
+            originalSecretFieldId
+        )
+        let addedSecretFieldId = try XCTUnwrap(
+            updatedDetail.secretFields.last?.secretFieldId
+        )
+        XCTAssertNotEqual(addedSecretFieldId, originalSecretFieldId)
+        XCTAssertEqual(
+            store.revealSelectedCredentialSecret(secretFieldId: originalSecretFieldId),
+            "saved-secret-marker"
+        )
+        XCTAssertEqual(
+            store.revealSelectedCredentialSecret(secretFieldId: addedSecretFieldId),
+            "new-secret-marker"
+        )
+
+        var deletion = CredentialEditorForm(detail: updatedDetail)
+        let addedRowId = try XCTUnwrap(
+            deletion.fields.first(where: { $0.secretFieldId == addedSecretFieldId })?.id
+        )
+        deletion.removeField(id: addedRowId)
+        XCTAssertEqual(store.saveCredential(form: deletion), .saved)
+        XCTAssertEqual(store.selectedCredentialDetail?.secretFields.count, 1)
+        XCTAssertEqual(
+            store.selectedCredentialDetail?.secretFields.first?.secretFieldId,
+            originalSecretFieldId
+        )
+
+        var replacement = CredentialEditorForm(
+            detail: try XCTUnwrap(store.selectedCredentialDetail)
+        )
+        replacement.fields[0].secretInput = "replacement-secret-marker"
+        XCTAssertEqual(store.saveCredential(form: replacement), .saved)
+        XCTAssertEqual(
+            store.selectedCredentialDetail?.secretFields.first?.secretFieldId,
+            originalSecretFieldId
+        )
+        XCTAssertEqual(
+            store.revealSelectedCredentialSecret(secretFieldId: originalSecretFieldId),
+            "replacement-secret-marker"
+        )
+    }
+
+    func testTemplateCredentialLifecycleUsesStableFieldsAndSafeRustSideDuplication() throws {
+        let service = FakeCoreService()
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: URL(fileURLWithPath: "/tmp/CredentialLifecycle.pswvault"))
+        store.unlock(password: "correct horse")
+
+        var creation = TemplateCredentialForm(template: .apiToken)
+        creation.title = "Build API"
+        creation.secret = "lifecycle-secret-marker"
+        XCTAssertEqual(store.saveTemplateCredential(form: creation), .saved)
+        let originalItemId = try XCTUnwrap(store.selectedItemId)
+        let originalSecretFieldId = try XCTUnwrap(
+            store.selectedCredentialDetail?.secretFields.first?.secretFieldId
+        )
+
+        XCTAssertTrue(store.toggleFavoriteSelected())
+        XCTAssertEqual(service.setFavoriteCallCount, 1)
+        XCTAssertEqual(store.selectedItemId, originalItemId)
+        XCTAssertEqual(
+            store.selectedCredentialDetail?.secretFields.first?.secretFieldId,
+            originalSecretFieldId
+        )
+        XCTAssertEqual(store.selectedCredentialDetail?.favorite, true)
+
+        XCTAssertTrue(store.canDuplicateSelectedItem)
+        XCTAssertTrue(store.duplicateSelectedItem())
+        XCTAssertEqual(service.duplicateCredentialCallCount, 1)
+        let duplicateItemId = try XCTUnwrap(store.selectedItemId)
+        XCTAssertNotEqual(duplicateItemId, originalItemId)
+        XCTAssertEqual(store.selectedItem?.title, "Build API Copy")
+        let duplicateSecretFieldId = try XCTUnwrap(
+            store.selectedCredentialDetail?.secretFields.first?.secretFieldId
+        )
+        XCTAssertNotEqual(duplicateSecretFieldId, originalSecretFieldId)
+        XCTAssertEqual(
+            store.revealSelectedCredentialSecret(secretFieldId: duplicateSecretFieldId),
+            "lifecycle-secret-marker"
+        )
+
+        XCTAssertTrue(store.archiveSelected())
+        XCTAssertEqual(service.archiveItemCallCount, 1)
+        XCTAssertFalse(store.items.contains(where: { $0.id == duplicateItemId }))
+        store.includeArchived = true
+        store.searchText = ""
+        XCTAssertTrue(store.search())
+        XCTAssertTrue(store.select(itemId: duplicateItemId))
+        XCTAssertTrue(store.canRestoreSelectedArchive)
+        XCTAssertEqual(
+            store.selectedCredentialDetail?.secretFields.first?.secretFieldId,
+            duplicateSecretFieldId
+        )
+
+        XCTAssertTrue(store.restoreSelectedArchive())
+        XCTAssertEqual(service.restoreItemCallCount, 1)
+        XCTAssertEqual(store.selectedItemId, duplicateItemId)
+        XCTAssertEqual(store.selectedItem?.status, "active")
+        XCTAssertEqual(
+            store.selectedCredentialDetail?.secretFields.first?.secretFieldId,
+            duplicateSecretFieldId
+        )
+
+        XCTAssertTrue(store.deleteSelected())
+        XCTAssertEqual(service.deleteItemCallCount, 1)
+        XCTAssertFalse(store.items.contains(where: { $0.id == duplicateItemId }))
+        XCTAssertTrue(store.items.contains(where: { $0.id == originalItemId }))
+    }
+
+    func testStaleCredentialSavePreservesDraftWithoutExposingSecretInput() throws {
+        let service = FakeCoreService()
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: URL(fileURLWithPath: "/tmp/StaleCredential.pswvault"))
+        store.unlock(password: "correct horse")
+
+        var creation = TemplateCredentialForm(template: .apiToken)
+        creation.title = "Build API"
+        creation.secret = "saved-secret-marker"
+        XCTAssertEqual(store.saveTemplateCredential(form: creation), .saved)
+        let itemId = try XCTUnwrap(store.selectedItemId)
+        var staleForm = CredentialEditorForm(
+            detail: try XCTUnwrap(store.selectedCredentialDetail)
+        )
+        staleForm.title = "Stale local title"
+        staleForm.fields[0].secretInput = "local-replacement-secret-marker"
+        service.forceRevision(itemId: itemId, revision: "rev_remote")
+        let currentItems = try service.search(
+            sessionId: store.sessionId ?? 0,
+            text: "",
+            includeArchived: false
+        )
+        service.nextRefreshPayload = SyncRefreshPayload(
+            loadedItems: currentItems.count,
+            appliedTombstones: 0,
+            detectedConflicts: 0,
+            rejectedRecords: 0,
+            items: currentItems
+        )
+
+        XCTAssertEqual(store.saveCredential(form: staleForm), .staleDraftPreserved)
+        XCTAssertEqual(service.updateCredentialCallCount, 0)
+        XCTAssertEqual(store.selectedCredentialDetail?.revision, "rev_remote")
+        XCTAssertEqual(store.selectedCredentialDetail?.title, "Build API")
+        let review = try XCTUnwrap(store.staleSaveReview)
+        let fieldReview = try XCTUnwrap(
+            review.rows.first(where: { $0.fieldLabel == "fields" })
+        )
+        XCTAssertTrue(fieldReview.redacted)
+        XCTAssertNil(fieldReview.currentValue)
+        XCTAssertNil(fieldReview.draftValue)
+        XCTAssertFalse(
+            String(reflecting: review).contains("local-replacement-secret-marker")
+        )
     }
 
     func testOpenUnlockFavoriteTagArchiveSearchAndAutoLockWorkflow() {
@@ -7718,6 +9057,10 @@ final class PSWMacWorkflowTests: XCTestCase {
         store.selectedItemTypeFilter = nil
         store.selectedTagFilter = "finance"
         XCTAssertTrue(store.hasActiveListFilters)
+
+        store.selectedTagFilter = nil
+        store.selectedSmartView = .developerCredentials
+        XCTAssertTrue(store.hasActiveListFilters)
     }
 
     func testClearListFiltersRefreshesVisibleItems() {
@@ -8076,6 +9419,54 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(store.statusMessage, "login item has no valid URL")
     }
 
+    func testReadOnlyURLActionsTargetOnlyURLsFromCurrentSelection() {
+        let service = FakeCoreService(seedItems: [
+            SeedLogin(
+                title: "Email",
+                username: "me@example.com",
+                password: "email-password",
+                url: "https://mail.example.com/login",
+                notes: "Primary inbox",
+                tags: ["personal"]
+            )
+        ])
+        let clipboard = FakeClipboard()
+        let urlOpener = FakeURLOpener()
+        let store = VaultStore(
+            service: service,
+            clipboard: clipboard,
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            urlOpener: urlOpener,
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/ReadOnlyURLActions.pswvault"))
+        store.unlock(password: "correct horse")
+        store.select(itemId: "item_1")
+
+        var form = LoginForm(detail: try! XCTUnwrap(store.selectedDetail))
+        form.urlsText = """
+        https://mail.example.com/login
+        portal.example.com/account
+        """
+        XCTAssertEqual(store.saveLogin(form: form), .saved)
+
+        store.copySelectedLoginURL("portal.example.com/account")
+        XCTAssertEqual(clipboard.copied.map(\.value), ["portal.example.com/account"])
+        XCTAssertEqual(store.statusMessage, "URL copied")
+
+        XCTAssertTrue(store.openSelectedLoginURL("portal.example.com/account"))
+        XCTAssertEqual(urlOpener.openedURLs.map(\.absoluteString), ["https://portal.example.com/account"])
+
+        store.copySelectedLoginURL("https://outside.example.com")
+        XCTAssertEqual(clipboard.copied.map(\.value), ["portal.example.com/account"])
+        XCTAssertEqual(store.statusMessage, "login item has no URL")
+
+        XCTAssertFalse(store.openSelectedLoginURL("https://outside.example.com"))
+        XCTAssertEqual(urlOpener.openedURLs.map(\.absoluteString), ["https://portal.example.com/account"])
+        XCTAssertEqual(store.statusMessage, "login item has no valid URL")
+    }
+
     func testLoginDetailDecodesLegacyURLAsURLArray() throws {
         let data = Data("""
         {
@@ -8407,6 +9798,876 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(store.statusMessage, "Restored")
     }
 
+    func testSmartViewClassificationUsesSecretKindsAndAllowsOverlappingMembership() {
+        let mixed = VaultItemView(
+            id: "mixed",
+            title: "Unified Account",
+            itemType: "custom",
+            templateId: "custom",
+            secretKinds: ["password", "api-token", "private-key"],
+            status: "active",
+            favorite: false,
+            tags: []
+        )
+        let apiKey = VaultItemView(
+            id: "api-key",
+            title: "Build Key",
+            itemType: "api key",
+            templateId: "api-key",
+            secretKinds: ["api-key"],
+            status: "active",
+            favorite: false,
+            tags: []
+        )
+        let certificate = VaultItemView(
+            id: "certificate",
+            title: "Signing Certificate",
+            itemType: "certificate",
+            templateId: "certificate",
+            secretKinds: ["certificate"],
+            status: "active",
+            favorite: false,
+            tags: []
+        )
+        let custom = VaultItemView(
+            id: "custom",
+            title: "Opaque Secret",
+            itemType: "custom",
+            templateId: "custom",
+            secretKinds: ["generic-secret"],
+            status: "active",
+            favorite: false,
+            tags: []
+        )
+        let archivedKey = VaultItemView(
+            id: "archived-key",
+            title: "Old SSH Key",
+            itemType: "ssh key",
+            templateId: "ssh-key",
+            secretKinds: ["private-key"],
+            status: "archived",
+            favorite: false,
+            tags: []
+        )
+        let authorizedIds: Set<String> = ["mixed", "custom", "archived-key"]
+
+        XCTAssertTrue(mixed.appears(in: .logins, authorizedCredentialIds: authorizedIds))
+        XCTAssertTrue(mixed.appears(in: .developerCredentials, authorizedCredentialIds: authorizedIds))
+        XCTAssertTrue(mixed.appears(in: .keysAndCertificates, authorizedCredentialIds: authorizedIds))
+        XCTAssertTrue(mixed.appears(in: .appsToolsAuthorized, authorizedCredentialIds: authorizedIds))
+        XCTAssertTrue(apiKey.appears(in: .developerCredentials, authorizedCredentialIds: authorizedIds))
+        XCTAssertFalse(apiKey.appears(in: .keysAndCertificates, authorizedCredentialIds: authorizedIds))
+        XCTAssertFalse(custom.appears(in: .developerCredentials, authorizedCredentialIds: authorizedIds))
+        XCTAssertTrue(VaultItemView(
+            id: "legacy-token",
+            title: "Legacy Token",
+            itemType: "api token",
+            status: "active",
+            favorite: false,
+            tags: []
+        ).appears(in: .developerCredentials, authorizedCredentialIds: authorizedIds))
+
+        let counts = VaultNavigationCounts(
+            items: [mixed, apiKey, certificate, custom, archivedKey],
+            passwordHealth: nil,
+            authorizedCredentialIds: authorizedIds
+        )
+        XCTAssertEqual(counts.logins, 1)
+        XCTAssertEqual(counts.developerCredentials, 3)
+        XCTAssertEqual(counts.keysAndCertificates, 2)
+        XCTAssertEqual(counts.appsToolsAuthorized, 2)
+        XCTAssertEqual(counts.count(for: .smartView(.developerCredentials)), 3)
+        XCTAssertEqual(counts.count(for: .smartView(.appsToolsAuthorized)), 2)
+        XCTAssertEqual(counts.count(for: .appsAndTools), 2)
+    }
+
+    func testAppsToolsIsAFirstLevelDestinationWithoutBecomingAnItemFilter() throws {
+        let service = FakeCoreService(seedItems: [
+            SeedLogin(
+                title: "Mail",
+                username: "me@example.com",
+                password: "mail-password",
+                url: "https://mail.example.com",
+                notes: "",
+                tags: ["personal"]
+            )
+        ])
+        var credential = TemplateCredentialForm(template: .apiToken)
+        credential.title = "Deploy Token"
+        credential.secret = "seeded-secret-marker"
+        _ = try service.createCredentialFromTemplate(sessionId: 7, form: credential)
+        service.nextAuthorizedCredentialIds = ["item_2"]
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/AppsToolsDestination.pswvault"))
+        store.unlock(password: "correct horse")
+        let originalItems = store.items
+
+        XCTAssertFalse(VaultNavigationDestination.appsAndTools.isItemDestination)
+        XCTAssertTrue(store.applyNavigationDestination(.appsAndTools))
+        XCTAssertEqual(store.navigationDestination, .appsAndTools)
+        XCTAssertEqual(store.items, originalItems)
+        XCTAssertEqual(store.navigationCounts.count(for: .appsAndTools), 1)
+        XCTAssertEqual(service.authorizedCredentialIdsCallCount, 2)
+
+        XCTAssertTrue(store.applyNavigationDestination(.appsAndTools))
+        XCTAssertEqual(service.authorizedCredentialIdsCallCount, 3)
+        XCTAssertEqual(store.items, originalItems)
+
+        XCTAssertTrue(store.applyNavigationDestination(.smartView(.appsToolsAuthorized)))
+        XCTAssertEqual(store.items.map(\.title), ["Deploy Token"])
+    }
+
+    func testAppsToolsGlobalPauseWorksWithoutConsumersAndPreservesHumanVaultSession() {
+        let service = FakeCoreService(seedItems: [
+            SeedLogin(
+                title: "Mail",
+                username: "me@example.com",
+                password: "mail-password",
+                url: "https://mail.example.com",
+                notes: "",
+                tags: ["personal"]
+            )
+        ])
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/AppsToolsGlobalPause.pswvault"))
+        store.unlock(password: "correct horse")
+        let humanItems = store.items
+
+        XCTAssertTrue(store.applyNavigationDestination(.appsAndTools))
+        XCTAssertTrue(store.appsToolsSnapshot.consumers.isEmpty)
+        XCTAssertNil(store.selectedAppsToolsConsumerId)
+
+        store.setAppsToolsPaused(true)
+        XCTAssertTrue(store.appsToolsSnapshot.paused)
+        XCTAssertEqual(service.appsToolsPauseRequests, [true])
+        XCTAssertTrue(store.isUnlocked)
+        XCTAssertEqual(store.items, humanItems)
+
+        XCTAssertTrue(store.applyNavigationDestination(.allItems))
+        XCTAssertTrue(store.select(itemId: humanItems.first?.id))
+        XCTAssertEqual(store.selectedItem?.title, "Mail")
+
+        store.setAppsToolsPaused(false)
+        XCTAssertFalse(store.appsToolsSnapshot.paused)
+        XCTAssertEqual(service.appsToolsPauseRequests, [true, false])
+        XCTAssertTrue(store.isUnlocked)
+        XCTAssertEqual(store.selectedItem?.title, "Mail")
+        XCTAssertEqual(store.items, humanItems)
+    }
+
+    func testAppsToolsConsumerDetailPauseAndRevocationRemainSeparateFromHumanVaultAccess() throws {
+        let service = FakeCoreService(seedItems: [
+            SeedLogin(
+                title: "Mail",
+                username: "me@example.com",
+                password: "mail-password",
+                url: "https://mail.example.com",
+                notes: "",
+                tags: ["personal"]
+            )
+        ])
+        var credential = TemplateCredentialForm(template: .apiToken)
+        credential.title = "Deploy Token"
+        credential.secret = "seeded-secret-marker"
+        _ = try service.createCredentialFromTemplate(sessionId: 7, form: credential)
+
+        let identity = AppsToolsConsumerIdentity(
+            executableName: "codex",
+            bundleIdentifier: "com.openai.codex",
+            teamIdentifier: "OPENAI",
+            codeSigningEvidence: "verified-with-team-identifier",
+            codeSignatureFingerprint: "0102-0304-0506-0708"
+        )
+        let consumer = AppsToolsConsumerSummary(
+            consumerId: "consumer_000102030405060708090a0b0c0d0e0f",
+            label: "Codex local adapter",
+            identity: identity,
+            accessRuleCount: 1,
+            usageProfileCount: 1,
+            createdAtMilliseconds: 1_800_000_000_000
+        )
+        let field = AppsToolsFieldReference(
+            vaultId: "vault_000102030405060708090a0b0c0d0e0f",
+            credentialId: "item_2",
+            secretFieldId: "secret_field_000102030405060708090a0b0c0d0e0f",
+            currentVault: true,
+            credentialTitle: "Deploy Token",
+            fieldLabel: "Token",
+            secretKind: "api-token"
+        )
+        let grant = AppsToolsFieldGrant(
+            accessRuleId: "access_rule_000102030405060708090a0b0c0d0e0f",
+            field: field,
+            capability: "process.run",
+            capabilityVersion: 1,
+            confirmationPolicy: "every-use",
+            lifetime: "persistent",
+            expiresAtMilliseconds: nil,
+            createdAtMilliseconds: 1_800_000_001_000,
+            active: true
+        )
+        let profile = AppsToolsUsageProfile(
+            usageProfileId: "usage_profile_000102030405060708090a0b0c0d0e0f",
+            label: "GitHub CLI",
+            capability: "process.run",
+            capabilityVersion: 1,
+            placement: AppsToolsUsagePlacement(
+                kind: "process-environment",
+                variableName: "GH_TOKEN",
+                appendNewline: nil,
+                referenceVariableName: nil,
+                renderDevFdPath: nil,
+                headerName: nil
+            ),
+            createdAtMilliseconds: 1_800_000_002_000
+        )
+        let audit = AppsToolsAuditEvent(
+            auditEventId: "audit_event_000102030405060708090a0b0c0d0e0f",
+            occurredAtMilliseconds: 1_800_000_003_000,
+            kind: "credential-use",
+            field: field,
+            capability: "process.run",
+            capabilityVersion: 1,
+            decision: "allowed",
+            confirmationMethod: "user-approval"
+        )
+        service.nextAuthorizedCredentialIds = ["item_2"]
+        service.nextAppsToolsConsumers = [consumer]
+        service.nextAppsToolsConsumerDetails[consumer.consumerId] = AppsToolsConsumerDetail(
+            consumer: consumer,
+            fieldGrants: [grant],
+            usageProfiles: [profile],
+            recentAuditEvents: [audit]
+        )
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/AppsToolsConsumer.pswvault"))
+        store.unlock(password: "correct horse")
+        let humanItems = store.items
+
+        XCTAssertTrue(store.applyNavigationDestination(.appsAndTools))
+        XCTAssertEqual(store.selectedAppsToolsConsumerId, consumer.consumerId)
+        XCTAssertEqual(store.selectedAppsToolsConsumerDetail?.fieldGrants, [grant])
+        XCTAssertEqual(store.selectedAppsToolsConsumerDetail?.usageProfiles, [profile])
+        XCTAssertEqual(store.selectedAppsToolsConsumerDetail?.recentAuditEvents, [audit])
+        XCTAssertEqual(service.appsToolsConsumerDetailRequests, [consumer.consumerId])
+
+        store.setAppsToolsPaused(true)
+        XCTAssertTrue(store.appsToolsSnapshot.paused)
+        XCTAssertEqual(service.appsToolsPauseRequests, [true])
+        XCTAssertTrue(store.isUnlocked)
+        XCTAssertEqual(store.items, humanItems)
+
+        store.revokeAppsToolsField(grant)
+        XCTAssertEqual(service.revokedAppsToolsFields, [field])
+        XCTAssertTrue(store.selectedAppsToolsConsumerDetail?.fieldGrants.isEmpty == true)
+        XCTAssertTrue(store.authorizedCredentialIds.isEmpty)
+        XCTAssertTrue(store.isUnlocked)
+
+        store.revokeSelectedAppsToolsConsumer()
+        XCTAssertEqual(service.revokedAppsToolsConsumers, [consumer.consumerId])
+        XCTAssertTrue(store.appsToolsSnapshot.consumers.isEmpty)
+        XCTAssertNil(store.selectedAppsToolsConsumerId)
+        XCTAssertNil(store.selectedAppsToolsConsumerDetail)
+        XCTAssertTrue(store.isUnlocked)
+        XCTAssertEqual(store.items, humanItems)
+    }
+
+    func testAppsToolsUsageProfileRecommendationCreateAndRemoveStayConsumerBound() throws {
+        let service = FakeCoreService()
+        let consumer = AppsToolsConsumerSummary(
+            consumerId: "consumer_000102030405060708090a0b0c0d0e0f",
+            label: "GitHub CLI",
+            identity: AppsToolsConsumerIdentity(
+                executableName: "gh",
+                bundleIdentifier: nil,
+                teamIdentifier: nil,
+                codeSigningEvidence: "no-verified-signature",
+                codeSignatureFingerprint: nil
+            ),
+            accessRuleCount: 0,
+            usageProfileCount: 0,
+            createdAtMilliseconds: 100
+        )
+        service.nextAppsToolsConsumers = [consumer]
+        service.nextAppsToolsConsumerDetails[consumer.consumerId] = AppsToolsConsumerDetail(
+            consumer: consumer,
+            fieldGrants: [],
+            usageProfiles: [],
+            recentAuditEvents: []
+        )
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/AppsToolsUsageProfile.pswvault"))
+        store.unlock(password: "correct horse")
+        XCTAssertTrue(store.applyNavigationDestination(.appsAndTools))
+        XCTAssertEqual(store.selectedAppsToolsConsumerDetail?.consumer, consumer)
+        XCTAssertEqual(service.appsToolsUsageProfileSetupRequests, [consumer.consumerId])
+        XCTAssertEqual(
+            store.appsToolsUsageProfileSetup?.recommendation,
+            AppsToolsUsageProfileRecommendation(
+                recommendationId: "github-cli",
+                templateId: "cli-environment-variable",
+                technicalName: "GH_TOKEN"
+            )
+        )
+
+        let draft = AppsToolsUsageProfileDraft(
+            label: "GitHub CLI Token",
+            templateId: "cli-environment-variable",
+            technicalName: "GH_TOKEN"
+        )
+        XCTAssertTrue(store.createAppsToolsUsageProfile(draft))
+        XCTAssertEqual(service.createdAppsToolsUsageProfiles.count, 1)
+        XCTAssertEqual(service.createdAppsToolsUsageProfiles.first?.sessionId, 7)
+        XCTAssertEqual(
+            service.createdAppsToolsUsageProfiles.first?.consumerId,
+            consumer.consumerId
+        )
+        XCTAssertEqual(service.createdAppsToolsUsageProfiles.first?.draft, draft)
+        XCTAssertEqual(store.selectedAppsToolsConsumerDetail?.usageProfiles.count, 1)
+        XCTAssertEqual(store.appsToolsSnapshot.consumers.first?.usageProfileCount, 1)
+        XCTAssertFalse(store.appsToolsUsageProfileActionFailed)
+
+        let profile = try XCTUnwrap(store.selectedAppsToolsConsumerDetail?.usageProfiles.first)
+        XCTAssertEqual(profile.placement.variableName, "GH_TOKEN")
+        XCTAssertTrue(store.removeAppsToolsUsageProfile(profile))
+        XCTAssertEqual(service.removedAppsToolsUsageProfiles.count, 1)
+        XCTAssertEqual(
+            service.removedAppsToolsUsageProfiles.first?.usageProfileId,
+            profile.usageProfileId
+        )
+        XCTAssertTrue(store.selectedAppsToolsConsumerDetail?.usageProfiles.isEmpty == true)
+        XCTAssertEqual(store.appsToolsSnapshot.consumers.first?.usageProfileCount, 0)
+        XCTAssertTrue(store.isUnlocked)
+    }
+
+    func testAppsToolsUsageProfileFailuresPreserveReadableConsumerState() throws {
+        let service = FakeCoreService()
+        let consumer = AppsToolsConsumerSummary(
+            consumerId: "consumer_101112131415161718191a1b1c1d1e1f",
+            label: "Local tool",
+            identity: AppsToolsConsumerIdentity(
+                executableName: "local-tool",
+                bundleIdentifier: nil,
+                teamIdentifier: nil,
+                codeSigningEvidence: "no-verified-signature",
+                codeSignatureFingerprint: nil
+            ),
+            accessRuleCount: 0,
+            usageProfileCount: 1,
+            createdAtMilliseconds: 100
+        )
+        let profile = AppsToolsUsageProfile(
+            usageProfileId: "usage_profile_existing",
+            label: "Existing API",
+            capability: "http.request",
+            capabilityVersion: 1,
+            placement: AppsToolsUsagePlacement(
+                kind: "http-bearer-authorization",
+                variableName: nil,
+                appendNewline: nil,
+                referenceVariableName: nil,
+                renderDevFdPath: nil,
+                headerName: nil
+            ),
+            createdAtMilliseconds: 110
+        )
+        service.nextAppsToolsConsumers = [consumer]
+        service.nextAppsToolsConsumerDetails[consumer.consumerId] = AppsToolsConsumerDetail(
+            consumer: consumer,
+            fieldGrants: [],
+            usageProfiles: [profile],
+            recentAuditEvents: []
+        )
+        service.appsToolsUsageProfileError = CoreBridgeError.commandFailed(
+            "seeded-backend-detail"
+        )
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/AppsToolsUsageProfileFailure.pswvault"))
+        store.unlock(password: "correct horse")
+        XCTAssertTrue(store.applyNavigationDestination(.appsAndTools))
+        XCTAssertEqual(store.selectedAppsToolsConsumerDetail?.usageProfiles, [profile])
+        XCTAssertNil(store.appsToolsUsageProfileSetup)
+        XCTAssertTrue(store.appsToolsUsageProfileActionFailed)
+        XCTAssertFalse(store.statusMessage.contains("seeded-backend-detail"))
+
+        service.appsToolsUsageProfileError = nil
+        store.selectAppsToolsConsumer(consumer.consumerId)
+        XCTAssertNotNil(store.appsToolsUsageProfileSetup)
+        service.appsToolsUsageProfileError = CoreBridgeError.commandFailed(
+            "seeded-remove-detail"
+        )
+
+        XCTAssertFalse(store.removeAppsToolsUsageProfile(profile))
+        XCTAssertEqual(store.selectedAppsToolsConsumerDetail?.usageProfiles, [profile])
+        XCTAssertEqual(store.appsToolsSnapshot.consumers.first?.usageProfileCount, 1)
+        XCTAssertTrue(store.appsToolsUsageProfileActionFailed)
+        XCTAssertFalse(store.statusMessage.contains("seeded-remove-detail"))
+        XCTAssertTrue(store.isUnlocked)
+    }
+
+    func testPendingRequestMonitoringCountsNotifiesOnceAndFailsClosed() {
+        let service = FakeCoreService()
+        let notifications = FakeApprovalNotificationScheduler()
+        let defaults = makeIsolatedDefaults()
+        defaults.set(
+            AppLanguage.simplifiedChinese.rawValue,
+            forKey: AppLanguage.storageKey
+        )
+        let first = AppsToolsPendingRequest(
+            requestSource: "approval",
+            requestId: "approval_request_01",
+            kind: "credential-access",
+            consumerId: "consumer_01",
+            consumerLabel: "Codex adapter",
+            identity: AppsToolsConsumerIdentity(
+                executableName: "codex",
+                bundleIdentifier: "com.openai.codex",
+                teamIdentifier: nil,
+                codeSigningEvidence: "verified-without-team-identifier",
+                codeSignatureFingerprint: "0102-0304-0506-0708"
+            ),
+            pairingComparisonCode: nil,
+            pairingKeyFingerprint: nil,
+            vaultId: "vault_01",
+            credentialId: nil,
+            secretFieldId: nil,
+            capability: "http.request",
+            capabilityVersion: 1,
+            requestDescription: "GitHub release credential",
+            createdAtMilliseconds: 100,
+            expiresAtMilliseconds: 200,
+            remainingMilliseconds: nil
+        )
+        service.nextAppsToolsPendingRequests = AppsToolsPendingRequestQueue(
+            pendingCount: 1,
+            requests: [first]
+        )
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            approvalNotificationScheduler: notifications,
+            userDefaults: defaults
+        )
+
+        store.startApprovalMonitoring()
+
+        XCTAssertEqual(notifications.prepareCallCount, 1)
+        XCTAssertEqual(service.appsToolsPendingRequestsCallCount, 1)
+        XCTAssertEqual(store.appsToolsPendingRequests.pendingCount, 1)
+        XCTAssertTrue(store.appsToolsPendingRequestsAvailable)
+        XCTAssertEqual(notifications.posted.map(\.identifier), [first.id])
+        XCTAssertEqual(notifications.posted.first?.title, "KeptNear 需要你的确认")
+        XCTAssertFalse(notifications.posted.first?.body.contains("Codex") == true)
+        XCTAssertFalse(notifications.posted.first?.body.contains("GitHub") == true)
+        XCTAssertEqual(notifications.reconciled.last, Set([first.id]))
+
+        store.refreshAppsToolsPendingRequests()
+        XCTAssertEqual(notifications.posted.map(\.identifier), [first.id])
+
+        let second = AppsToolsPendingRequest(
+            requestSource: "pairing",
+            requestId: "pairing_request_02",
+            kind: "pairing",
+            consumerId: nil,
+            consumerLabel: nil,
+            identity: AppsToolsConsumerIdentity(
+                executableName: "claude",
+                bundleIdentifier: nil,
+                teamIdentifier: nil,
+                codeSigningEvidence: "no-verified-signature",
+                codeSignatureFingerprint: nil
+            ),
+            pairingComparisonCode: "0123456789",
+            pairingKeyFingerprint: "1112-1314-1516-1718",
+            vaultId: nil,
+            credentialId: nil,
+            secretFieldId: nil,
+            capability: nil,
+            capabilityVersion: nil,
+            requestDescription: nil,
+            createdAtMilliseconds: nil,
+            expiresAtMilliseconds: nil,
+            remainingMilliseconds: 300_000
+        )
+        service.nextAppsToolsPendingRequests = AppsToolsPendingRequestQueue(
+            pendingCount: 2,
+            requests: [first, second]
+        )
+        store.refreshAppsToolsPendingRequests()
+        XCTAssertEqual(notifications.posted.map(\.identifier), [first.id, second.id])
+        XCTAssertEqual(store.appsToolsPendingRequests.pendingCount, 2)
+
+        service.nextAppsToolsPendingRequests = AppsToolsPendingRequestQueue(
+            pendingCount: 1,
+            requests: [second]
+        )
+        store.refreshAppsToolsPendingRequests()
+        XCTAssertEqual(notifications.reconciled.last, Set([second.id]))
+
+        service.appsToolsPendingRequestsError = CoreBridgeError.commandFailed(
+            "pending requests unavailable"
+        )
+        store.refreshAppsToolsPendingRequests()
+        XCTAssertFalse(store.appsToolsPendingRequestsAvailable)
+        XCTAssertEqual(store.appsToolsPendingRequests, .empty)
+        XCTAssertEqual(notifications.posted.count, 2)
+    }
+
+    func testPendingRequestDenyWorksWhileLockedAndOtherApprovalFailsClosed() {
+        let service = FakeCoreService()
+        let request = makeAppsToolsPendingRequest(
+            requestId: "approval_request_locked",
+            kind: "access",
+            credentialId: "credential_01",
+            secretFieldId: "secret_field_01"
+        )
+        service.nextAppsToolsPendingRequests = AppsToolsPendingRequestQueue(
+            pendingCount: 1,
+            requests: [request]
+        )
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.refreshAppsToolsPendingRequests()
+
+        XCTAssertFalse(store.allowAppsToolsPendingRequestOnce(request))
+        XCTAssertTrue(store.appsToolsPendingRequestActionFailed)
+        XCTAssertTrue(service.allowedOnceAppsToolsRequests.isEmpty)
+
+        store.clearAppsToolsPendingRequestActionError()
+        service.appsToolsPendingRequestDecisionError = CoreBridgeError.commandFailed(
+            "seeded-secret-marker"
+        )
+        XCTAssertFalse(store.denyAppsToolsPendingRequest(request))
+        XCTAssertTrue(store.appsToolsPendingRequestActionFailed)
+        XCTAssertEqual(store.appsToolsPendingRequests.pendingCount, 1)
+        XCTAssertFalse(store.statusMessage.contains("seeded-secret-marker"))
+
+        service.appsToolsPendingRequestDecisionError = nil
+        XCTAssertTrue(store.denyAppsToolsPendingRequest(request))
+        XCTAssertEqual(service.deniedAppsToolsPendingRequests.first?.requestSource, "approval")
+        XCTAssertEqual(service.deniedAppsToolsPendingRequests.first?.requestId, request.requestId)
+        XCTAssertEqual(store.appsToolsPendingRequests, .empty)
+        XCTAssertFalse(store.appsToolsPendingRequestActionFailed)
+    }
+
+    func testPendingAccessActionsBindExactSelectionAndLongTermPolicy() {
+        let service = FakeCoreService()
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: URL(fileURLWithPath: "/tmp/PendingAccess.pswvault"))
+        store.unlock(password: "correct horse")
+
+        let exact = makeAppsToolsPendingRequest(
+            requestId: "approval_request_exact",
+            kind: "access",
+            credentialId: "credential_exact",
+            secretFieldId: "secret_field_exact"
+        )
+        service.nextAppsToolsPendingRequests = AppsToolsPendingRequestQueue(
+            pendingCount: 1,
+            requests: [exact]
+        )
+        store.refreshAppsToolsPendingRequests()
+        XCTAssertTrue(store.allowAppsToolsPendingRequestOnce(exact))
+        XCTAssertEqual(service.allowedOnceAppsToolsRequests.count, 1)
+        XCTAssertEqual(service.allowedOnceAppsToolsRequests[0].sessionId, 7)
+        XCTAssertNil(service.allowedOnceAppsToolsRequests[0].credentialId)
+        XCTAssertNil(service.allowedOnceAppsToolsRequests[0].secretFieldId)
+
+        let credentialRequest = makeAppsToolsPendingRequest(
+            requestId: "approval_request_credential",
+            kind: "credential-access"
+        )
+        service.nextAppsToolsPendingRequests = AppsToolsPendingRequestQueue(
+            pendingCount: 1,
+            requests: [credentialRequest]
+        )
+        service.nextAppsToolsCredentialReview = AppsToolsCredentialReview(
+            requestId: credentialRequest.requestId,
+            requestDescription: "release credential",
+            capability: "process.run",
+            capabilityVersion: 1,
+            truncated: false,
+            candidates: [
+                AppsToolsCredentialCandidate(
+                    credentialId: "credential_selected",
+                    title: "Release Token",
+                    templateId: "api-token",
+                    tags: ["release"],
+                    favorite: true,
+                    secretFields: [
+                        AppsToolsCredentialFieldCandidate(
+                            secretFieldId: "secret_field_selected",
+                            role: "token",
+                            label: "Production",
+                            kind: "api-token"
+                        )
+                    ]
+                )
+            ]
+        )
+        store.refreshAppsToolsPendingRequests()
+        let review = store.reviewAppsToolsPendingCredential(credentialRequest)
+        XCTAssertEqual(review?.candidates.first?.title, "Release Token")
+        XCTAssertEqual(service.reviewedAppsToolsCredentials.first?.sessionId, 7)
+        XCTAssertEqual(
+            service.reviewedAppsToolsCredentials.first?.requestId,
+            credentialRequest.requestId
+        )
+
+        XCTAssertFalse(store.allowAppsToolsPendingRequestOnce(credentialRequest))
+        XCTAssertEqual(service.allowedOnceAppsToolsRequests.count, 1)
+        store.clearAppsToolsPendingRequestActionError()
+
+        let selection = AppsToolsCredentialSelection(
+            credentialId: "credential_selected",
+            secretFieldId: "secret_field_selected"
+        )
+        XCTAssertTrue(
+            store.configureAppsToolsLongTermAccess(
+                credentialRequest,
+                selection: selection,
+                confirmationPolicy: .automaticWhileUnlocked
+            )
+        )
+        XCTAssertEqual(service.configuredLongTermAppsToolsRequests.count, 1)
+        XCTAssertEqual(
+            service.configuredLongTermAppsToolsRequests[0].credentialId,
+            selection.credentialId
+        )
+        XCTAssertEqual(
+            service.configuredLongTermAppsToolsRequests[0].secretFieldId,
+            selection.secretFieldId
+        )
+        XCTAssertEqual(
+            service.configuredLongTermAppsToolsRequests[0].confirmationPolicy,
+            .automaticWhileUnlocked
+        )
+        XCTAssertEqual(store.appsToolsPendingRequests, .empty)
+
+        let exactPersistent = makeAppsToolsPendingRequest(
+            requestId: "approval_request_exact_persistent",
+            kind: "access",
+            credentialId: "credential_exact",
+            secretFieldId: "secret_field_exact"
+        )
+        service.nextAppsToolsPendingRequests = AppsToolsPendingRequestQueue(
+            pendingCount: 1,
+            requests: [exactPersistent]
+        )
+        store.refreshAppsToolsPendingRequests()
+        XCTAssertTrue(
+            store.configureAppsToolsLongTermAccess(
+                exactPersistent,
+                confirmationPolicy: .everyUse
+            )
+        )
+        XCTAssertNil(service.configuredLongTermAppsToolsRequests[1].credentialId)
+        XCTAssertNil(service.configuredLongTermAppsToolsRequests[1].secretFieldId)
+        XCTAssertEqual(
+            service.configuredLongTermAppsToolsRequests[1].confirmationPolicy,
+            .everyUse
+        )
+    }
+
+    func testPendingPairingAndUnlockUseRequestSpecificActions() {
+        let service = FakeCoreService()
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+        let pairing = makeAppsToolsPendingRequest(
+            requestSource: "pairing",
+            requestId: "pairing_request_01",
+            kind: "pairing"
+        )
+        service.nextAppsToolsPendingRequests = AppsToolsPendingRequestQueue(
+            pendingCount: 1,
+            requests: [pairing]
+        )
+        store.refreshAppsToolsPendingRequests()
+
+        XCTAssertFalse(store.approveAppsToolsPairing(pairing, label: "   "))
+        XCTAssertTrue(service.approvedAppsToolsPairings.isEmpty)
+        store.clearAppsToolsPendingRequestActionError()
+        XCTAssertTrue(store.approveAppsToolsPairing(pairing, label: "  Codex CLI  "))
+        XCTAssertEqual(service.approvedAppsToolsPairings.first?.label, "Codex CLI")
+
+        let unlock = makeAppsToolsPendingRequest(
+            requestId: "approval_request_unlock",
+            kind: "unlock"
+        )
+        service.nextAppsToolsPendingRequests = AppsToolsPendingRequestQueue(
+            pendingCount: 1,
+            requests: [unlock]
+        )
+        store.refreshAppsToolsPendingRequests()
+        XCTAssertFalse(store.approveAppsToolsPendingUnlock(unlock))
+        XCTAssertTrue(service.approvedAppsToolsUnlocks.isEmpty)
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/PendingUnlock.pswvault"))
+        store.unlock(password: "correct horse")
+        store.clearAppsToolsPendingRequestActionError()
+        XCTAssertTrue(store.approveAppsToolsPendingUnlock(unlock))
+        XCTAssertEqual(service.approvedAppsToolsUnlocks.first?.sessionId, 7)
+        XCTAssertEqual(service.approvedAppsToolsUnlocks.first?.requestId, unlock.requestId)
+    }
+
+    func testSmartViewNavigationFiltersOneVaultAndUsesBrokerAuthorizationProjection() throws {
+        let service = FakeCoreService(seedItems: [
+            SeedLogin(
+                title: "Mail",
+                username: "me@example.com",
+                password: "mail-password",
+                url: "https://mail.example.com",
+                notes: "",
+                tags: ["personal"]
+            )
+        ])
+        for (template, title) in [
+            (CredentialTemplateKind.apiToken, "Deploy Token"),
+            (.apiKey, "Build API Key"),
+            (.sshKey, "Production SSH Key"),
+            (.certificate, "Signing Certificate"),
+            (.custom, "Opaque Secret")
+        ] {
+            var form = TemplateCredentialForm()
+            form.template = template
+            form.title = title
+            form.secret = "seeded-secret-marker"
+            _ = try service.createCredentialFromTemplate(sessionId: 7, form: form)
+        }
+        service.nextAuthorizedCredentialIds = ["item_2", "item_6"]
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/SmartViews.pswvault"))
+        store.unlock(password: "correct horse")
+
+        XCTAssertEqual(store.navigationCounts.logins, 1)
+        XCTAssertEqual(store.navigationCounts.developerCredentials, 4)
+        XCTAssertEqual(store.navigationCounts.keysAndCertificates, 2)
+        XCTAssertEqual(store.navigationCounts.appsToolsAuthorized, 2)
+        XCTAssertEqual(service.authorizedCredentialIdsCallCount, 1)
+
+        XCTAssertTrue(store.applyNavigationDestination(.smartView(.logins)))
+        XCTAssertEqual(store.items.map(\.title), ["Mail"])
+
+        XCTAssertTrue(store.applyNavigationDestination(.smartView(.developerCredentials)))
+        XCTAssertEqual(
+            store.items.map(\.title),
+            ["Deploy Token", "Build API Key", "Production SSH Key", "Signing Certificate"]
+        )
+
+        XCTAssertTrue(store.applyNavigationDestination(.smartView(.keysAndCertificates)))
+        XCTAssertEqual(store.items.map(\.title), ["Production SSH Key", "Signing Certificate"])
+
+        XCTAssertTrue(store.applyNavigationDestination(.smartView(.appsToolsAuthorized)))
+        XCTAssertEqual(store.items.map(\.title), ["Deploy Token", "Opaque Secret"])
+        XCTAssertEqual(service.authorizedCredentialIdsCallCount, 2)
+
+        XCTAssertTrue(store.clearListFilters())
+        XCTAssertEqual(store.navigationDestination, .allItems)
+        XCTAssertEqual(store.items.count, 6)
+
+        store.select(itemId: "item_1")
+        store.setEditorHasUnsavedChanges(true)
+        XCTAssertTrue(store.navigationDestinationHidesSelectedItem(.smartView(.developerCredentials)))
+        XCTAssertFalse(store.applyNavigationDestination(.smartView(.developerCredentials)))
+        XCTAssertEqual(store.navigationDestination, .allItems)
+        XCTAssertEqual(store.selectedItemId, "item_1")
+        XCTAssertTrue(store.applyNavigationDestination(
+            .smartView(.developerCredentials),
+            discardingUnsavedEdits: true
+        ))
+    }
+
+    func testAuthorizedSmartViewFailsClosedWhenBrokerInventoryIsUnavailable() {
+        let service = FakeCoreService(seedItems: [
+            SeedLogin(
+                title: "Mail",
+                username: "me@example.com",
+                password: "mail-password",
+                url: "https://mail.example.com",
+                notes: "",
+                tags: []
+            )
+        ])
+        service.nextAuthorizedCredentialIds = ["item_1"]
+        service.authorizationInventoryError = CoreBridgeError.commandFailed(
+            "device state unavailable"
+        )
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: URL(fileURLWithPath: "/tmp/UnavailableAuthorization.pswvault"))
+        store.unlock(password: "correct horse")
+
+        XCTAssertFalse(store.appsToolsAuthorizationInventoryAvailable)
+        XCTAssertTrue(store.authorizedCredentialIds.isEmpty)
+        XCTAssertTrue(store.applyNavigationDestination(.appsAndTools))
+        XCTAssertEqual(store.navigationDestination, .appsAndTools)
+        XCTAssertEqual(
+            store.statusMessage,
+            "Apps & Tools authorization inventory unavailable"
+        )
+        XCTAssertTrue(store.applyNavigationDestination(.smartView(.appsToolsAuthorized)))
+        XCTAssertTrue(store.items.isEmpty)
+        XCTAssertEqual(
+            store.statusMessage,
+            "Apps & Tools authorization inventory unavailable"
+        )
+    }
+
     func testVaultNavigationCountsUseStableNonSecretSummaries() {
         let items = [
             VaultItemView(
@@ -8458,6 +10719,10 @@ final class PSWMacWorkflowTests: XCTestCase {
 
         XCTAssertEqual(counts.allItems, 3)
         XCTAssertEqual(counts.favorites, 1)
+        XCTAssertEqual(counts.logins, 2)
+        XCTAssertEqual(counts.developerCredentials, 0)
+        XCTAssertEqual(counts.keysAndCertificates, 0)
+        XCTAssertEqual(counts.appsToolsAuthorized, 0)
         XCTAssertEqual(counts.security, 2)
         XCTAssertEqual(counts.conflicts, 1)
         XCTAssertEqual(counts.archived, 1)
@@ -8643,11 +10908,618 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(chinese.allItems, "所有项目")
         XCTAssertEqual(japanese.allItems, "すべての項目")
         XCTAssertEqual(english.categories, "Categories")
+        XCTAssertEqual(english.smartViews, "Smart Views")
+        XCTAssertEqual(english.navigationTitle(.appsAndTools), "Apps & Tools")
+        XCTAssertEqual(chinese.appsAndTools, "应用与工具")
+        XCTAssertEqual(japanese.appsToolsOverview, "アクセス概要")
+        XCTAssertEqual(english.pauseAppsToolsAccess, "Pause Machine Access")
+        XCTAssertEqual(chinese.pauseAppsToolsAccess, "暂停机器访问")
+        XCTAssertEqual(japanese.pauseAppsToolsAccess, "マシンアクセスを一時停止")
+        XCTAssertEqual(english.inactive, "Inactive")
+        XCTAssertEqual(chinese.selected, "已选择")
+        XCTAssertEqual(japanese.notSelected, "未選択")
+        XCTAssertEqual(english.accessRuleCount(1), "1 access rule")
+        XCTAssertEqual(english.accessRuleCount(2), "2 access rules")
+        XCTAssertEqual(chinese.accessRuleCount(2), "2 条访问规则")
+        XCTAssertEqual(japanese.accessRuleCount(2), "アクセスルール 2 件")
+        XCTAssertEqual(japanese.unpairConsumer, "コンシューマーのペアリングを解除")
+        XCTAssertEqual(english.pendingRequests, "Pending Requests")
+        XCTAssertEqual(chinese.reviewPendingRequests, "查看待处理请求")
+        XCTAssertEqual(japanese.approvalNotificationTitle, "KeptNearの確認が必要です")
+        XCTAssertEqual(chinese.pendingRequestKind("credential-access"), "匹配凭据")
+        XCTAssertEqual(english.allowOnce, "Allow Once")
+        XCTAssertEqual(chinese.configureLongTermAccess, "配置长期访问")
+        XCTAssertEqual(japanese.deny, "拒否")
+        XCTAssertEqual(chinese.requestActionFailed, "无法更新请求，请刷新后重试。")
+        XCTAssertEqual(english.addUsageProfile, "Add Usage Profile")
+        XCTAssertEqual(chinese.usageProfileSetupTitle, "凭据使用方式")
+        XCTAssertEqual(japanese.advancedSettings, "詳細設定")
+        XCTAssertEqual(chinese.environmentVariableName, "环境变量名称")
+        XCTAssertEqual(japanese.httpHeaderName, "HTTPヘッダー名")
+        XCTAssertEqual(
+            english.usageProfileRecommendation("github-cli", toolName: "gh"),
+            "Use an approved token with GitHub CLI."
+        )
+        XCTAssertEqual(
+            chinese.usageProfileRecommendationName("gitlab-cli", fallback: "glab"),
+            "GitLab CLI 令牌"
+        )
+        XCTAssertEqual(
+            japanese.removeUsageProfileMessage("GitHub CLI"),
+            "GitHub CLIを削除しますか？認証情報へのアクセス権は取り消されません。"
+        )
+        XCTAssertTrue(
+            english.processCompatibilityDisclosure.contains("Rotate the credential")
+        )
+        XCTAssertTrue(
+            chinese.processCompatibilityDisclosure.contains("轮换")
+        )
+        XCTAssertTrue(
+            japanese.processCompatibilityDisclosure.contains("ローテーション")
+        )
+        XCTAssertTrue(
+            english.unpairConsumerMessage("Codex").contains("stops future KeptNear delivery")
+        )
+        XCTAssertTrue(
+            AppsToolsCompatibilityDisclosurePolicy.requiresDisclosure(
+                capability: "process.run"
+            )
+        )
+        XCTAssertFalse(
+            AppsToolsCompatibilityDisclosurePolicy.requiresDisclosure(
+                capability: "http.request"
+            )
+        )
+        XCTAssertFalse(
+            AppsToolsCompatibilityDisclosurePolicy.requiresDisclosure(capability: nil)
+        )
+        XCTAssertEqual(
+            japanese.confirmationPolicyDetail(.oncePerUnlockSession),
+            "保管庫をロック解除するたびに1回確認します。"
+        )
+        XCTAssertEqual(
+            english.confirmationPolicy("automatic-while-unlocked"),
+            "Automatic while unlocked"
+        )
+        XCTAssertEqual(
+            chinese.credentialSelectionAccessibilityLabel(
+                credentialTitle: "Deploy",
+                fieldName: "Token",
+                secretKind: chinese.credentialSecretKindName("api-token")
+            ),
+            "Deploy，Token，API 令牌"
+        )
+        XCTAssertEqual(
+            japanese.credentialFieldAccessibilityName(
+                role: "",
+                label: nil,
+                secretKind: "api-key"
+            ),
+            "APIキー"
+        )
+        XCTAssertEqual(
+            chinese.credentialFieldAction(
+                chinese.removeField,
+                fieldName: "API 令牌"
+            ),
+            "移除字段：API 令牌"
+        )
+        let consumer = AppsToolsConsumerSummary(
+            consumerId: "consumer_localization",
+            label: "Codex",
+            identity: AppsToolsConsumerIdentity(
+                executableName: "codex",
+                bundleIdentifier: nil,
+                teamIdentifier: nil,
+                codeSigningEvidence: "verified-without-team-identifier",
+                codeSignatureFingerprint: nil
+            ),
+            accessRuleCount: 2,
+            usageProfileCount: 0,
+            createdAtMilliseconds: 1_700_000_000_000
+        )
+        XCTAssertEqual(
+            english.consumerAccessibilityValue(consumer),
+            "codex, 2 access rules"
+        )
+        XCTAssertEqual(
+            chinese.consumerAccessibilityValue(consumer),
+            "codex，2 条访问规则"
+        )
+        XCTAssertEqual(
+            japanese.consumerAccessibilityValue(consumer),
+            "codex、アクセスルール 2 件"
+        )
+        let localizedDates = [
+            english.formattedDateTime(consumer.createdAtMilliseconds),
+            chinese.formattedDateTime(consumer.createdAtMilliseconds),
+            japanese.formattedDateTime(consumer.createdAtMilliseconds)
+        ]
+        XCTAssertTrue(localizedDates.allSatisfy { $0.contains("2023") })
+        XCTAssertEqual(Set(localizedDates).count, 3)
+        XCTAssertEqual(
+            chinese.statusMessage("Apps & Tools field access revoked"),
+            "字段访问已撤销"
+        )
+        XCTAssertEqual(
+            japanese.statusMessage("Apps & Tools access paused"),
+            "App・ツールのアクセスを一時停止しました"
+        )
+        XCTAssertEqual(chinese.developerCredentialsSmartView, "开发者凭据")
+        XCTAssertEqual(japanese.keysAndCertificatesSmartView, "鍵と証明書")
+        XCTAssertEqual(
+            english.navigationTitle(.smartView(.appsToolsAuthorized)),
+            "Apps & Tools Access"
+        )
+        XCTAssertEqual(
+            chinese.statusMessage("Apps & Tools authorization inventory unavailable"),
+            "应用与工具授权数据不可用"
+        )
         XCTAssertEqual(chinese.vaultStatus, "密码库状态")
         XCTAssertEqual(japanese.unlockToViewItems, "項目を表示するにはロックを解除")
         XCTAssertEqual(english.navigationTitle(.itemType("credit card")), "Credit Card")
         XCTAssertEqual(chinese.navigationTitle(.tag("财务")), "财务")
         XCTAssertEqual(japanese.noItemSelected, "項目が選択されていません")
+    }
+
+    func testCreatingVaultBeginsRecoverySetupWithoutCopyingRecoveryMaterial() {
+        let service = FakeCoreService()
+        let clipboard = FakeClipboard()
+        let recoveryHandler = FakeRecoveryKitHandler()
+        let store = VaultStore(
+            service: service,
+            clipboard: clipboard,
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            recoveryKitHandler: recoveryHandler,
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        XCTAssertTrue(store.createVault(
+            url: URL(fileURLWithPath: "/tmp/RecoverySetup.pswvault"),
+            displayName: "Recovery Setup",
+            password: "correct horse",
+            confirmation: "correct horse"
+        ))
+
+        XCTAssertEqual(service.beginRecoverySetupCallCount, 1)
+        XCTAssertEqual(store.recoveryKit?.workflowKind, .setup)
+        XCTAssertEqual(store.recoveryStatus?.hasRecoveryEnvelope, true)
+        XCTAssertFalse(store.recoveryKitHasExternalCopy)
+        XCTAssertTrue(clipboard.copied.isEmpty)
+        XCTAssertTrue(recoveryHandler.saved.isEmpty)
+        XCTAssertTrue(recoveryHandler.printed.isEmpty)
+    }
+
+    func testRecoveryConfirmationRequiresExternalCopyAndRetainsKitAfterMismatch() {
+        let service = FakeCoreService()
+        let clipboard = FakeClipboard()
+        let recoveryHandler = FakeRecoveryKitHandler()
+        let store = VaultStore(
+            service: service,
+            clipboard: clipboard,
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            recoveryKitHandler: recoveryHandler,
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: URL(fileURLWithPath: "/tmp/RecoveryConfirmation.pswvault"))
+        store.unlock(password: "correct horse")
+
+        XCTAssertTrue(store.beginRecoverySetup())
+        let kit = try! XCTUnwrap(store.recoveryKit)
+        XCTAssertFalse(store.confirmRecoveryKit(recoveryCode: kit.canonicalCode))
+        XCTAssertTrue(service.recoveryConfirmations.isEmpty)
+
+        let destination = URL(fileURLWithPath: "/tmp/KeptNear-Recovery-Kit.pdf")
+        XCTAssertTrue(store.saveRecoveryKit(
+            destinationURL: destination,
+            copy: sampleRecoveryDocumentCopy()
+        ))
+        XCTAssertTrue(store.recoveryKitHasExternalCopy)
+        XCTAssertEqual(recoveryHandler.saved.map(\.destinationURL), [destination])
+
+        let exportedMaterial = [
+            kit.vaultId,
+            kit.recoveryKeyId,
+            kit.canonicalCode,
+            kit.groupedCode,
+            kit.qrPayload,
+            kit.verificationGroups.joined(separator: " ")
+        ].joined(separator: " ")
+        XCTAssertFalse(exportedMaterial.contains("/tmp/RecoveryConfirmation.pswvault"))
+        XCTAssertFalse(exportedMaterial.contains("RecoveryConfirmation.pswvault"))
+
+        XCTAssertFalse(store.confirmRecoveryKit(recoveryCode: "wrong recovery code"))
+        XCTAssertEqual(store.recoveryKit, kit)
+        XCTAssertEqual(service.recoveryConfirmations.count, 1)
+
+        XCTAssertTrue(store.confirmRecoveryKit(recoveryCode: kit.canonicalCode))
+        XCTAssertNil(store.recoveryKit)
+        XCTAssertFalse(store.recoveryKitHasExternalCopy)
+        XCTAssertEqual(store.recoveryStatus?.recoveryKeyId, kit.recoveryKeyId)
+        XCTAssertEqual(service.recoveryConfirmations.count, 2)
+        XCTAssertTrue(clipboard.copied.isEmpty)
+    }
+
+    func testPrintedRecoveryRotationCanBeDeferredWithoutReplacingExistingKey() {
+        let service = FakeCoreService()
+        service.nextRecoveryStatus = RecoveryStatusPayload(
+            hasRecoveryEnvelope: true,
+            recoveryKeyId: "recovery_key_existing"
+        )
+        let clipboard = FakeClipboard()
+        let recoveryHandler = FakeRecoveryKitHandler()
+        let store = VaultStore(
+            service: service,
+            clipboard: clipboard,
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            recoveryKitHandler: recoveryHandler,
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: URL(fileURLWithPath: "/tmp/RecoveryRotation.pswvault"))
+        store.unlock(password: "correct horse")
+
+        XCTAssertTrue(store.beginRecoveryRotation())
+        let kit = try! XCTUnwrap(store.recoveryKit)
+        XCTAssertTrue(store.printRecoveryKit(copy: sampleRecoveryDocumentCopy()))
+        XCTAssertEqual(recoveryHandler.printed, [kit])
+        XCTAssertTrue(store.recoveryKitHasExternalCopy)
+
+        store.deferRecoveryKit()
+
+        XCTAssertEqual(service.cancelledRecoveryWorkflows.map(\.sessionId), [7])
+        XCTAssertEqual(service.cancelledRecoveryWorkflows.map(\.workflowId), [kit.workflowId])
+        XCTAssertNil(store.recoveryKit)
+        XCTAssertEqual(store.recoveryStatus?.recoveryKeyId, "recovery_key_existing")
+        XCTAssertEqual(
+            store.statusMessage,
+            "Recovery rotation cancelled; the existing recovery key remains active"
+        )
+        XCTAssertTrue(clipboard.copied.isEmpty)
+    }
+
+    func testLockClearsPendingRecoveryMaterialWithoutUsingClipboard() {
+        let service = FakeCoreService()
+        service.nextRecoveryStatus = RecoveryStatusPayload(
+            hasRecoveryEnvelope: true,
+            recoveryKeyId: "recovery_key_existing"
+        )
+        let clipboard = FakeClipboard()
+        let store = VaultStore(
+            service: service,
+            clipboard: clipboard,
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            recoveryKitHandler: FakeRecoveryKitHandler(),
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: URL(fileURLWithPath: "/tmp/RecoveryLock.pswvault"))
+        store.unlock(password: "correct horse")
+        XCTAssertTrue(store.beginRecoveryRotation())
+        XCTAssertNotNil(store.recoveryKit)
+
+        store.lock()
+
+        XCTAssertNil(store.recoveryKit)
+        XCTAssertNil(store.recoveryStatus)
+        XCTAssertEqual(service.lockedSessionIds, [7])
+        XCTAssertTrue(clipboard.copied.isEmpty)
+    }
+
+    func testRecoveryCancellationFailureKeepsPendingKitVisible() {
+        let service = FakeCoreService()
+        service.nextRecoveryStatus = RecoveryStatusPayload(
+            hasRecoveryEnvelope: true,
+            recoveryKeyId: "recovery_key_existing"
+        )
+        service.cancelRecoveryWorkflowError = CoreBridgeError.commandFailed(
+            "recovery cancellation failed"
+        )
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            recoveryKitHandler: FakeRecoveryKitHandler(),
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: URL(fileURLWithPath: "/tmp/RecoveryCancelFailure.pswvault"))
+        store.unlock(password: "correct horse")
+        XCTAssertTrue(store.beginRecoveryRotation())
+        let kit = store.recoveryKit
+
+        store.deferRecoveryKit()
+
+        XCTAssertEqual(store.recoveryKit, kit)
+        XCTAssertEqual(store.statusMessage, "recovery cancellation failed")
+        XCTAssertTrue(service.cancelledRecoveryWorkflows.isEmpty)
+    }
+
+    func testRecoveryRotationCommitFailureClearsInvalidatedCandidate() {
+        let service = FakeCoreService()
+        service.nextRecoveryStatus = RecoveryStatusPayload(
+            hasRecoveryEnvelope: true,
+            recoveryKeyId: "recovery_key_existing"
+        )
+        service.recoveryConfirmationError = CoreBridgeError.commandFailed(
+            "recovery rotation commit failed; start again: stale candidate"
+        )
+        let recoveryHandler = FakeRecoveryKitHandler()
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            recoveryKitHandler: recoveryHandler,
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: URL(fileURLWithPath: "/tmp/RecoveryCommitFailure.pswvault"))
+        store.unlock(password: "correct horse")
+        XCTAssertTrue(store.beginRecoveryRotation())
+        let kit = try! XCTUnwrap(store.recoveryKit)
+        XCTAssertTrue(store.printRecoveryKit(copy: sampleRecoveryDocumentCopy()))
+
+        XCTAssertFalse(store.confirmRecoveryKit(recoveryCode: kit.canonicalCode))
+
+        XCTAssertNil(store.recoveryKit)
+        XCTAssertFalse(store.recoveryKitHasExternalCopy)
+        XCTAssertEqual(store.recoveryStatus?.recoveryKeyId, "recovery_key_existing")
+        XCTAssertEqual(store.statusMessage, "Recovery rotation failed; start again")
+    }
+
+    func testRecoveryKitHandlerWritesPDFOnlyToExplicitDestination() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("KeptNearRecoveryKitTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer {
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let destination = directory.appendingPathComponent("chosen-recovery-kit.pdf")
+
+        try MacRecoveryKitHandler().savePDF(
+            kit: makeFakeRecoveryKit(
+                workflowId: 901,
+                workflowKind: .setup,
+                recoveryKeyId: "recovery_key_pdf"
+            ),
+            copy: sampleRecoveryDocumentCopy(),
+            destinationURL: destination
+        )
+
+        let data = try Data(contentsOf: destination)
+        XCTAssertTrue(data.starts(with: Data("%PDF".utf8)))
+        XCTAssertGreaterThan(data.count, 1_000)
+        XCTAssertEqual(
+            try FileManager.default.contentsOfDirectory(atPath: directory.path),
+            ["chosen-recovery-kit.pdf"]
+        )
+    }
+
+    func testRecoveryKitPayloadDecodesMinimalFFIContract() throws {
+        let json = """
+        {
+          "ok": true,
+          "payload": {
+            "type": "recoveryKit",
+            "workflow_id": 42,
+            "workflow_kind": "setup",
+            "vault_id": "vault_000102030405060708090a0b0c0d0e0f",
+            "recovery_key_id": "recovery_key_101112131415161718191a1b1c1d1e1f",
+            "generated_at_unix_seconds": 1800000000,
+            "canonical_code": "knr1example",
+            "grouped_code": "KNR1 EXAM PLE",
+            "qr_payload": "knr1example",
+            "verification_groups": ["EXAM"]
+          }
+        }
+        """
+
+        let response = try JSONDecoder().decode(
+            CoreResponse.self,
+            from: Data(json.utf8)
+        )
+        guard case let .recoveryKit(payload) = response.payload else {
+            return XCTFail("expected recovery kit payload")
+        }
+        XCTAssertEqual(payload.workflowId, 42)
+        XCTAssertEqual(payload.workflowKind, .setup)
+        XCTAssertEqual(payload.canonicalCode, "knr1example")
+        XCTAssertEqual(payload.verificationGroups, ["EXAM"])
+        XCTAssertFalse(json.contains("\"path\""))
+        XCTAssertFalse(json.contains("\"items\""))
+    }
+
+    func testLockedVaultRecoveryUsesRecoveryFirstFlowAndRevokesKeychainMaterial() {
+        let service = FakeCoreService(seedItems: [
+            SeedLogin(
+                title: "Recovered Login",
+                username: "alice",
+                password: "secret",
+                url: "https://example.com",
+                notes: "",
+                tags: []
+            )
+        ])
+        service.nextLockedRecoveryStatus = RecoveryStatusPayload(
+            hasRecoveryEnvelope: true,
+            recoveryKeyId: "recovery_key_existing"
+        )
+        let keychain = FakeConvenienceUnlockStore()
+        let vaultURL = URL(fileURLWithPath: "/tmp/LockedRecovery.pswvault")
+        try! keychain.saveMaterial("old-local-material", for: vaultURL)
+        keychain.saveLegacyPasswordMaterial("old-password", for: vaultURL)
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: keychain,
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        store.openVault(url: vaultURL)
+        XCTAssertTrue(store.lockedRecoveryStatus?.hasRecoveryEnvelope == true)
+        XCTAssertTrue(store.convenienceUnlockAvailable)
+
+        XCTAssertTrue(store.recoverVault(
+            recoveryCode: service.expectedRecoveryCode,
+            newPassword: "new correct horse",
+            confirmation: "new correct horse"
+        ))
+
+        XCTAssertTrue(store.isUnlocked)
+        XCTAssertEqual(store.items.map(\.title), ["Recovered Login"])
+        XCTAssertEqual(service.recoveredVaultRequests.count, 1)
+        XCTAssertEqual(service.recoveredVaultRequests.first?.path, vaultURL.path)
+        XCTAssertEqual(service.recoveredVaultRequests.first?.recoveryCode, service.expectedRecoveryCode)
+        XCTAssertEqual(service.recoveredVaultRequests.first?.newPassword, "new correct horse")
+        XCTAssertEqual(keychain.deleteMaterialURLs, [vaultURL])
+        XCTAssertEqual(keychain.deleteLegacyMaterialURLs, [vaultURL])
+        XCTAssertNil(keychain.material(for: vaultURL))
+        XCTAssertEqual(keychain.legacyPasswordMaterialCount(for: vaultURL), 0)
+        XCTAssertFalse(store.convenienceUnlockAvailable)
+        XCTAssertEqual(store.statusMessage, "Vault recovered")
+    }
+
+    func testLockedVaultRecoveryValidationDoesNotCallCore() {
+        let service = FakeCoreService()
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: URL(fileURLWithPath: "/tmp/NoRecovery.pswvault"))
+
+        XCTAssertFalse(store.recoverVault(
+            recoveryCode: "code",
+            newPassword: "new password",
+            confirmation: "new password"
+        ))
+        XCTAssertEqual(store.statusMessage, "Offline recovery is not available for this vault")
+
+        service.nextLockedRecoveryStatus = RecoveryStatusPayload(
+            hasRecoveryEnvelope: true,
+            recoveryKeyId: "recovery_key_existing"
+        )
+        store.refreshLockedRecoveryStatus()
+        XCTAssertFalse(store.recoverVault(
+            recoveryCode: "",
+            newPassword: "new password",
+            confirmation: "new password"
+        ))
+        XCTAssertEqual(store.statusMessage, "Recovery code is required")
+        XCTAssertFalse(store.recoverVault(
+            recoveryCode: "code",
+            newPassword: "",
+            confirmation: ""
+        ))
+        XCTAssertEqual(store.statusMessage, "New master password is required")
+        XCTAssertFalse(store.recoverVault(
+            recoveryCode: "code",
+            newPassword: "one",
+            confirmation: "two"
+        ))
+        XCTAssertEqual(store.statusMessage, "New master passwords do not match")
+        XCTAssertTrue(service.recoveredVaultRequests.isEmpty)
+    }
+
+    func testInvalidRecoveryCodeKeepsVaultLockedAndPreservesKeychainMaterial() {
+        let service = FakeCoreService()
+        service.nextLockedRecoveryStatus = RecoveryStatusPayload(
+            hasRecoveryEnvelope: true,
+            recoveryKeyId: "recovery_key_existing"
+        )
+        service.recoverVaultError = CoreBridgeError.commandFailed("invalid vault credentials")
+        let keychain = FakeConvenienceUnlockStore()
+        let vaultURL = URL(fileURLWithPath: "/tmp/InvalidRecovery.pswvault")
+        try! keychain.saveMaterial("working-local-material", for: vaultURL)
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: keychain,
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: vaultURL)
+
+        XCTAssertFalse(store.recoverVault(
+            recoveryCode: "knr1wrong",
+            newPassword: "new password",
+            confirmation: "new password"
+        ))
+
+        XCTAssertFalse(store.isUnlocked)
+        XCTAssertEqual(store.statusMessage, "Recovery code is invalid or does not match this vault")
+        XCTAssertEqual(keychain.material(for: vaultURL), "working-local-material")
+        XCTAssertTrue(keychain.deleteMaterialURLs.isEmpty)
+        XCTAssertTrue(keychain.deleteLegacyMaterialURLs.isEmpty)
+    }
+
+    func testRecoveredVaultReportsPartialSuccessWhenKeychainRevocationFails() {
+        let service = FakeCoreService()
+        service.nextLockedRecoveryStatus = RecoveryStatusPayload(
+            hasRecoveryEnvelope: true,
+            recoveryKeyId: "recovery_key_existing"
+        )
+        let keychain = FakeConvenienceUnlockStore()
+        let vaultURL = URL(fileURLWithPath: "/tmp/RecoveryCleanupFailure.pswvault")
+        try! keychain.saveMaterial("old-local-material", for: vaultURL)
+        keychain.deleteMaterialError = CoreBridgeError.commandFailed("keychain unavailable")
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: keychain,
+            userDefaults: makeIsolatedDefaults()
+        )
+        store.openVault(url: vaultURL)
+
+        XCTAssertTrue(store.recoverVault(
+            recoveryCode: service.expectedRecoveryCode,
+            newPassword: "new password",
+            confirmation: "new password"
+        ))
+
+        XCTAssertTrue(store.isUnlocked)
+        XCTAssertEqual(store.statusMessage, "Vault recovered, but Keychain cleanup failed")
+        XCTAssertEqual(keychain.material(for: vaultURL), "old-local-material")
+        XCTAssertTrue(store.convenienceUnlockAvailable)
+    }
+
+    func testLockedRecoveryStatusFailureKeepsReplacementFallbackAvailable() {
+        let service = FakeCoreService()
+        service.lockedRecoveryStatusError = CoreBridgeError.commandFailed(
+            "recovery envelope could not be inspected"
+        )
+        let store = VaultStore(
+            service: service,
+            clipboard: FakeClipboard(),
+            convenienceUnlockStore: FakeConvenienceUnlockStore(),
+            userDefaults: makeIsolatedDefaults()
+        )
+
+        XCTAssertTrue(store.openVault(
+            url: URL(fileURLWithPath: "/tmp/UnknownRecoveryStatus.pswvault")
+        ))
+
+        XCTAssertNil(store.lockedRecoveryStatus)
+        XCTAssertTrue(store.lockedRecoveryStatusCheckFailed)
+        XCTAssertFalse(store.recoverVault(
+            recoveryCode: service.expectedRecoveryCode,
+            newPassword: "new password",
+            confirmation: "new password"
+        ))
+        XCTAssertEqual(store.statusMessage, "Offline recovery is not available for this vault")
+        XCTAssertTrue(service.recoveredVaultRequests.isEmpty)
+    }
+
+    private func sampleRecoveryDocumentCopy() -> RecoveryKitDocumentCopy {
+        RecoveryKitDocumentCopy(
+            title: "KeptNear Recovery Kit",
+            authorityWarningTitle: "Recovery authority",
+            authorityWarningMessage: "Keep this offline.",
+            recoveryCodeLabel: "Recovery Code",
+            vaultIdLabel: "Vault ID",
+            recoveryKeyIdLabel: "Recovery Key ID",
+            generatedLabel: "Generated",
+            offlineStorageMessage: "Store separately from the vault."
+        )
     }
 }
 
@@ -8757,6 +11629,42 @@ private final class FakeURLOpener: URLOpening {
     }
 }
 
+@MainActor
+private final class FakeRecoveryKitHandler: RecoveryKitHandling {
+    struct SavedRecoveryKit {
+        let kit: RecoveryKitPayload
+        let copy: RecoveryKitDocumentCopy
+        let destinationURL: URL
+    }
+
+    private(set) var saved: [SavedRecoveryKit] = []
+    private(set) var printed: [RecoveryKitPayload] = []
+    var saveError: Error?
+    var printError: Error?
+
+    func savePDF(
+        kit: RecoveryKitPayload,
+        copy: RecoveryKitDocumentCopy,
+        destinationURL: URL
+    ) throws {
+        if let saveError {
+            throw saveError
+        }
+        saved.append(SavedRecoveryKit(
+            kit: kit,
+            copy: copy,
+            destinationURL: destinationURL
+        ))
+    }
+
+    func printKit(kit: RecoveryKitPayload, copy: RecoveryKitDocumentCopy) throws {
+        if let printError {
+            throw printError
+        }
+        printed.append(kit)
+    }
+}
+
 private final class FakeConvenienceUnlockStore: ConvenienceUnlockStoring {
     private var materials: [String: String] = [:]
     private var legacyPasswordMaterials: [String: [String: String]] = [:]
@@ -8820,6 +11728,84 @@ private final class FakeConvenienceUnlockStore: ConvenienceUnlockStoring {
     }
 }
 
+private func makeFakeRecoveryKit(
+    workflowId: UInt64,
+    workflowKind: RecoveryWorkflowKind,
+    recoveryKeyId: String
+) -> RecoveryKitPayload {
+    let canonicalCode = "knr1qyqqzqsrqszsvpcgpy9qkrqdpc83qygjzv2p29shrqv35xcur50p7a7n6ss"
+    let payloadCharacters = Array(canonicalCode.uppercased().dropFirst(4))
+    let groups = stride(from: 0, to: payloadCharacters.count, by: 4).map { start in
+        String(payloadCharacters[start ..< min(start + 4, payloadCharacters.count)])
+    }
+    return RecoveryKitPayload(
+        workflowId: workflowId,
+        workflowKind: workflowKind,
+        vaultId: "vault_000102030405060708090a0b0c0d0e0f",
+        recoveryKeyId: recoveryKeyId,
+        generatedAtUnixSeconds: 1_800_000_000,
+        canonicalCode: canonicalCode,
+        groupedCode: "KNR1 \(groups.joined(separator: " "))",
+        qrPayload: canonicalCode,
+        verificationGroups: groups.filter { $0.count == 4 }
+    )
+}
+
+@MainActor
+private final class FakeApprovalNotificationScheduler: ApprovalNotificationScheduling {
+    struct Posted: Equatable {
+        let identifier: String
+        let title: String
+        let body: String
+    }
+
+    var prepareCallCount = 0
+    var posted: [Posted] = []
+    var reconciled: [Set<String>] = []
+
+    func prepare() {
+        prepareCallCount += 1
+    }
+
+    func postPendingRequest(identifier: String, title: String, body: String) {
+        posted.append(
+            Posted(identifier: identifier, title: title, body: body)
+        )
+    }
+
+    func reconcile(activeRequestIdentifiers: Set<String>) {
+        reconciled.append(activeRequestIdentifiers)
+    }
+}
+
+private func makeAppsToolsPendingRequest(
+    requestSource: String = "approval",
+    requestId: String,
+    kind: String,
+    credentialId: String? = nil,
+    secretFieldId: String? = nil
+) -> AppsToolsPendingRequest {
+    AppsToolsPendingRequest(
+        requestSource: requestSource,
+        requestId: requestId,
+        kind: kind,
+        consumerId: requestSource == "approval" ? "consumer_01" : nil,
+        consumerLabel: requestSource == "approval" ? "Local adapter" : nil,
+        identity: nil,
+        pairingComparisonCode: requestSource == "pairing" ? "0123456789" : nil,
+        pairingKeyFingerprint: requestSource == "pairing" ? "1112-1314-1516-1718" : nil,
+        vaultId: requestSource == "approval" ? "vault_01" : nil,
+        credentialId: credentialId,
+        secretFieldId: secretFieldId,
+        capability: kind == "access" || kind == "credential-access" ? "process.run" : nil,
+        capabilityVersion: kind == "access" || kind == "credential-access" ? 1 : nil,
+        requestDescription: kind == "credential-access" ? "release credential" : nil,
+        createdAtMilliseconds: 100,
+        expiresAtMilliseconds: 200,
+        remainingMilliseconds: nil
+    )
+}
+
 private final class FakeCoreService: CoreService {
     var isAvailable = true
     var status = "Fake core connected"
@@ -8833,6 +11819,7 @@ private final class FakeCoreService: CoreService {
     var committedKeepDuplicates: Bool?
     var exportedPath: String?
     var exportedFormat: String?
+    var exportedCurrentPassword: String?
     var backupDestinationPath: String?
     var restoreSourcePath: String?
     var restoreDestinationPath: String?
@@ -8840,6 +11827,55 @@ private final class FakeCoreService: CoreService {
     var restoreBackupCallCount = 0
     var refreshCallCount = 0
     var passwordHealthCallCount = 0
+    var authorizedCredentialIdsCallCount = 0
+    var appsToolsVaultPathConflict = false
+    var nextAuthorizedCredentialIds: Set<String> = []
+    var nextAppsToolsPendingRequests = AppsToolsPendingRequestQueue.empty
+    var appsToolsPendingRequestsCallCount = 0
+    var appsToolsPendingRequestsError: Error?
+    var appsToolsPendingRequestDecisionError: Error?
+    var deniedAppsToolsPendingRequests: [(requestSource: String, requestId: String)] = []
+    var approvedAppsToolsPairings: [(requestId: String, label: String)] = []
+    var approvedAppsToolsUnlocks: [(sessionId: UInt64, requestId: String)] = []
+    var reviewedAppsToolsCredentials: [(sessionId: UInt64, requestId: String)] = []
+    var nextAppsToolsCredentialReview: AppsToolsCredentialReview?
+    var allowedOnceAppsToolsRequests: [
+        (
+            sessionId: UInt64,
+            requestId: String,
+            credentialId: String?,
+            secretFieldId: String?
+        )
+    ] = []
+    var configuredLongTermAppsToolsRequests: [
+        (
+            sessionId: UInt64,
+            requestId: String,
+            credentialId: String?,
+            secretFieldId: String?,
+            confirmationPolicy: AppsToolsConfirmationPolicy
+        )
+    ] = []
+    var nextAppsToolsPaused = false
+    var nextAppsToolsConsumers: [AppsToolsConsumerSummary] = []
+    var nextAppsToolsConsumerDetails: [String: AppsToolsConsumerDetail] = [:]
+    var appsToolsConsumerDetailRequests: [String] = []
+    var nextAppsToolsUsageProfileSetups: [String: AppsToolsUsageProfileSetup] = [:]
+    var appsToolsUsageProfileSetupRequests: [String] = []
+    var createdAppsToolsUsageProfiles: [
+        (sessionId: UInt64, consumerId: String, draft: AppsToolsUsageProfileDraft)
+    ] = []
+    var removedAppsToolsUsageProfiles: [
+        (sessionId: UInt64, consumerId: String, usageProfileId: String)
+    ] = []
+    var appsToolsUsageProfileError: Error?
+    var appsToolsPauseRequests: [Bool] = []
+    var revokedAppsToolsFields: [AppsToolsFieldReference] = []
+    var revokedAppsToolsConsumers: [String] = []
+    var createCredentialCallCount = 0
+    var updateCredentialCallCount = 0
+    var duplicateCredentialCallCount = 0
+    var lastCredentialUpdateForm: CredentialEditorForm?
     var createLoginCallCount = 0
     var updateLoginCallCount = 0
     var createSecureNoteCallCount = 0
@@ -8856,6 +11892,7 @@ private final class FakeCoreService: CoreService {
     var loginFieldRequests: [String] = []
     var creditCardFieldRequests: [String] = []
     var softwareLicenseFieldRequests: [String] = []
+    var credentialSecretFieldRequests: [String] = []
     var quarantineRejectedCallCount = 0
     var importSecureNoteOnCommit = false
     var importCreditCardOnCommit = false
@@ -8865,7 +11902,41 @@ private final class FakeCoreService: CoreService {
     var masterPasswordChanges: [(sessionId: UInt64, currentPassword: String, newPassword: String)] = []
     var localMaterialUnlockError: Error?
     var changeMasterPasswordError: Error?
+    var lockedRecoveryStatusError: Error?
+    var recoverVaultError: Error?
+    var recoveryStatusError: Error?
+    var beginRecoverySetupError: Error?
+    var beginRecoveryRotationError: Error?
+    var recoveryConfirmationError: Error?
+    var cancelRecoveryWorkflowError: Error?
     var refreshError: Error?
+    var authorizationInventoryError: Error?
+    var recoveryStatusCallCount = 0
+    var lockedRecoveryStatusRequests: [String] = []
+    var recoveredVaultRequests: [(path: String, recoveryCode: String, newPassword: String)] = []
+    let expectedRecoveryCode = "knr1qyqqzqsrqszsvpcgpy9qkrqdpc83qygjzv2p29shrqv35xcur50p7a7n6ss"
+    var nextLockedRecoveryStatus = RecoveryStatusPayload(
+        hasRecoveryEnvelope: false,
+        recoveryKeyId: nil
+    )
+    var beginRecoverySetupCallCount = 0
+    var beginRecoveryRotationCallCount = 0
+    var recoveryConfirmations: [(sessionId: UInt64, workflowId: UInt64, recoveryCode: String)] = []
+    var cancelledRecoveryWorkflows: [(sessionId: UInt64, workflowId: UInt64)] = []
+    var nextRecoveryStatus = RecoveryStatusPayload(
+        hasRecoveryEnvelope: false,
+        recoveryKeyId: nil
+    )
+    var nextRecoverySetupKit = makeFakeRecoveryKit(
+        workflowId: 801,
+        workflowKind: .setup,
+        recoveryKeyId: "recovery_key_setup"
+    )
+    var nextRecoveryRotationKit = makeFakeRecoveryKit(
+        workflowId: 802,
+        workflowKind: .rotation,
+        recoveryKeyId: "recovery_key_rotation"
+    )
     var resolvedConflictIds: [String] = []
     var loadedConflictIds: [String] = []
     var resolvedConflictCandidateRevisions: [String] = []
@@ -8908,6 +11979,8 @@ private final class FakeCoreService: CoreService {
 
     private var items: [VaultItemView] = []
     private var details: [String: LoginDetail] = [:]
+    private var credentialDetails: [String: CredentialDetail] = [:]
+    private var credentialSecrets: [String: [String: String]] = [:]
     private var secureNoteDetails: [String: SecureNoteDetail] = [:]
     private var creditCardDetails: [String: CreditCardDetail] = [:]
     private var softwareLicenseDetails: [String: SoftwareLicenseDetail] = [:]
@@ -8917,6 +11990,7 @@ private final class FakeCoreService: CoreService {
     private var licenseKeys: [String: String] = [:]
     private var nextId = 1
     private var nextRevision = 1
+    private var nextUsageProfileId = 1
 
     init(seedItems: [SeedLogin] = []) {
         for seed in seedItems {
@@ -8933,6 +12007,8 @@ private final class FakeCoreService: CoreService {
             revision: revision,
             title: items[index].title,
             itemType: items[index].itemType,
+            templateId: items[index].templateId,
+            secretKinds: items[index].secretKinds,
             status: items[index].status,
             conflictId: items[index].conflictId,
             favorite: items[index].favorite,
@@ -8950,6 +12026,8 @@ private final class FakeCoreService: CoreService {
             revision: revision,
             title: items[index].title,
             itemType: items[index].itemType,
+            templateId: items[index].templateId,
+            secretKinds: items[index].secretKinds,
             status: "conflicted",
             conflictId: conflictId,
             favorite: items[index].favorite,
@@ -8970,8 +12048,20 @@ private final class FakeCoreService: CoreService {
         openedPath = path
     }
 
+    func lockedRecoveryStatus(path: String) throws -> RecoveryStatusPayload {
+        lockedRecoveryStatusRequests.append(path)
+        if let lockedRecoveryStatusError {
+            throw lockedRecoveryStatusError
+        }
+        return nextLockedRecoveryStatus
+    }
+
     func unlock(path: String, password: String) throws -> UnlockedPayload {
-        UnlockedPayload(sessionId: 7, items: visibleItems(includeArchived: false))
+        UnlockedPayload(
+            sessionId: 7,
+            items: visibleItems(includeArchived: false),
+            appsToolsVaultPathConflict: appsToolsVaultPathConflict
+        )
     }
 
     func unlockWithLocalMaterial(path: String, localMaterial: String) throws -> UnlockedPayload {
@@ -8980,7 +12070,35 @@ private final class FakeCoreService: CoreService {
         if let localMaterialUnlockError {
             throw localMaterialUnlockError
         }
-        return UnlockedPayload(sessionId: 9, items: visibleItems(includeArchived: false))
+        return UnlockedPayload(
+            sessionId: 9,
+            items: visibleItems(includeArchived: false),
+            appsToolsVaultPathConflict: appsToolsVaultPathConflict
+        )
+    }
+
+    func recoverVault(
+        path: String,
+        recoveryCode: String,
+        newPassword: String
+    ) throws -> UnlockedPayload {
+        recoveredVaultRequests.append((
+            path: path,
+            recoveryCode: recoveryCode,
+            newPassword: newPassword
+        ))
+        if let recoverVaultError {
+            throw recoverVaultError
+        }
+        guard recoveryCode == expectedRecoveryCode else {
+            throw CoreBridgeError.commandFailed("invalid vault credentials")
+        }
+        nextRecoveryStatus = nextLockedRecoveryStatus
+        return UnlockedPayload(
+            sessionId: 11,
+            items: visibleItems(includeArchived: false),
+            appsToolsVaultPathConflict: appsToolsVaultPathConflict
+        )
     }
 
     func localUnlockMaterial(sessionId: UInt64) throws -> String {
@@ -8993,6 +12111,80 @@ private final class FakeCoreService: CoreService {
             throw changeMasterPasswordError
         }
         masterPasswordChanges.append((sessionId, currentPassword, newPassword))
+    }
+
+    func recoveryStatus(sessionId: UInt64) throws -> RecoveryStatusPayload {
+        recoveryStatusCallCount += 1
+        if let recoveryStatusError {
+            throw recoveryStatusError
+        }
+        return nextRecoveryStatus
+    }
+
+    func beginRecoverySetup(sessionId: UInt64) throws -> RecoveryKitPayload {
+        beginRecoverySetupCallCount += 1
+        if let beginRecoverySetupError {
+            throw beginRecoverySetupError
+        }
+        nextRecoveryStatus = RecoveryStatusPayload(
+            hasRecoveryEnvelope: true,
+            recoveryKeyId: nextRecoverySetupKit.recoveryKeyId
+        )
+        nextLockedRecoveryStatus = nextRecoveryStatus
+        return nextRecoverySetupKit
+    }
+
+    func beginRecoveryRotation(sessionId: UInt64) throws -> RecoveryKitPayload {
+        beginRecoveryRotationCallCount += 1
+        if let beginRecoveryRotationError {
+            throw beginRecoveryRotationError
+        }
+        return nextRecoveryRotationKit
+    }
+
+    func confirmRecoveryWorkflow(
+        sessionId: UInt64,
+        workflowId: UInt64,
+        recoveryCode: String
+    ) throws -> RecoveryConfirmationPayload {
+        recoveryConfirmations.append((
+            sessionId: sessionId,
+            workflowId: workflowId,
+            recoveryCode: recoveryCode
+        ))
+        if let recoveryConfirmationError {
+            throw recoveryConfirmationError
+        }
+        let kit: RecoveryKitPayload
+        if workflowId == nextRecoverySetupKit.workflowId {
+            kit = nextRecoverySetupKit
+        } else if workflowId == nextRecoveryRotationKit.workflowId {
+            kit = nextRecoveryRotationKit
+        } else {
+            throw CoreBridgeError.commandFailed("unknown recovery workflow")
+        }
+        guard recoveryCode == kit.canonicalCode || recoveryCode == kit.groupedCode else {
+            throw CoreBridgeError.commandFailed("recovery confirmation did not match")
+        }
+        nextRecoveryStatus = RecoveryStatusPayload(
+            hasRecoveryEnvelope: true,
+            recoveryKeyId: kit.recoveryKeyId
+        )
+        nextLockedRecoveryStatus = nextRecoveryStatus
+        return RecoveryConfirmationPayload(
+            workflowKind: kit.workflowKind,
+            recoveryKeyId: kit.recoveryKeyId
+        )
+    }
+
+    func cancelRecoveryWorkflow(sessionId: UInt64, workflowId: UInt64) throws {
+        if let cancelRecoveryWorkflowError {
+            throw cancelRecoveryWorkflowError
+        }
+        cancelledRecoveryWorkflows.append((
+            sessionId: sessionId,
+            workflowId: workflowId
+        ))
     }
 
     func lock(sessionId: UInt64) throws {
@@ -9074,11 +12266,650 @@ private final class FakeCoreService: CoreService {
                 ]
                 .joined(separator: " ")
                 .lowercased()
+            } else if let detail = credentialDetails[item.id] {
+                haystack = [
+                    item.title,
+                    detail.textFields.map(\.text).joined(separator: " "),
+                    item.tags.joined(separator: " "),
+                    item.itemType
+                ]
+                .joined(separator: " ")
+                .lowercased()
             } else {
                 return false
             }
             return haystack.contains(needle)
         }
+    }
+
+    func listAuthorizedCredentialIds(sessionId: UInt64) throws -> Set<String> {
+        authorizedCredentialIdsCallCount += 1
+        if let authorizationInventoryError {
+            throw authorizationInventoryError
+        }
+        return nextAuthorizedCredentialIds
+    }
+
+    func appsToolsSnapshot(sessionId: UInt64) throws -> AppsToolsSnapshot {
+        authorizedCredentialIdsCallCount += 1
+        if let authorizationInventoryError {
+            throw authorizationInventoryError
+        }
+        return currentAppsToolsSnapshot()
+    }
+
+    func appsToolsPendingRequests() throws -> AppsToolsPendingRequestQueue {
+        appsToolsPendingRequestsCallCount += 1
+        if let appsToolsPendingRequestsError {
+            throw appsToolsPendingRequestsError
+        }
+        return nextAppsToolsPendingRequests
+    }
+
+    func denyAppsToolsPendingRequest(
+        requestSource: String,
+        requestId: String
+    ) throws -> AppsToolsPendingRequestDecision {
+        if let appsToolsPendingRequestDecisionError {
+            throw appsToolsPendingRequestDecisionError
+        }
+        deniedAppsToolsPendingRequests.append((requestSource, requestId))
+        removeAppsToolsPendingRequest(requestSource: requestSource, requestId: requestId)
+        return AppsToolsPendingRequestDecision(
+            action: "deny",
+            status: "denied",
+            useGrantId: nil,
+            accessRuleId: nil
+        )
+    }
+
+    func approveAppsToolsPairing(
+        requestId: String,
+        label: String
+    ) throws -> AppsToolsPendingRequestDecision {
+        if let appsToolsPendingRequestDecisionError {
+            throw appsToolsPendingRequestDecisionError
+        }
+        approvedAppsToolsPairings.append((requestId, label))
+        removeAppsToolsPendingRequest(requestSource: "pairing", requestId: requestId)
+        return AppsToolsPendingRequestDecision(
+            action: "pair",
+            status: "awaiting-proof",
+            useGrantId: nil,
+            accessRuleId: nil
+        )
+    }
+
+    func approveAppsToolsPendingUnlock(
+        sessionId: UInt64,
+        requestId: String
+    ) throws -> AppsToolsPendingRequestDecision {
+        if let appsToolsPendingRequestDecisionError {
+            throw appsToolsPendingRequestDecisionError
+        }
+        approvedAppsToolsUnlocks.append((sessionId, requestId))
+        removeAppsToolsPendingRequest(requestSource: "approval", requestId: requestId)
+        return AppsToolsPendingRequestDecision(
+            action: "approve-unlock",
+            status: "approved",
+            useGrantId: nil,
+            accessRuleId: nil
+        )
+    }
+
+    func reviewAppsToolsPendingCredential(
+        sessionId: UInt64,
+        requestId: String
+    ) throws -> AppsToolsCredentialReview {
+        if let appsToolsPendingRequestDecisionError {
+            throw appsToolsPendingRequestDecisionError
+        }
+        reviewedAppsToolsCredentials.append((sessionId, requestId))
+        guard let nextAppsToolsCredentialReview else {
+            throw CoreBridgeError.commandFailed("Apps & Tools credential review unavailable")
+        }
+        return nextAppsToolsCredentialReview
+    }
+
+    func allowAppsToolsPendingRequestOnce(
+        sessionId: UInt64,
+        requestId: String,
+        credentialId: String?,
+        secretFieldId: String?
+    ) throws -> AppsToolsPendingRequestDecision {
+        if let appsToolsPendingRequestDecisionError {
+            throw appsToolsPendingRequestDecisionError
+        }
+        allowedOnceAppsToolsRequests.append(
+            (sessionId, requestId, credentialId, secretFieldId)
+        )
+        removeAppsToolsPendingRequest(requestSource: "approval", requestId: requestId)
+        return AppsToolsPendingRequestDecision(
+            action: "allow-once",
+            status: "approved",
+            useGrantId: "use_grant_test",
+            accessRuleId: nil
+        )
+    }
+
+    func configureAppsToolsLongTermAccess(
+        sessionId: UInt64,
+        requestId: String,
+        credentialId: String?,
+        secretFieldId: String?,
+        confirmationPolicy: AppsToolsConfirmationPolicy
+    ) throws -> AppsToolsPendingRequestDecision {
+        if let appsToolsPendingRequestDecisionError {
+            throw appsToolsPendingRequestDecisionError
+        }
+        configuredLongTermAppsToolsRequests.append(
+            (sessionId, requestId, credentialId, secretFieldId, confirmationPolicy)
+        )
+        removeAppsToolsPendingRequest(requestSource: "approval", requestId: requestId)
+        return AppsToolsPendingRequestDecision(
+            action: "configure-long-term-access",
+            status: "approved",
+            useGrantId: nil,
+            accessRuleId: "access_rule_test"
+        )
+    }
+
+    func appsToolsConsumerDetail(
+        sessionId: UInt64,
+        consumerId: String
+    ) throws -> AppsToolsConsumerDetail {
+        appsToolsConsumerDetailRequests.append(consumerId)
+        if let authorizationInventoryError {
+            throw authorizationInventoryError
+        }
+        guard let detail = nextAppsToolsConsumerDetails[consumerId] else {
+            throw CoreBridgeError.commandFailed("Apps & Tools Consumer is unavailable")
+        }
+        return detail
+    }
+
+    func appsToolsUsageProfileSetup(
+        sessionId: UInt64,
+        consumerId: String
+    ) throws -> AppsToolsUsageProfileSetup {
+        appsToolsUsageProfileSetupRequests.append(consumerId)
+        if let appsToolsUsageProfileError {
+            throw appsToolsUsageProfileError
+        }
+        if let setup = nextAppsToolsUsageProfileSetups[consumerId] {
+            return setup
+        }
+        guard let detail = nextAppsToolsConsumerDetails[consumerId] else {
+            throw CoreBridgeError.commandFailed("Apps & Tools Consumer is unavailable")
+        }
+        let recommendation: AppsToolsUsageProfileRecommendation?
+        switch detail.consumer.identity.executableName?.lowercased() {
+        case "gh":
+            recommendation = AppsToolsUsageProfileRecommendation(
+                recommendationId: "github-cli",
+                templateId: "cli-environment-variable",
+                technicalName: "GH_TOKEN"
+            )
+        case "glab":
+            recommendation = AppsToolsUsageProfileRecommendation(
+                recommendationId: "gitlab-cli",
+                templateId: "cli-environment-variable",
+                technicalName: "GITLAB_TOKEN"
+            )
+        default:
+            recommendation = nil
+        }
+        return AppsToolsUsageProfileSetup(
+            consumerId: consumerId,
+            templates: [
+                AppsToolsUsageProfileTemplate(
+                    templateId: "http-bearer-authorization",
+                    capability: "http.request",
+                    capabilityVersion: 1,
+                    technicalField: "none",
+                    suggestedValue: nil
+                ),
+                AppsToolsUsageProfileTemplate(
+                    templateId: "http-api-key-header",
+                    capability: "http.request",
+                    capabilityVersion: 1,
+                    technicalField: "http-header-name",
+                    suggestedValue: "X-API-Key"
+                ),
+                AppsToolsUsageProfileTemplate(
+                    templateId: "cli-environment-variable",
+                    capability: "process.run",
+                    capabilityVersion: 1,
+                    technicalField: "environment-variable-name",
+                    suggestedValue: nil
+                ),
+            ],
+            recommendation: recommendation
+        )
+    }
+
+    func createAppsToolsUsageProfile(
+        sessionId: UInt64,
+        consumerId: String,
+        draft: AppsToolsUsageProfileDraft
+    ) throws -> AppsToolsUsageProfile {
+        if let appsToolsUsageProfileError {
+            throw appsToolsUsageProfileError
+        }
+        guard let detail = nextAppsToolsConsumerDetails[consumerId] else {
+            throw CoreBridgeError.commandFailed("Apps & Tools Consumer is unavailable")
+        }
+        let placement: AppsToolsUsagePlacement
+        switch draft.templateId {
+        case "http-bearer-authorization":
+            placement = AppsToolsUsagePlacement(
+                kind: "http-bearer-authorization",
+                variableName: nil,
+                appendNewline: nil,
+                referenceVariableName: nil,
+                renderDevFdPath: nil,
+                headerName: nil
+            )
+        case "http-api-key-header":
+            placement = AppsToolsUsagePlacement(
+                kind: "http-header",
+                variableName: nil,
+                appendNewline: nil,
+                referenceVariableName: nil,
+                renderDevFdPath: nil,
+                headerName: draft.technicalName ?? "X-API-Key"
+            )
+        case "cli-environment-variable":
+            guard let technicalName = draft.technicalName, !technicalName.isEmpty else {
+                throw CoreBridgeError.commandFailed("Usage Profile configuration is invalid")
+            }
+            placement = AppsToolsUsagePlacement(
+                kind: "process-environment",
+                variableName: technicalName,
+                appendNewline: nil,
+                referenceVariableName: nil,
+                renderDevFdPath: nil,
+                headerName: nil
+            )
+        default:
+            throw CoreBridgeError.commandFailed("Usage Profile template is unavailable")
+        }
+
+        let profile = AppsToolsUsageProfile(
+            usageProfileId: "usage_profile_test_\(nextUsageProfileId)",
+            label: draft.label,
+            capability: draft.templateId == "cli-environment-variable"
+                ? "process.run"
+                : "http.request",
+            capabilityVersion: 1,
+            placement: placement,
+            createdAtMilliseconds: Int64(1_000 + nextUsageProfileId)
+        )
+        nextUsageProfileId += 1
+        createdAppsToolsUsageProfiles.append((sessionId, consumerId, draft))
+        updateFakeAppsToolsUsageProfiles(
+            detail.usageProfiles + [profile],
+            consumerId: consumerId
+        )
+        return profile
+    }
+
+    func removeAppsToolsUsageProfile(
+        sessionId: UInt64,
+        consumerId: String,
+        usageProfileId: String
+    ) throws -> Bool {
+        if let appsToolsUsageProfileError {
+            throw appsToolsUsageProfileError
+        }
+        removedAppsToolsUsageProfiles.append((sessionId, consumerId, usageProfileId))
+        guard let detail = nextAppsToolsConsumerDetails[consumerId],
+              detail.usageProfiles.contains(where: {
+                  $0.usageProfileId == usageProfileId
+              })
+        else {
+            return false
+        }
+        updateFakeAppsToolsUsageProfiles(
+            detail.usageProfiles.filter {
+                $0.usageProfileId != usageProfileId
+            },
+            consumerId: consumerId
+        )
+        return true
+    }
+
+    func setAppsToolsPaused(sessionId: UInt64, paused: Bool) throws -> AppsToolsSnapshot {
+        if let authorizationInventoryError {
+            throw authorizationInventoryError
+        }
+        appsToolsPauseRequests.append(paused)
+        nextAppsToolsPaused = paused
+        return currentAppsToolsSnapshot()
+    }
+
+    func revokeAppsToolsField(
+        sessionId: UInt64,
+        consumerId: String,
+        field: AppsToolsFieldReference
+    ) throws -> AppsToolsSnapshot {
+        if let authorizationInventoryError {
+            throw authorizationInventoryError
+        }
+        revokedAppsToolsFields.append(field)
+        if let detail = nextAppsToolsConsumerDetails[consumerId] {
+            let remainingGrants = detail.fieldGrants.filter { $0.field != field }
+            let summary = appsToolsConsumerSummary(
+                detail.consumer,
+                accessRuleCount: remainingGrants.count,
+                usageProfileCount: detail.usageProfiles.count
+            )
+            nextAppsToolsConsumerDetails[consumerId] = AppsToolsConsumerDetail(
+                consumer: summary,
+                fieldGrants: remainingGrants,
+                usageProfiles: detail.usageProfiles,
+                recentAuditEvents: detail.recentAuditEvents
+            )
+            replaceAppsToolsConsumer(summary)
+            let stillAuthorized = nextAppsToolsConsumerDetails.values.contains { candidate in
+                candidate.fieldGrants.contains {
+                    $0.field.credentialId == field.credentialId
+                }
+            }
+            if !stillAuthorized {
+                nextAuthorizedCredentialIds.remove(field.credentialId)
+            }
+        }
+        return currentAppsToolsSnapshot()
+    }
+
+    func revokeAppsToolsConsumer(
+        sessionId: UInt64,
+        consumerId: String
+    ) throws -> AppsToolsSnapshot {
+        if let authorizationInventoryError {
+            throw authorizationInventoryError
+        }
+        revokedAppsToolsConsumers.append(consumerId)
+        nextAppsToolsConsumers.removeAll { $0.consumerId == consumerId }
+        nextAppsToolsConsumerDetails.removeValue(forKey: consumerId)
+        nextAuthorizedCredentialIds = Set(
+            nextAppsToolsConsumerDetails.values.flatMap { detail in
+                detail.fieldGrants.map(\.field.credentialId)
+            }
+        )
+        return currentAppsToolsSnapshot()
+    }
+
+    private func currentAppsToolsSnapshot() -> AppsToolsSnapshot {
+        AppsToolsSnapshot(
+            paused: nextAppsToolsPaused,
+            authorizedCredentialIds: nextAuthorizedCredentialIds.sorted(),
+            consumers: nextAppsToolsConsumers
+        )
+    }
+
+    private func updateFakeAppsToolsUsageProfiles(
+        _ usageProfiles: [AppsToolsUsageProfile],
+        consumerId: String
+    ) {
+        guard let detail = nextAppsToolsConsumerDetails[consumerId] else { return }
+        let summary = appsToolsConsumerSummary(
+            detail.consumer,
+            accessRuleCount: detail.fieldGrants.count,
+            usageProfileCount: usageProfiles.count
+        )
+        nextAppsToolsConsumerDetails[consumerId] = AppsToolsConsumerDetail(
+            consumer: summary,
+            fieldGrants: detail.fieldGrants,
+            usageProfiles: usageProfiles,
+            recentAuditEvents: detail.recentAuditEvents
+        )
+        replaceAppsToolsConsumer(summary)
+    }
+
+    private func removeAppsToolsPendingRequest(requestSource: String, requestId: String) {
+        let remaining = nextAppsToolsPendingRequests.requests.filter {
+            $0.requestSource != requestSource || $0.requestId != requestId
+        }
+        nextAppsToolsPendingRequests = AppsToolsPendingRequestQueue(
+            pendingCount: remaining.count,
+            requests: remaining
+        )
+    }
+
+    private func appsToolsConsumerSummary(
+        _ summary: AppsToolsConsumerSummary,
+        accessRuleCount: Int,
+        usageProfileCount: Int
+    ) -> AppsToolsConsumerSummary {
+        AppsToolsConsumerSummary(
+            consumerId: summary.consumerId,
+            label: summary.label,
+            identity: summary.identity,
+            accessRuleCount: accessRuleCount,
+            usageProfileCount: usageProfileCount,
+            createdAtMilliseconds: summary.createdAtMilliseconds
+        )
+    }
+
+    private func replaceAppsToolsConsumer(_ summary: AppsToolsConsumerSummary) {
+        guard let index = nextAppsToolsConsumers.firstIndex(where: {
+            $0.consumerId == summary.consumerId
+        }) else {
+            return
+        }
+        nextAppsToolsConsumers[index] = summary
+    }
+
+    func createCredentialFromTemplate(
+        sessionId: UInt64,
+        form: TemplateCredentialForm
+    ) throws -> [VaultItemView] {
+        guard form.isValidForSave else {
+            throw CoreBridgeError.commandFailed("invalid template credential")
+        }
+        createCredentialCallCount += 1
+        let id = "item_\(nextId)"
+        let revision = freshRevision()
+        nextId += 1
+        let secretFieldId = "field_\(id)_primary"
+        var fields: [CredentialDetailField] = [
+            .secret(.init(
+                role: credentialSecretRole(form.template),
+                label: nil,
+                secretFieldId: secretFieldId,
+                secretKind: form.template.primarySecretKind ?? "generic-secret",
+                hasValue: true
+            ))
+        ]
+        if form.template.supportsExpiry, let expiry = form.expiry.nilIfEmpty {
+            fields.append(.text(.init(role: "expiry", label: nil, text: expiry)))
+        }
+        if let notes = form.notes.nilIfEmpty {
+            fields.append(.text(.init(role: "notes", label: nil, text: notes)))
+        }
+        items.append(VaultItemView(
+            id: id,
+            revision: revision,
+            title: form.normalizedTitle,
+            itemType: credentialItemType(form.template),
+            templateId: form.template.rawValue,
+            secretKinds: [form.template.primarySecretKind ?? "generic-secret"],
+            status: "active",
+            favorite: form.favorite,
+            tags: form.tags
+        ))
+        credentialDetails[id] = CredentialDetail(
+            id: id,
+            revision: revision,
+            title: form.normalizedTitle,
+            templateId: form.template.rawValue,
+            fields: fields,
+            favorite: form.favorite,
+            tags: form.tags,
+            status: "active"
+        )
+        credentialSecrets[id] = [secretFieldId: form.secret]
+        return visibleItems(includeArchived: false)
+    }
+
+    func updateCredential(
+        sessionId: UInt64,
+        credentialId: String,
+        form: CredentialEditorForm
+    ) throws -> [VaultItemView] {
+        guard let itemIndex = items.firstIndex(where: { $0.id == credentialId }),
+              let currentDetail = credentialDetails[credentialId]
+        else {
+            throw CoreBridgeError.commandFailed("missing item")
+        }
+        guard form.revision == currentDetail.revision else {
+            throw CoreBridgeError.commandFailed("item changed on disk; refresh sync before editing")
+        }
+        updateCredentialCallCount += 1
+        lastCredentialUpdateForm = form
+        let revision = freshRevision()
+        var nextSecrets: [String: String] = [:]
+        var nextFields: [CredentialDetailField] = []
+        for field in form.fields {
+            switch field.fieldType {
+            case .text:
+                nextFields.append(.text(.init(
+                    role: field.normalizedRole,
+                    label: field.normalizedLabel,
+                    text: field.text
+                )))
+            case .existingSecret:
+                guard let secretFieldId = field.secretFieldId,
+                      let savedSecret = credentialSecrets[credentialId]?[secretFieldId]
+                else {
+                    throw CoreBridgeError.commandFailed("missing secret field")
+                }
+                let value = field.secretInput.isEmpty ? savedSecret : field.secretInput
+                nextSecrets[secretFieldId] = value
+                nextFields.append(.secret(.init(
+                    role: field.normalizedRole,
+                    label: field.normalizedLabel,
+                    secretFieldId: secretFieldId,
+                    secretKind: field.secretKind,
+                    hasValue: !value.isEmpty
+                )))
+            case .newSecret:
+                let secretFieldId = "field_\(credentialId)_\(UUID().uuidString)"
+                nextSecrets[secretFieldId] = field.secretInput
+                nextFields.append(.secret(.init(
+                    role: field.normalizedRole,
+                    label: field.normalizedLabel,
+                    secretFieldId: secretFieldId,
+                    secretKind: field.secretKind,
+                    hasValue: !field.secretInput.isEmpty
+                )))
+            }
+        }
+        credentialSecrets[credentialId] = nextSecrets
+        credentialDetails[credentialId] = CredentialDetail(
+            id: credentialId,
+            revision: revision,
+            title: form.normalizedTitle,
+            templateId: form.templateId,
+            fields: nextFields,
+            favorite: form.favorite,
+            tags: form.tags,
+            status: currentDetail.status
+        )
+        items[itemIndex] = VaultItemView(
+            id: credentialId,
+            revision: revision,
+            title: form.normalizedTitle,
+            itemType: credentialItemType(
+                CredentialTemplateKind(rawValue: form.templateId ?? "") ?? .custom
+            ),
+            templateId: form.templateId,
+            secretKinds: nextFields.compactMap(\.secretField?.secretKind),
+            status: items[itemIndex].status,
+            favorite: form.favorite,
+            tags: form.tags
+        )
+        return visibleItems(includeArchived: false)
+    }
+
+    func duplicateCredential(
+        sessionId: UInt64,
+        credentialId: String,
+        expectedRevision: String,
+        title: String
+    ) throws -> [VaultItemView] {
+        guard let sourceItem = items.first(where: { $0.id == credentialId }),
+              let sourceDetail = credentialDetails[credentialId]
+        else {
+            throw CoreBridgeError.commandFailed("missing item")
+        }
+        try validateExpectedRevision(expectedRevision, matches: sourceItem)
+        duplicateCredentialCallCount += 1
+        let duplicateId = "item_\(nextId)"
+        nextId += 1
+        let duplicateRevision = freshRevision()
+        var duplicateSecrets: [String: String] = [:]
+        let duplicateFields = sourceDetail.fields.enumerated().map { index, field in
+            switch field {
+            case let .text(textField):
+                return CredentialDetailField.text(textField)
+            case let .secret(secretField):
+                let duplicateSecretFieldId = "field_\(duplicateId)_\(index)"
+                duplicateSecrets[duplicateSecretFieldId] =
+                    credentialSecrets[credentialId]?[secretField.secretFieldId] ?? ""
+                return CredentialDetailField.secret(.init(
+                    role: secretField.role,
+                    label: secretField.label,
+                    secretFieldId: duplicateSecretFieldId,
+                    secretKind: secretField.secretKind,
+                    hasValue: secretField.hasValue
+                ))
+            }
+        }
+        items.append(VaultItemView(
+            id: duplicateId,
+            revision: duplicateRevision,
+            title: title,
+            itemType: sourceItem.itemType,
+            templateId: sourceItem.templateId,
+            secretKinds: sourceItem.secretKinds,
+            status: "active",
+            favorite: sourceItem.favorite,
+            tags: sourceItem.tags
+        ))
+        credentialDetails[duplicateId] = CredentialDetail(
+            id: duplicateId,
+            revision: duplicateRevision,
+            title: title,
+            templateId: sourceDetail.templateId,
+            fields: duplicateFields,
+            favorite: sourceDetail.favorite,
+            tags: sourceDetail.tags,
+            status: "active"
+        )
+        credentialSecrets[duplicateId] = duplicateSecrets
+        return visibleItems(includeArchived: false)
+    }
+
+    func getCredential(sessionId: UInt64, credentialId: String) throws -> CredentialDetail {
+        guard let detail = credentialDetails[credentialId] else {
+            throw CoreBridgeError.commandFailed("missing item")
+        }
+        return detail
+    }
+
+    func getCredentialSecretField(
+        sessionId: UInt64,
+        credentialId: String,
+        secretFieldId: String
+    ) throws -> String {
+        credentialSecretFieldRequests.append(secretFieldId)
+        guard let value = credentialSecrets[credentialId]?[secretFieldId] else {
+            throw CoreBridgeError.commandFailed("missing secret field")
+        }
+        return value
     }
 
     func createLogin(sessionId: UInt64, form: LoginForm) throws -> [VaultItemView] {
@@ -9395,10 +13226,12 @@ private final class FakeCoreService: CoreService {
         secureNoteDetails[itemId] = nil
         creditCardDetails[itemId] = nil
         softwareLicenseDetails[itemId] = nil
+        credentialDetails[itemId] = nil
         passwords[itemId] = nil
         cardNumbers[itemId] = nil
         cardVerificationCodes[itemId] = nil
         licenseKeys[itemId] = nil
+        credentialSecrets[itemId] = nil
         return visibleItems(includeArchived: false)
     }
 
@@ -9480,6 +13313,8 @@ private final class FakeCoreService: CoreService {
             revision: revision,
             title: items[index].title,
             itemType: items[index].itemType,
+            templateId: items[index].templateId,
+            secretKinds: items[index].secretKinds,
             status: items[index].status,
             favorite: favorite,
             tags: items[index].tags
@@ -9500,6 +13335,17 @@ private final class FakeCoreService: CoreService {
             detail.revision = revision
             detail.favorite = favorite
             softwareLicenseDetails[itemId] = detail
+        } else if let detail = credentialDetails[itemId] {
+            credentialDetails[itemId] = CredentialDetail(
+                id: detail.id,
+                revision: revision,
+                title: detail.title,
+                templateId: detail.templateId,
+                fields: detail.fields,
+                favorite: favorite,
+                tags: detail.tags,
+                status: detail.status
+            )
         } else {
             throw CoreBridgeError.commandFailed("missing item")
         }
@@ -9575,9 +13421,15 @@ private final class FakeCoreService: CoreService {
         )
     }
 
-    func exportItems(sessionId: UInt64, destinationPath: String, exportFormat: String) throws -> ExportResultPayload {
+    func exportItems(
+        sessionId: UInt64,
+        destinationPath: String,
+        exportFormat: String,
+        currentPassword: String
+    ) throws -> ExportResultPayload {
         exportedPath = destinationPath
         exportedFormat = exportFormat
+        exportedCurrentPassword = currentPassword
         return nextExportResult
     }
 
@@ -9719,6 +13571,40 @@ private final class FakeCoreService: CoreService {
         licenseKeys[id] = seed.licenseKey
     }
 
+    private func credentialItemType(_ template: CredentialTemplateKind) -> String {
+        switch template {
+        case .apiToken:
+            return "api token"
+        case .apiKey:
+            return "api key"
+        case .sshKey:
+            return "ssh key"
+        case .certificate:
+            return "certificate"
+        case .custom:
+            return "custom"
+        case .login, .secureNote, .creditCard, .softwareLicense:
+            return template.rawValue.replacingOccurrences(of: "-", with: " ")
+        }
+    }
+
+    private func credentialSecretRole(_ template: CredentialTemplateKind) -> String {
+        switch template {
+        case .apiToken:
+            return "token"
+        case .apiKey:
+            return "api-key"
+        case .sshKey:
+            return "private-key"
+        case .certificate:
+            return "certificate"
+        case .custom:
+            return "secret"
+        case .login, .secureNote, .creditCard, .softwareLicense:
+            return "secret"
+        }
+    }
+
     private func setStatus(itemId: String, status: String, revision: String) {
         guard let index = items.firstIndex(where: { $0.id == itemId }) else {
             return
@@ -9728,6 +13614,8 @@ private final class FakeCoreService: CoreService {
             revision: revision,
             title: items[index].title,
             itemType: items[index].itemType,
+            templateId: items[index].templateId,
+            secretKinds: items[index].secretKinds,
             status: status,
             favorite: items[index].favorite,
             tags: items[index].tags
@@ -9748,6 +13636,17 @@ private final class FakeCoreService: CoreService {
             detail.revision = revision
             detail.status = status
             softwareLicenseDetails[itemId] = detail
+        } else if let detail = credentialDetails[itemId] {
+            credentialDetails[itemId] = CredentialDetail(
+                id: detail.id,
+                revision: revision,
+                title: detail.title,
+                templateId: detail.templateId,
+                fields: detail.fields,
+                favorite: detail.favorite,
+                tags: detail.tags,
+                status: status
+            )
         }
     }
 
@@ -9777,6 +13676,17 @@ private final class FakeCoreService: CoreService {
         } else if var detail = softwareLicenseDetails[itemId] {
             detail.revision = revision
             softwareLicenseDetails[itemId] = detail
+        } else if let detail = credentialDetails[itemId] {
+            credentialDetails[itemId] = CredentialDetail(
+                id: detail.id,
+                revision: revision,
+                title: detail.title,
+                templateId: detail.templateId,
+                fields: detail.fields,
+                favorite: detail.favorite,
+                tags: detail.tags,
+                status: detail.status
+            )
         }
     }
 
