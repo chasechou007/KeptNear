@@ -358,7 +358,12 @@ require_arm64_binary "$BROKER_BINARY" "Broker executable"
 require_arm64_binary "$MCP_BINARY" "MCP adapter executable"
 require_arm64_binary "$CLI_BINARY" "CLI executable"
 
-cargo build \
+env \
+  RUSTC_WRAPPER= \
+  RUSTC_WORKSPACE_WRAPPER= \
+  CARGO_BUILD_RUSTC_WRAPPER= \
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= \
+  cargo build \
   --locked \
   --target-dir "$CARGO_TARGET_ROOT" \
   --target "$RUST_TARGET" \

@@ -48,11 +48,14 @@ path cannot change after the receipt check. The receipt also binds
 `rust-toolchain.toml`, the exact Rust and Cargo release/commit identities, the
 LLVM version, and the Apple Silicon compiler host/target required by
 distribution packaging. The Rust identity comes from a locked `cargo rustc`
-probe under the reviewed target and release profile, so `RUSTC`, Cargo
-`build.rustc`, and compiler-wrapper overrides are checked as the compiler Cargo
-actually selects rather than as an unrelated PATH lookup. Until then, strict
-unsigned and signed gates must exit non-zero. `local-test` may still create a
-development DMG, but its manifest must retain `Distribution ready: false`.
+probe under the reviewed target and release profile, so `RUSTC` and Cargo
+`build.rustc` overrides are checked as the compiler Cargo actually selects
+rather than as an unrelated PATH lookup. Compiler wrappers are not permitted
+for distribution, and every packaging and artifact-verification Cargo
+invocation resets both global and workspace wrapper settings to empty,
+overriding user or workspace Cargo configuration. Until then, strict unsigned
+and signed gates must exit non-zero. `local-test` may still create a development
+DMG, but its manifest must retain `Distribution ready: false`.
 
 ## Dependency Review
 

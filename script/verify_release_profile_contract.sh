@@ -60,7 +60,9 @@ grep -F 'BROKER_SOURCE_DIR=' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'RUST_WORKSPACE_SOURCE_DIR="$ROOT_DIR/crates"' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'RUST_TOOLCHAIN_PATH="$ROOT_DIR/rust-toolchain.toml"' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'CARGO_RUSTC_PROBE_TARGET_DIR="$ROOT_DIR/target/sqlcipher-toolchain-probe"' "$SQLCIPHER_GATE" >/dev/null
-grep -F 'RUSTC_VERBOSE_VERSION="$("${CARGO_RUSTC_PROBE[@]}")"' "$SQLCIPHER_GATE" >/dev/null
+grep -F 'RUSTC_VERBOSE_VERSION="$(' "$SQLCIPHER_GATE" >/dev/null
+grep -F '"${CARGO_RUSTC_PROBE[@]}"' "$SQLCIPHER_GATE" >/dev/null
+grep -F 'distribution compiler wrapper $WRAPPER_VARIABLE is not permitted' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'CARGO_TARGET_ROOT="$ROOT_DIR/target"' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
 grep -F 'CARGO_TARGET_ROOT="$ROOT_DIR/target"' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
 grep -F '"$SQLCIPHER_GATE" --distribution-host --release-target "$RUST_TARGET"' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
@@ -120,6 +122,32 @@ if [[ \
   exit 1
 fi
 
+for WRAPPER_VARIABLE in \
+  RUSTC_WRAPPER \
+  RUSTC_WORKSPACE_WRAPPER \
+  CARGO_BUILD_RUSTC_WRAPPER \
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER; do
+  WRAPPER_ASSIGNMENT="$WRAPPER_VARIABLE="
+  PACKAGE_WRAPPER_RESET_COUNT="$(
+    awk -v assignment="$WRAPPER_ASSIGNMENT" \
+      '$1 == assignment { count += 1 } END { print count + 0 }' \
+      "$ROOT_DIR/script/package_macos_alpha.sh"
+  )"
+  ARTIFACT_WRAPPER_RESET_COUNT="$(
+    awk -v assignment="$WRAPPER_ASSIGNMENT" \
+      '$1 == assignment { count += 1 } END { print count + 0 }' \
+      "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
+  )"
+  if [[ "$PACKAGE_WRAPPER_RESET_COUNT" -ne "$PACKAGE_BUILD_COUNT" ]]; then
+    echo "release profile contract violation: every package Cargo build must reset $WRAPPER_VARIABLE" >&2
+    exit 1
+  fi
+  if [[ "$ARTIFACT_WRAPPER_RESET_COUNT" -ne "$ARTIFACT_BUILD_COUNT" ]]; then
+    echo "release profile contract violation: every artifact-verifier Cargo build must reset $WRAPPER_VARIABLE" >&2
+    exit 1
+  fi
+done
+
 "$REVIEW_GATE" --profile source >/dev/null
 if SQLCIPHER_GATE_OUTPUT="$("$SQLCIPHER_GATE" 2>&1)"; then
   echo "release profile contract violation: blocked SQLCipher dependency passed its independent gate" >&2
@@ -132,11 +160,7 @@ require_text \
 
 for COMPILER_OVERRIDE in \
   RUSTC \
-  CARGO_BUILD_RUSTC \
-  RUSTC_WRAPPER \
-  RUSTC_WORKSPACE_WRAPPER \
-  CARGO_BUILD_RUSTC_WRAPPER \
-  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER; do
+  CARGO_BUILD_RUSTC; do
   if COMPILER_OVERRIDE_OUTPUT="$(
     env "$COMPILER_OVERRIDE=/usr/bin/false" "$SQLCIPHER_GATE" 2>&1
   )"; then
@@ -147,6 +171,41 @@ for COMPILER_OVERRIDE in \
     "$COMPILER_OVERRIDE_OUTPUT" \
     "Cargo-selected rustc identity probe failed" \
     "$COMPILER_OVERRIDE compiler probe"
+done
+
+for COMPILER_WRAPPER in \
+  RUSTC_WRAPPER \
+  RUSTC_WORKSPACE_WRAPPER \
+  CARGO_BUILD_RUSTC_WRAPPER \
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER; do
+  if WRAPPER_RESET_OUTPUT="$(
+    env "$COMPILER_WRAPPER=/usr/bin/false" "$SQLCIPHER_GATE" 2>&1
+  )"; then
+    echo "release profile contract violation: resetting $COMPILER_WRAPPER allowed the blocked dependency to pass" >&2
+    exit 1
+  fi
+  require_text \
+    "$WRAPPER_RESET_OUTPUT" \
+    "libsqlite3-sys 0.28.0 bundles SQLCipher 4.5.3; upgrade and source-bound revalidation are required" \
+    "$COMPILER_WRAPPER reset"
+  if [[ "$WRAPPER_RESET_OUTPUT" == *"Cargo-selected rustc identity probe failed"* ]]; then
+    echo "release profile contract violation: $COMPILER_WRAPPER executed during the wrapper-free compiler probe" >&2
+    exit 1
+  fi
+
+  if DISTRIBUTION_WRAPPER_OUTPUT="$(
+    env "$COMPILER_WRAPPER=/usr/bin/false" \
+      "$SQLCIPHER_GATE" \
+      --distribution-host \
+      --release-target aarch64-apple-darwin 2>&1
+  )"; then
+    echo "release profile contract violation: distribution accepted $COMPILER_WRAPPER" >&2
+    exit 1
+  fi
+  require_text \
+    "$DISTRIBUTION_WRAPPER_OUTPUT" \
+    "distribution compiler wrapper $COMPILER_WRAPPER is not permitted" \
+    "$COMPILER_WRAPPER distribution rejection"
 done
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/keptnear-release-contract.XXXXXX")"

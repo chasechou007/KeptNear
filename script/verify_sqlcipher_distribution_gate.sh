@@ -86,6 +86,18 @@ if [[ \
   echo "SQLCipher distribution gate failed: release target must be $REVIEWED_RELEASE_TARGET, got $REQUESTED_RELEASE_TARGET" >&2
   exit 1
 fi
+if [[ "$REQUIRE_DISTRIBUTION_HOST" == "1" ]]; then
+  for WRAPPER_VARIABLE in \
+    RUSTC_WRAPPER \
+    RUSTC_WORKSPACE_WRAPPER \
+    CARGO_BUILD_RUSTC_WRAPPER \
+    CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER; do
+    if [[ -n "${!WRAPPER_VARIABLE:-}" ]]; then
+      echo "SQLCipher distribution gate failed: distribution compiler wrapper $WRAPPER_VARIABLE is not permitted" >&2
+      exit 1
+    fi
+  done
+fi
 
 require_file() {
   local path="$1"
@@ -139,7 +151,14 @@ CARGO_RUSTC_PROBE+=(
   --
   -Vv
 )
-if ! RUSTC_VERBOSE_VERSION="$("${CARGO_RUSTC_PROBE[@]}")"; then
+if ! RUSTC_VERBOSE_VERSION="$(
+  env \
+    RUSTC_WRAPPER= \
+    RUSTC_WORKSPACE_WRAPPER= \
+    CARGO_BUILD_RUSTC_WRAPPER= \
+    CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= \
+    "${CARGO_RUSTC_PROBE[@]}"
+)"; then
   echo "SQLCipher distribution gate failed: Cargo-selected rustc identity probe failed" >&2
   exit 1
 fi
@@ -422,17 +441,21 @@ if not isinstance(revalidation["commands"], list) or not all(
 if not isinstance(evidence["blocker"], str) or not evidence["blocker"]:
     fail("distribution evidence blocker must be a non-empty string")
 
+wrapper_free_cargo = (
+    "RUSTC_WRAPPER= RUSTC_WORKSPACE_WRAPPER= "
+    "CARGO_BUILD_RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= cargo"
+)
 required_commands = {
-    "cargo rustc --quiet --locked --target-dir target/sqlcipher-toolchain-probe --target aarch64-apple-darwin --release -p psw-core --lib -- -Vv",
+    f"{wrapper_free_cargo} rustc --quiet --locked --target-dir target/sqlcipher-toolchain-probe --target aarch64-apple-darwin --release -p psw-core --lib -- -Vv",
     "cargo -V",
-    "cargo test --locked -p psw-broker state_store::tests::",
-    "cargo test --locked -p psw-broker integration_tests::ciphertext_corruption_blocks_runtime_without_replacing_state_or_key",
-    "cargo test --locked -p psw-broker integration_tests::wrong_device_key_blocks_runtime_without_overwriting_either_side",
-    "cargo test --locked -p psw-broker integration_tests::insecure_database_permissions_block_runtime_and_retain_authority",
-    "cargo test --locked -p psw-broker integration_tests::missing_database_blocks_runtime_without_silent_reinitialization",
-    "cargo test --locked -p psw-broker integration_tests::missing_device_key_blocks_runtime_without_generating_replacement",
+    f"{wrapper_free_cargo} test --locked -p psw-broker state_store::tests::",
+    f"{wrapper_free_cargo} test --locked -p psw-broker integration_tests::ciphertext_corruption_blocks_runtime_without_replacing_state_or_key",
+    f"{wrapper_free_cargo} test --locked -p psw-broker integration_tests::wrong_device_key_blocks_runtime_without_overwriting_either_side",
+    f"{wrapper_free_cargo} test --locked -p psw-broker integration_tests::insecure_database_permissions_block_runtime_and_retain_authority",
+    f"{wrapper_free_cargo} test --locked -p psw-broker integration_tests::missing_database_blocks_runtime_without_silent_reinitialization",
+    f"{wrapper_free_cargo} test --locked -p psw-broker integration_tests::missing_device_key_blocks_runtime_without_generating_replacement",
     "script/verify_dependency_licenses.sh",
-    "cargo clippy --workspace --all-targets --locked -- -D warnings",
+    f"{wrapper_free_cargo} clippy --workspace --all-targets --locked -- -D warnings",
 }
 
 if version_policy == "blocked":

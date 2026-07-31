@@ -204,7 +204,12 @@ elif [[ "$RELEASE_MODE" == "experimental-pre-release" ]]; then
 fi
 
 echo "Building Rust FFI and package metadata tools..."
-cargo build \
+env \
+  RUSTC_WRAPPER= \
+  RUSTC_WORKSPACE_WRAPPER= \
+  CARGO_BUILD_RUSTC_WRAPPER= \
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= \
+  cargo build \
   --locked \
   --target-dir "$CARGO_TARGET_ROOT" \
   --target "$RUST_TARGET" \
@@ -215,7 +220,12 @@ cargo build \
   --bin keptnear-package-manifest
 
 echo "Building Broker, MCP adapter, and CLI components..."
-cargo build \
+env \
+  RUSTC_WRAPPER= \
+  RUSTC_WORKSPACE_WRAPPER= \
+  CARGO_BUILD_RUSTC_WRAPPER= \
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= \
+  cargo build \
   --locked \
   --target-dir "$CARGO_TARGET_ROOT" \
   --target "$RUST_TARGET" \
