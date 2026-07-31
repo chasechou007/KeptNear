@@ -93,6 +93,38 @@ require_literal "$PRODUCT_OVERVIEW_ZH_PATH" "尚未完成外部安全审计"
 require_literal "$PRODUCT_OVERVIEW_ZH_PATH" "不建议保存生产环境凭据"
 require_literal "$PRODUCT_OVERVIEW_ZH_PATH" "### 不在首个完整版本闭环"
 
+for scope_entry in \
+  "complete native human password and token workflows" \
+  "portable file-sync vaults and explicit conflict handling" \
+  "offline recovery, backup, restore, controlled export, and migration" \
+  "local Broker, encrypted device trust, pairing, authorization, approvals" \
+  "supported MCP and CLI installation and lifecycle" \
+  "guided Usage Profiles, brokered HTTPS, and compatibility process execution" \
+  "iOS and browser extensions" \
+  "passkeys" \
+  "teams, shared vaults, and enterprise policy" \
+  "remote Broker or remote MCP control" \
+  "hosted accounts, hosted recovery, or a KeptNear sync service" \
+  "Agent prompt, instruction, repository, command, or intent management"; do
+  require_literal "$PRODUCT_OVERVIEW_PATH" "$scope_entry"
+done
+
+for scope_entry in \
+  "完整的原生人类密码与令牌工作流" \
+  "可移动文件同步密码库和明确的冲突处理" \
+  "离线恢复、备份、还原、受控导出和迁移" \
+  "本地 Broker、加密设备信任、配对、授权、审批、授权凭证、暂停和审计" \
+  "受支持的 MCP 与 CLI 安装和生命周期" \
+  "引导式 Usage Profile、Broker 代理 HTTPS 和兼容进程执行" \
+  "iOS 和浏览器插件" \
+  "Passkey" \
+  "团队、共享密码库和企业策略" \
+  "远程 Broker 或远程 MCP 控制" \
+  "托管账号、托管恢复或 KeptNear 同步服务" \
+  "Agent Prompt、指令、仓库、命令或意图管理"; do
+  require_literal "$PRODUCT_OVERVIEW_ZH_PATH" "$scope_entry"
+done
+
 for path in \
   "$README_PATH" \
   "$README_ZH_PATH" \
