@@ -389,9 +389,9 @@ impl AuthenticationFailures {
     fn prune(&mut self, now: Instant) {
         let cutoff = now.checked_sub(AUTHENTICATION_FAILURE_WINDOW);
         self.global
-            .retain(|failure| cutoff.map_or(true, |cutoff| *failure > cutoff));
+            .retain(|failure| cutoff.is_none_or(|cutoff| *failure > cutoff));
         self.by_consumer.retain(|_, failures| {
-            failures.retain(|failure| cutoff.map_or(true, |cutoff| *failure > cutoff));
+            failures.retain(|failure| cutoff.is_none_or(|cutoff| *failure > cutoff));
             !failures.is_empty()
         });
     }

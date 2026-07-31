@@ -13,8 +13,8 @@ usage: script/run_reviewed_distribution_cargo.sh CARGO_ARGS...
 
 Runs Cargo with the source-bound Apple Silicon Rust and native toolchains.
 Environment overrides, Rust compiler wrappers, custom compiler flags, and
-SQLCipher build-script overrides are ignored and replaced. Cargo runs from a
-configuration-free location with an isolated HOME and CARGO_HOME.
+SQLCipher build-script overrides are ignored and replaced. Cargo runs from an
+isolated HOME and CARGO_HOME with only the source-bound offline registry config.
 USAGE
 }
 

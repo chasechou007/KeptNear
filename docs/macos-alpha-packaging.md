@@ -122,15 +122,17 @@ overrides, starts Cargo from an empty process environment, and supplies the
 reviewed Apple Clang, SDK, deployment target, and C flags explicitly. It also
 runs Cargo from `/` with an absolute workspace manifest, a private temporary
 `HOME` and `CARGO_HOME`, the reviewed dependency archive/index cache in offline
-mode, and a system-only `PATH`. Registry sources are re-extracted into that
-temporary Cargo home so Cargo rechecks the locked package archives instead of
-trusting mutable previously extracted source. Tool and source hashes use the
+mode, and a generated source-bound registry config. Its `PATH` contains fixed
+system tools plus individually hashed Clippy executables during validation.
+Registry sources are re-extracted into that temporary Cargo home so Cargo
+rechecks the locked package archives instead of trusting mutable previously
+extracted source. Tool and source hashes use the
 fixed macOS `shasum` under a separate minimal environment so Perl loader
 variables cannot alter the result, and digest parsing calls the fixed
 `/usr/bin/awk` executable rather than a Shell-resolved command. User, workspace,
-and parent Cargo configuration therefore cannot inject forced build-script
-environment values. `local-test` remains a development-only path and does not
-claim this distribution evidence.
+and parent Cargo configuration is not loaded and cannot inject forced
+build-script environment values. `local-test` remains a development-only path
+and does not claim this distribution evidence.
 
 The protocol manifest records the exact App, Broker, MCP, CLI, and FFI paths
 and SHA-256 values, their component versions, the shared

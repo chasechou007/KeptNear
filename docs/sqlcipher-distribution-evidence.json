@@ -1,20 +1,20 @@
 {
   "schemaVersion": 2,
-  "status": "blocked",
-  "approvedForDistribution": false,
+  "status": "approved",
+  "approvedForDistribution": true,
   "dependency": {
-    "libsqlite3SysVersion": "0.28.0",
-    "bundledSqlcipherVersion": "4.5.3"
+    "libsqlite3SysVersion": "0.37.0",
+    "bundledSqlcipherVersion": "4.10.0"
   },
   "toolchain": {
-    "rustToolchainSha256": "d58423b4a7669bbeeb985776c675470d4bd3a01eeb504e58ad70e8be36d19c9b",
-    "rustcRelease": "1.75.0",
-    "rustcCommitHash": "82e1608dfa6e0b5569232559e3d385fea5a93112",
-    "rustcLlvmVersion": "17.0.6",
-    "rustcBinarySha256": "2e5d8100af1c46dc9b9f2f8b644f085b7c099dce9f4237ecf304adc3e110c294",
-    "cargoRelease": "1.75.0",
-    "cargoCommitHash": "1d8b05cdd",
-    "cargoBinarySha256": "d92fdab3cc38e1952e00b04d6cf4c725a08fc8519399a3ba76b93932e4985803",
+    "rustToolchainSha256": "4478772744e88a3e35394171f27f9d035b17ee4a624368da7a929aa862b26c7e",
+    "rustcRelease": "1.93.0",
+    "rustcCommitHash": "254b59607d4417e9dffbc307138ae5c86280fe4c",
+    "rustcLlvmVersion": "21.1.8",
+    "rustcBinarySha256": "87b02c67012c28083fe485a50b10470a662c828c6e2cd0caf4775e00986cdfc8",
+    "cargoRelease": "1.93.0",
+    "cargoCommitHash": "083ac5135",
+    "cargoBinarySha256": "46c9483604e913070b085dc5acf972bc560395c10dfec1cdb389c4b6bf17cf67",
     "distributionHost": "aarch64-apple-darwin",
     "releaseTarget": "aarch64-apple-darwin"
   },
@@ -33,26 +33,37 @@
     "cFlags": "-arch arm64 -mmacosx-version-min=13.0 -isysroot <reviewed-macos-sdk>"
   },
   "source": {
-    "workspaceManifestSha256": "7025524f303e23c4937470884012c604b6f7d7654d6899ec0c5071df777a20a8",
-    "cargoLockSha256": "04ae521c9029852afb74faea3f0948174d4848ceeb2a84bf1d1d5e4f8ab2c959",
-    "rustWorkspaceSourceTreeSha256": "4369d213a611bc4a4475ccf58ca317d99e5449e4e1cadad65f6a603455559efa",
-    "brokerManifestSha256": "13b1aed3aefcc3634eab55e9ac4775aa0fa671d4e9b465286626c014aad84c53",
-    "brokerSourceTreeSha256": "9d06e4da035004a478cf80ed0a80a6a6781e5d8da829260f09a9dfef1165b692",
+    "workspaceManifestSha256": "326028d1d1e44f636519f928ccb0fd1350450423b06a4fd81019fa25466c3344",
+    "cargoLockSha256": "ed089b523f3625c5d4fac8431417040d189cac9aa5ff21e0863e6890e673a016",
+    "rustWorkspaceSourceTreeSha256": "c89187444d872886f60a08c084c8b7388f80a6db6767e9359127103313193975",
+    "brokerManifestSha256": "8633ec47186fb9f4cdbc47c3093c2540070c2a224bee4a9378baa98cd080c22b",
+    "brokerSourceTreeSha256": "6c0bfb51a64f4e20311ff5ff85e920dd60bb9220550a17903022d0f010e1e5fb",
     "sqlcipherFfiSha256": "8278e9c015e38981d8c0ffaeaef00be3812124652ccccd422c72350d98ce09fe",
-    "stateStoreSha256": "7d27b09b6dacc446188cd449301b9264e269fd856e2d3edbe063283122c6a788",
+    "stateStoreSha256": "63a11c85a1806c3d62bb6363074e1a23bdeffb120cf8fa6d7212900e44cea31f",
     "stateSchemaSha256": "296bdd97d0fee04aafdc521b1302e48240a24e5c5fb811063da3585516bad53f",
     "brokerIntegrationTestsSha256": "7d17389d076ac24cc2b023df5ca478528ec0fad7a7d9d2431df2a285274187d9",
     "packageScriptSha256": "3cf43df94369e3fd5440b1b2ec55808fc04a657221c4d11a3b042aa164f79815",
     "artifactVerifierSha256": "d236129d7a9539b9c87d84f420b35ab2f8e8f2dbb456f0d3505fd6de952a61c6",
-    "distributionGateSha256": "c2bb5146fe22cb232cff68e1f3c12594619a398dd0dda8b0c1c15ceccc3b1543",
-    "distributionToolchainSha256": "e4f824ecc52f653d57e06ea4d410f3055c91b52d07c69f06dae4443012f1912c",
-    "distributionCargoRunnerSha256": "05df28334bb1e224718a9901f0960d85bdee309d8634030463f3f13f75a38d17"
+    "distributionGateSha256": "0543dc91301b275fdd2e7d135dab04cfcf2c8f2198e4f0d88f9166725c4c2e43",
+    "distributionToolchainSha256": "6f2543d81d4d1fdfcb9f800adba9b8d208ff917458a17f3fb98f235c04919679",
+    "distributionCargoRunnerSha256": "269264157e48406bc1c4e4b2834845301375d8f634091597a9186bd5893522f4"
   },
   "revalidation": {
-    "result": "not-run-for-distribution",
-    "commands": [],
-    "reviewedBy": null,
-    "reviewedAt": null
+    "result": "passed",
+    "commands": [
+      "script/run_reviewed_distribution_cargo.sh rustc --quiet --locked --target-dir target/sqlcipher-toolchain-probe --target aarch64-apple-darwin --release -p psw-core --lib -- -Vv",
+      "script/run_reviewed_distribution_cargo.sh -V",
+      "script/run_reviewed_distribution_cargo.sh test --locked -p psw-broker state_store::tests::",
+      "script/run_reviewed_distribution_cargo.sh test --locked -p psw-broker integration_tests::ciphertext_corruption_blocks_runtime_without_replacing_state_or_key",
+      "script/run_reviewed_distribution_cargo.sh test --locked -p psw-broker integration_tests::wrong_device_key_blocks_runtime_without_overwriting_either_side",
+      "script/run_reviewed_distribution_cargo.sh test --locked -p psw-broker integration_tests::insecure_database_permissions_block_runtime_and_retain_authority",
+      "script/run_reviewed_distribution_cargo.sh test --locked -p psw-broker integration_tests::missing_database_blocks_runtime_without_silent_reinitialization",
+      "script/run_reviewed_distribution_cargo.sh test --locked -p psw-broker integration_tests::missing_device_key_blocks_runtime_without_generating_replacement",
+      "script/verify_dependency_licenses.sh",
+      "script/run_reviewed_distribution_cargo.sh clippy --workspace --all-targets --locked -- -D warnings"
+    ],
+    "reviewedBy": "Chase Chou",
+    "reviewedAt": "2026-07-31T15:28:18Z"
   },
-  "blocker": "Bundled SQLCipher 4.5.3 must be upgraded and the encrypted device-state suite revalidated."
+  "blocker": "None for the unsigned experimental profile; signed distribution remains separately gated."
 }

@@ -4,8 +4,10 @@ KEPTNEAR_REVIEWED_DISTRIBUTION_HOST="aarch64-apple-darwin"
 KEPTNEAR_REVIEWED_RELEASE_TARGET="aarch64-apple-darwin"
 KEPTNEAR_REVIEWED_MACOS_DEPLOYMENT_TARGET="13.0"
 
-KEPTNEAR_REVIEWED_RUSTC_BINARY_SHA256="2e5d8100af1c46dc9b9f2f8b644f085b7c099dce9f4237ecf304adc3e110c294"
-KEPTNEAR_REVIEWED_CARGO_BINARY_SHA256="d92fdab3cc38e1952e00b04d6cf4c725a08fc8519399a3ba76b93932e4985803"
+KEPTNEAR_REVIEWED_RUSTC_BINARY_SHA256="87b02c67012c28083fe485a50b10470a662c828c6e2cd0caf4775e00986cdfc8"
+KEPTNEAR_REVIEWED_CARGO_BINARY_SHA256="46c9483604e913070b085dc5acf972bc560395c10dfec1cdb389c4b6bf17cf67"
+KEPTNEAR_REVIEWED_CARGO_CLIPPY_BINARY_SHA256="241eb0971b2528d92808a67093453f216fe6b37a7ebbc4831f716160e38b1a10"
+KEPTNEAR_REVIEWED_CLIPPY_DRIVER_BINARY_SHA256="4df55b5c3323d628a070bace0069a756c17d9a30afd4943e7a050c63e019fa03"
 KEPTNEAR_REVIEWED_APPLE_CLANG_VERSION="Apple clang version 21.0.0 (clang-2100.1.1.101)"
 KEPTNEAR_REVIEWED_APPLE_CLANG_SHA256="7def90dd8829726686213a747fc5bff1583df933dae5edc55d755479e0bfe00a"
 KEPTNEAR_REVIEWED_APPLE_AR_SHA256="e49ffad64ad1cee722540fc5ecb00a230fd8071680682c60d9c851029d20e814"
@@ -17,6 +19,8 @@ KEPTNEAR_REVIEWED_MACOS_SDK_VERSION="26.5"
 KEPTNEAR_REVIEWED_MACOS_SDK_BUILD_VERSION="25F70"
 KEPTNEAR_REVIEWED_MACOS_SDK_NAME="MacOSX26.5.sdk"
 KEPTNEAR_REVIEWED_CFLAGS="-arch arm64 -mmacosx-version-min=13.0 -isysroot <reviewed-macos-sdk>"
+KEPTNEAR_REVIEWED_CRATES_IO_PROTOCOL="sparse"
+KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY="index.crates.io-1949cf8c6b5b557f"
 
 KEPTNEAR_SYSTEM_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 KEPTNEAR_RUSTUP_RESOLUTION_PATH="/opt/homebrew/bin:/usr/local/bin:$KEPTNEAR_SYSTEM_PATH"
@@ -26,6 +30,7 @@ KEPTNEAR_SYSTEM_BASENAME="/usr/bin/basename"
 KEPTNEAR_SYSTEM_DSCACHEUTIL="/usr/bin/dscacheutil"
 KEPTNEAR_SYSTEM_ID="/usr/bin/id"
 KEPTNEAR_SYSTEM_MKTEMP="/usr/bin/mktemp"
+KEPTNEAR_SYSTEM_PRINTF="/usr/bin/printf"
 KEPTNEAR_SYSTEM_SHASUM="/usr/bin/shasum"
 KEPTNEAR_SYSTEM_UNAME="/usr/bin/uname"
 KEPTNEAR_SYSTEM_XCODE_SELECT="/usr/bin/xcode-select"
@@ -89,6 +94,7 @@ keptnear_assert_fixed_identity_utilities() {
     "$KEPTNEAR_SYSTEM_DSCACHEUTIL" \
     "$KEPTNEAR_SYSTEM_ID" \
     "$KEPTNEAR_SYSTEM_MKTEMP" \
+    "$KEPTNEAR_SYSTEM_PRINTF" \
     "$KEPTNEAR_SYSTEM_SHASUM" \
     "$KEPTNEAR_SYSTEM_UNAME" \
     "$KEPTNEAR_SYSTEM_XCODE_SELECT" \
@@ -289,6 +295,14 @@ keptnear_resolve_active_rust_toolchain() {
   keptnear_toolchain_require_regular_executable \
     "$KEPTNEAR_ACTIVE_CARGO_PATH" \
     "resolved cargo" || return 1
+  KEPTNEAR_ACTIVE_CARGO_CLIPPY_PATH="${KEPTNEAR_ACTIVE_CARGO_PATH%/*}/cargo-clippy"
+  KEPTNEAR_ACTIVE_CLIPPY_DRIVER_PATH="${KEPTNEAR_ACTIVE_CARGO_PATH%/*}/clippy-driver"
+  keptnear_toolchain_require_regular_executable \
+    "$KEPTNEAR_ACTIVE_CARGO_CLIPPY_PATH" \
+    "resolved cargo-clippy" || return 1
+  keptnear_toolchain_require_regular_executable \
+    "$KEPTNEAR_ACTIVE_CLIPPY_DRIVER_PATH" \
+    "resolved clippy-driver" || return 1
 
   KEPTNEAR_ACTIVE_RUSTC_BINARY_SHA256="$(
     keptnear_toolchain_sha256 "$KEPTNEAR_ACTIVE_RUSTC_PATH"
@@ -296,20 +310,29 @@ keptnear_resolve_active_rust_toolchain() {
   KEPTNEAR_ACTIVE_CARGO_BINARY_SHA256="$(
     keptnear_toolchain_sha256 "$KEPTNEAR_ACTIVE_CARGO_PATH"
   )"
+  KEPTNEAR_ACTIVE_CARGO_CLIPPY_BINARY_SHA256="$(
+    keptnear_toolchain_sha256 "$KEPTNEAR_ACTIVE_CARGO_CLIPPY_PATH"
+  )"
+  KEPTNEAR_ACTIVE_CLIPPY_DRIVER_BINARY_SHA256="$(
+    keptnear_toolchain_sha256 "$KEPTNEAR_ACTIVE_CLIPPY_DRIVER_PATH"
+  )"
 
   cargo_home_candidate="${KEPTNEAR_ACTIVE_CARGO_PATH%%/toolchains/*}"
   if [[ \
     "$cargo_home_candidate" == "$KEPTNEAR_ACTIVE_CARGO_PATH" || \
-    ! -d "$cargo_home_candidate/registry" \
+    ! -d "$cargo_home_candidate/registry/cache/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY" || \
+    ! -d "$cargo_home_candidate/registry/index/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY" \
   ]]; then
-    if [[ "$KEPTNEAR_ACTIVE_CARGO_PATH" == */.rustup/toolchains/* ]]; then
-      cargo_home_candidate="${KEPTNEAR_ACTIVE_CARGO_PATH%%/.rustup/toolchains/*}/.cargo"
-    else
-      cargo_home_candidate="$KEPTNEAR_CURRENT_USER_HOME/.cargo"
-    fi
+    cargo_home_candidate="$KEPTNEAR_CURRENT_USER_HOME/.cargo"
   fi
-  if [[ "$cargo_home_candidate" != /* || ! -d "$cargo_home_candidate" ]]; then
-    keptnear_toolchain_fail "could not resolve an absolute Cargo home"
+  if [[ \
+    "$cargo_home_candidate" != /* || \
+    ! -d "$cargo_home_candidate" || \
+    -L "$cargo_home_candidate" || \
+    ! -d "$cargo_home_candidate/registry/cache/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY" || \
+    ! -d "$cargo_home_candidate/registry/index/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY" \
+  ]]; then
+    keptnear_toolchain_fail "could not resolve the reviewed crates.io Cargo cache"
     return 1
   fi
   KEPTNEAR_ACTIVE_CARGO_CACHE_HOME="$(cd "$cargo_home_candidate" && /bin/pwd -P)"
@@ -467,6 +490,14 @@ keptnear_assert_reviewed_distribution_toolchain() {
     keptnear_toolchain_fail "Cargo binary does not match the reviewed distribution tool"
     return 1
   fi
+  if [[ "$KEPTNEAR_ACTIVE_CARGO_CLIPPY_BINARY_SHA256" != "$KEPTNEAR_REVIEWED_CARGO_CLIPPY_BINARY_SHA256" ]]; then
+    keptnear_toolchain_fail "cargo-clippy binary does not match the reviewed distribution tool"
+    return 1
+  fi
+  if [[ "$KEPTNEAR_ACTIVE_CLIPPY_DRIVER_BINARY_SHA256" != "$KEPTNEAR_REVIEWED_CLIPPY_DRIVER_BINARY_SHA256" ]]; then
+    keptnear_toolchain_fail "clippy-driver binary does not match the reviewed distribution tool"
+    return 1
+  fi
   if [[ "$KEPTNEAR_ACTIVE_APPLE_CLANG_VERSION" != "$KEPTNEAR_REVIEWED_APPLE_CLANG_VERSION" ]]; then
     keptnear_toolchain_fail "Apple Clang version does not match the reviewed native toolchain"
     return 1
@@ -532,6 +563,7 @@ keptnear_run_current_rust_cargo() {
 
 keptnear_prepare_isolated_cargo_home() {
   local cargo_registry_entry
+  local isolated_cargo_config
 
   if [[ \
     -z "${KEPTNEAR_ACTIVE_CARGO_CACHE_HOME:-}" || \
@@ -553,29 +585,54 @@ keptnear_prepare_isolated_cargo_home() {
 
   KEPTNEAR_ISOLATED_HOME="$KEPTNEAR_ISOLATED_CARGO_ROOT/home"
   KEPTNEAR_ISOLATED_CARGO_HOME="$KEPTNEAR_ISOLATED_CARGO_ROOT/cargo"
+  KEPTNEAR_ISOLATED_BIN="$KEPTNEAR_ISOLATED_CARGO_ROOT/bin"
   KEPTNEAR_ISOLATED_TMPDIR="$KEPTNEAR_ISOLATED_CARGO_ROOT/tmp"
   "$KEPTNEAR_SYSTEM_MKDIR" \
     "$KEPTNEAR_ISOLATED_HOME" \
     "$KEPTNEAR_ISOLATED_CARGO_HOME" \
     "$KEPTNEAR_ISOLATED_CARGO_HOME/registry" \
+    "$KEPTNEAR_ISOLATED_CARGO_HOME/registry/cache" \
+    "$KEPTNEAR_ISOLATED_CARGO_HOME/registry/index" \
+    "$KEPTNEAR_ISOLATED_BIN" \
     "$KEPTNEAR_ISOLATED_TMPDIR"
   "$KEPTNEAR_SYSTEM_CHMOD" \
     700 \
     "$KEPTNEAR_ISOLATED_HOME" \
     "$KEPTNEAR_ISOLATED_CARGO_HOME" \
+    "$KEPTNEAR_ISOLATED_BIN" \
     "$KEPTNEAR_ISOLATED_TMPDIR"
 
+  "$KEPTNEAR_SYSTEM_LN" \
+    -s \
+    "$KEPTNEAR_ACTIVE_CARGO_CLIPPY_PATH" \
+    "$KEPTNEAR_ISOLATED_BIN/cargo-clippy"
+  "$KEPTNEAR_SYSTEM_LN" \
+    -s \
+    "$KEPTNEAR_ACTIVE_CLIPPY_DRIVER_PATH" \
+    "$KEPTNEAR_ISOLATED_BIN/clippy-driver"
+
   for cargo_registry_entry in cache index; do
-    if [[ ! -d "$KEPTNEAR_ACTIVE_CARGO_CACHE_HOME/registry/$cargo_registry_entry" ]]; then
+    if [[ ! -d "$KEPTNEAR_ACTIVE_CARGO_CACHE_HOME/registry/$cargo_registry_entry/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY" ]]; then
       keptnear_cleanup_isolated_cargo_home
       keptnear_toolchain_fail "reviewed Cargo registry $cargo_registry_entry is unavailable"
       return 1
     fi
     "$KEPTNEAR_SYSTEM_LN" \
       -s \
-      "$KEPTNEAR_ACTIVE_CARGO_CACHE_HOME/registry/$cargo_registry_entry" \
-      "$KEPTNEAR_ISOLATED_CARGO_HOME/registry/$cargo_registry_entry"
+      "$KEPTNEAR_ACTIVE_CARGO_CACHE_HOME/registry/$cargo_registry_entry/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY" \
+      "$KEPTNEAR_ISOLATED_CARGO_HOME/registry/$cargo_registry_entry/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY"
   done
+
+  isolated_cargo_config="$KEPTNEAR_ISOLATED_CARGO_HOME/config.toml"
+  "$KEPTNEAR_SYSTEM_PRINTF" '%s\n' \
+    '[registries.crates-io]' \
+    "protocol = \"$KEPTNEAR_REVIEWED_CRATES_IO_PROTOCOL\"" \
+    '' \
+    '[net]' \
+    'offline = true' \
+    'git-fetch-with-cli = false' \
+    >"$isolated_cargo_config"
+  "$KEPTNEAR_SYSTEM_CHMOD" 600 "$isolated_cargo_config"
 }
 
 keptnear_cleanup_isolated_cargo_home() {
@@ -589,6 +646,7 @@ keptnear_cleanup_isolated_cargo_home() {
   KEPTNEAR_ISOLATED_CARGO_ROOT=""
   KEPTNEAR_ISOLATED_HOME=""
   KEPTNEAR_ISOLATED_CARGO_HOME=""
+  KEPTNEAR_ISOLATED_BIN=""
   KEPTNEAR_ISOLATED_TMPDIR=""
 }
 
@@ -736,7 +794,7 @@ keptnear_run_reviewed_distribution_cargo() {
     "SDKROOT=$KEPTNEAR_ACTIVE_MACOS_SDK_PATH"
     "DEVELOPER_DIR=$KEPTNEAR_ACTIVE_DEVELOPER_DIR"
     "MACOSX_DEPLOYMENT_TARGET=$KEPTNEAR_REVIEWED_MACOS_DEPLOYMENT_TARGET"
-    "PATH=$KEPTNEAR_SYSTEM_PATH"
+    "PATH=$KEPTNEAR_ISOLATED_BIN:$KEPTNEAR_SYSTEM_PATH"
     "HOME=$KEPTNEAR_ISOLATED_HOME"
     "CARGO_HOME=$KEPTNEAR_ISOLATED_CARGO_HOME"
     "TMPDIR=$KEPTNEAR_ISOLATED_TMPDIR"

@@ -147,7 +147,7 @@ impl BrokerProcessRunRequest {
                     && !argument.as_bytes().contains(&0)
             })
             && argument_bytes.is_some_and(|bytes| bytes <= MAX_PROCESS_ARGUMENT_BYTES)
-            && working_directory.as_ref().map_or(true, |directory| {
+            && working_directory.as_ref().is_none_or(|directory| {
                 is_valid_absolute_path(directory, MAX_PROCESS_WORKING_DIRECTORY_BYTES, true)
             })
             && environment.len() <= MAX_PROCESS_ENVIRONMENT_ENTRIES
@@ -956,7 +956,7 @@ fn validate_placement(placement: &UsagePlacement) -> Result<(), BrokerProcessRun
         } => {
             if reference_variable_name
                 .as_ref()
-                .map_or(true, |name| is_valid_environment_name(name))
+                .is_none_or(|name| is_valid_environment_name(name))
             {
                 Ok(())
             } else {

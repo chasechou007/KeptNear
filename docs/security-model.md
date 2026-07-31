@@ -669,12 +669,12 @@ must be rotated with its provider to invalidate delivered copies. The CLI now
 preserves the same meaning in local help and in the fixed
 `compatibilityDelivery` result object without rendering the selected field.
 
-The current Rust 1.75-compatible dependency pin embeds SQLCipher 4.5.3.
-Although the store verifies SQLCipher major version 4 at runtime, this older
-minor release is an explicit dependency-refresh blocker: the new device-state
-feature must not enter a distributed DMG until the Rust toolchain and SQLCipher
-are upgraded and the encrypted-state tests are repeated. The SQLCipher BSD
-notice is retained in `THIRD_PARTY_NOTICES.md`.
+The reviewed Rust 1.93 dependency set uses `rusqlite 0.39.0` and
+`libsqlite3-sys 0.37.0`, embedding SQLCipher 4.10.0. The source-bound release
+receipt covers the complete first-party Rust tree and the exact encrypted-state
+regression set, including wrong keys, ciphertext tampering, missing state, and
+unsafe permissions. The SQLCipher BSD notice is retained in
+`THIRD_PARTY_NOTICES.md`.
 
 The transport-independent Broker process core now reads and writes bounded
 four-byte big-endian frames, performs strict duplicate-key-free JSON parsing,

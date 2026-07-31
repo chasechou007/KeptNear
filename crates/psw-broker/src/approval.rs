@@ -612,7 +612,7 @@ impl BrokerApprovalManager {
             StoredApprovalResolution::Resolved(request)
             | StoredApprovalResolution::Expired(request)
             | StoredApprovalResolution::AlreadyTerminal(request) => request,
-            StoredApprovalResolution::NotYetCreated(_) => {
+            StoredApprovalResolution::NotYetCreated => {
                 return Err(BrokerApprovalError::InvalidDecisionTime);
             }
             StoredApprovalResolution::Missing => {
@@ -643,7 +643,7 @@ impl BrokerApprovalManager {
             .map_err(BrokerApprovalError::DeviceState)?;
         let request = match resolution {
             StoredAllowOnceResolution::Approved(request) => request,
-            StoredAllowOnceResolution::Expired(_) => {
+            StoredAllowOnceResolution::Expired => {
                 self.remove_credential_context(approval_request_id)?;
                 self.notify_change()?;
                 return Err(BrokerApprovalError::ApprovalUnavailable);
@@ -655,7 +655,7 @@ impl BrokerApprovalManager {
                 }
                 return Err(BrokerApprovalError::ApprovalUnavailable);
             }
-            StoredAllowOnceResolution::NotYetCreated(_) => {
+            StoredAllowOnceResolution::NotYetCreated => {
                 return Err(BrokerApprovalError::InvalidDecisionTime);
             }
             StoredAllowOnceResolution::Missing => {
@@ -690,7 +690,7 @@ impl BrokerApprovalManager {
                 rule,
                 newly_created,
             } => (request, rule, newly_created),
-            StoredAccessRuleResolution::Expired(_) => {
+            StoredAccessRuleResolution::Expired => {
                 self.remove_credential_context(approval_request_id)?;
                 self.notify_change()?;
                 return Err(BrokerApprovalError::ApprovalUnavailable);
@@ -703,7 +703,7 @@ impl BrokerApprovalManager {
                 }
                 return Err(BrokerApprovalError::ApprovalUnavailable);
             }
-            StoredAccessRuleResolution::NotYetCreated(_) => {
+            StoredAccessRuleResolution::NotYetCreated => {
                 return Err(BrokerApprovalError::InvalidDecisionTime);
             }
             StoredAccessRuleResolution::Missing => {

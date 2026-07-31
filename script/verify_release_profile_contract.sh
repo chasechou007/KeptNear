@@ -117,11 +117,20 @@ grep -F '"$DISTRIBUTION_CARGO_RUNNER" "$@"' "$ROOT_DIR/script/package_macos_alph
 grep -F '"$DISTRIBUTION_CARGO_RUNNER" "$@"' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
 grep -F 'KEPTNEAR_REVIEWED_RUSTC_BINARY_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_REVIEWED_CARGO_BINARY_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_REVIEWED_CARGO_CLIPPY_BINARY_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_REVIEWED_CLIPPY_DRIVER_BINARY_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_REVIEWED_APPLE_CLANG_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_REVIEWED_APPLE_AR_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_REVIEWED_APPLE_RANLIB_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_REVIEWED_XCODEBUILD_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_SYSTEM_SHASUM="/usr/bin/shasum"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_SYSTEM_PRINTF="/usr/bin/printf"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_REVIEWED_CRATES_IO_PROTOCOL="sparse"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY="index.crates.io-1949cf8c6b5b557f"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+if grep -F 'replace-with' "$DISTRIBUTION_TOOLCHAIN" >/dev/null; then
+  echo "release profile contract violation: reviewed Cargo must not replace crates.io" >&2
+  exit 1
+fi
 grep -F 'keptnear_run_clean_shasum()' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'environment_command=("$KEPTNEAR_SYSTEM_ENV" -i)' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_SYSTEM_XCODE_SELECT="/usr/bin/xcode-select"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
@@ -129,9 +138,14 @@ grep -F 'KEPTNEAR_SYSTEM_XCRUN="/usr/bin/xcrun"' "$DISTRIBUTION_TOOLCHAIN" >/dev
 grep -F 'CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F '"CC=$KEPTNEAR_ACTIVE_CLANG_PATH"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F '"CFLAGS=$KEPTNEAR_ACTIVE_CFLAGS"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
-grep -F '"PATH=$KEPTNEAR_SYSTEM_PATH"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F '"PATH=$KEPTNEAR_ISOLATED_BIN:$KEPTNEAR_SYSTEM_PATH"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F '"HOME=$KEPTNEAR_ISOLATED_HOME"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F '"CARGO_HOME=$KEPTNEAR_ISOLATED_CARGO_HOME"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'cargo_home_candidate="$KEPTNEAR_CURRENT_USER_HOME/.cargo"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'reviewed Cargo registry $cargo_registry_entry is unavailable' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F "isolated_cargo_config=\"\$KEPTNEAR_ISOLATED_CARGO_HOME/config.toml\"" "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F "'offline = true'" "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F "'git-fetch-with-cli = false'" "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F -- '--manifest-path' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'LIBSQLITE3_SYS_USE_PKG_CONFIG' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'SQLCIPHER_LIB_DIR' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
@@ -214,13 +228,14 @@ if [[ "$EXPORTED_AWK_TOOLCHAIN_SHA256" != "$EXPECTED_TOOLCHAIN_SHA256" ]]; then
 fi
 
 "$REVIEW_GATE" --profile source >/dev/null
-if SQLCIPHER_GATE_OUTPUT="$("$SQLCIPHER_GATE" 2>&1)"; then
-  echo "release profile contract violation: blocked SQLCipher dependency passed its independent gate" >&2
+if ! SQLCIPHER_GATE_OUTPUT="$("$SQLCIPHER_GATE" 2>&1)"; then
+  echo "release profile contract violation: approved SQLCipher dependency failed its independent gate" >&2
+  printf '%s\n' "$SQLCIPHER_GATE_OUTPUT" >&2
   exit 1
 fi
 require_text \
   "$SQLCIPHER_GATE_OUTPUT" \
-  "libsqlite3-sys 0.28.0 bundles SQLCipher 4.5.3; upgrade and source-bound revalidation are required" \
+  "SQLCipher distribution gate passed for libsqlite3-sys 0.37.0 and bundled SQLCipher 4.10.0" \
   "independent SQLCipher dependency gate"
 
 for RUST_TOOLCHAIN_OVERRIDE in \
@@ -230,15 +245,16 @@ for RUST_TOOLCHAIN_OVERRIDE in \
   RUSTC_WORKSPACE_WRAPPER \
   CARGO_BUILD_RUSTC_WRAPPER \
   CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER; do
-  if RUST_OVERRIDE_OUTPUT="$(
+  if ! RUST_OVERRIDE_OUTPUT="$(
     env "$RUST_TOOLCHAIN_OVERRIDE=/usr/bin/false" "$SQLCIPHER_GATE" 2>&1
   )"; then
-    echo "release profile contract violation: resetting $RUST_TOOLCHAIN_OVERRIDE allowed the blocked dependency to pass" >&2
+    echo "release profile contract violation: $RUST_TOOLCHAIN_OVERRIDE escaped the isolated compiler boundary" >&2
+    printf '%s\n' "$RUST_OVERRIDE_OUTPUT" >&2
     exit 1
   fi
   require_text \
     "$RUST_OVERRIDE_OUTPUT" \
-    "libsqlite3-sys 0.28.0 bundles SQLCipher 4.5.3; upgrade and source-bound revalidation are required" \
+    "SQLCipher distribution gate passed for libsqlite3-sys 0.37.0 and bundled SQLCipher 4.10.0" \
     "$RUST_TOOLCHAIN_OVERRIDE reset"
   if [[ "$RUST_OVERRIDE_OUTPUT" == *"Cargo-selected rustc identity probe failed"* ]]; then
     echo "release profile contract violation: $RUST_TOOLCHAIN_OVERRIDE executed during the isolated compiler probe" >&2
@@ -301,7 +317,7 @@ PY
   )"
   require_text \
     "$ISOLATED_CARGO_VERSION" \
-    "cargo 1.75.0 (1d8b05cdd 2023-11-20)" \
+    "cargo 1.93.0 (083ac5135 2025-12-15)" \
     "isolated Rust and native distribution environment"
 
   env \
@@ -341,7 +357,7 @@ PY
     "Cargo configuration injection rejection"
 fi
 
-TAMPERED_SQLCIPHER_EVIDENCE="$TMP_DIR/sqlcipher-approved.json"
+TAMPERED_SQLCIPHER_EVIDENCE="$TMP_DIR/sqlcipher-tampered.json"
 python3 - \
   "$ROOT_DIR/docs/sqlcipher-distribution-evidence.json" \
   "$TAMPERED_SQLCIPHER_EVIDENCE" <<'PY'
@@ -350,32 +366,28 @@ import sys
 
 with open(sys.argv[1], "r", encoding="utf-8") as source_file:
     evidence = json.load(source_file)
-evidence["status"] = "approved"
-evidence["approvedForDistribution"] = True
+evidence["source"]["stateStoreSha256"] = "0" * 64
 with open(sys.argv[2], "w", encoding="utf-8") as target_file:
     json.dump(evidence, target_file)
 PY
 if TAMPERED_GATE_OUTPUT="$("$SQLCIPHER_GATE" --evidence "$TAMPERED_SQLCIPHER_EVIDENCE" 2>&1)"; then
-  echo "release profile contract violation: an edited receipt bypassed the blocked dependency mapping" >&2
+  echo "release profile contract violation: an edited receipt bypassed source binding" >&2
   exit 1
 fi
 require_text \
   "$TAMPERED_GATE_OUTPUT" \
-  "the reviewed dependency mapping is blocked but the receipt status is not blocked" \
-  "blocked dependency mapping"
+  "distribution evidence stateStoreSha256 does not match the current source" \
+  "SQLCipher source binding"
 
-if UNSIGNED_REVIEW_OUTPUT="$("$REVIEW_GATE" --profile unsigned 2>&1)"; then
-  echo "release profile contract violation: unsigned artifact gate ignored the current Not approved decision" >&2
+if ! UNSIGNED_REVIEW_OUTPUT="$("$REVIEW_GATE" --profile unsigned 2>&1)"; then
+  echo "release profile contract violation: approved unsigned artifact policy did not pass" >&2
+  printf '%s\n' "$UNSIGNED_REVIEW_OUTPUT" >&2
   exit 1
 fi
 require_text \
   "$UNSIGNED_REVIEW_OUTPUT" \
-  "Unsigned experimental DMG artifact decision: expected 'Approved', got 'Not approved'" \
+  "Maintainer accepted-risk path passed for the unsigned experimental profile" \
   "unsigned artifact decision gate"
-require_text \
-  "$UNSIGNED_REVIEW_OUTPUT" \
-  "libsqlite3-sys 0.28.0 bundles SQLCipher 4.5.3; upgrade and source-bound revalidation are required" \
-  "unsigned SQLCipher dependency gate"
 
 if SIGNED_REVIEW_OUTPUT="$("$REVIEW_GATE" --profile signed 2>&1)"; then
   echo "release profile contract violation: signed artifact gate ignored the current Not approved decision" >&2
@@ -385,10 +397,6 @@ require_text \
   "$SIGNED_REVIEW_OUTPUT" \
   "Signed public alpha artifact decision: expected 'Approved', got 'Not approved'" \
   "signed artifact decision gate"
-require_text \
-  "$SIGNED_REVIEW_OUTPUT" \
-  "libsqlite3-sys 0.28.0 bundles SQLCipher 4.5.3; upgrade and source-bound revalidation are required" \
-  "signed SQLCipher dependency gate"
 
 if "$REVIEW_GATE" --profile invalid >/dev/null 2>&1; then
   echo "release profile contract violation: invalid review profile was accepted" >&2
