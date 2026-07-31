@@ -14,7 +14,7 @@ require_literal() {
   local path="$1"
   local literal="$2"
 
-  if ! rg -F -q -- "$literal" "$ROOT_DIR/$path"; then
+  if ! grep -F -q -- "$literal" "$ROOT_DIR/$path"; then
     report_violation "$path is missing: $literal"
   fi
 }
@@ -22,7 +22,7 @@ require_literal() {
 reject_literal() {
   local literal="$1"
 
-  if rg -F -q -- "$literal" "$DOC_PATH"; then
+  if grep -F -q -- "$literal" "$DOC_PATH"; then
     report_violation "docs/cli-usage.md contains prohibited credential retrieval pattern: $literal"
   fi
 }

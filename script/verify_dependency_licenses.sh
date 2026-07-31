@@ -24,9 +24,9 @@ for required_path in "$LICENSE_PATH" "$WORKSPACE_MANIFEST" "$SWIFT_MANIFEST"; do
   fi
 done
 
-if ! rg --quiet --fixed-strings "GNU GENERAL PUBLIC LICENSE" "$LICENSE_PATH" ||
-  ! rg --quiet --fixed-strings "Version 3, 29 June 2007" "$LICENSE_PATH" ||
-  ! rg --quiet --fixed-strings "END OF TERMS AND CONDITIONS" "$LICENSE_PATH"; then
+if ! grep -F -q -- "GNU GENERAL PUBLIC LICENSE" "$LICENSE_PATH" ||
+  ! grep -F -q -- "Version 3, 29 June 2007" "$LICENSE_PATH" ||
+  ! grep -F -q -- "END OF TERMS AND CONDITIONS" "$LICENSE_PATH"; then
   echo "Dependency license verification failed: LICENSE is not the GPLv3 text" >&2
   exit 1
 fi
@@ -35,7 +35,7 @@ for required_metadata in \
   'authors = ["Chase Chou <chasechou007@gmail.com>"]' \
   'license = "GPL-3.0-only"' \
   'repository = "https://github.com/chasechou007/KeptNear"'; do
-  if ! rg --quiet --fixed-strings "$required_metadata" "$WORKSPACE_MANIFEST"; then
+  if ! grep -F -q -- "$required_metadata" "$WORKSPACE_MANIFEST"; then
     echo "Dependency license verification failed: workspace metadata is missing $required_metadata" >&2
     exit 1
   fi
@@ -47,14 +47,14 @@ for crate_manifest in "$ROOT_DIR"/crates/*/Cargo.toml; do
     "authors.workspace = true" \
     "repository.workspace = true" \
     "publish = false"; do
-    if ! rg --quiet --fixed-strings "$required_metadata" "$crate_manifest"; then
+    if ! grep -F -q -- "$required_metadata" "$crate_manifest"; then
       echo "Dependency license verification failed: ${crate_manifest#$ROOT_DIR/} is missing $required_metadata" >&2
       exit 1
     fi
   done
 done
 
-if rg --quiet '\.package[[:space:]]*\(|\.binaryTarget[[:space:]]*\(' "$SWIFT_MANIFEST"; then
+if grep -E -q -- '\.package[[:space:]]*\(|\.binaryTarget[[:space:]]*\(' "$SWIFT_MANIFEST"; then
   echo "Dependency license verification failed: Swift third-party dependency requires explicit review" >&2
   exit 1
 fi
@@ -166,7 +166,7 @@ for required_notice in \
   "KeptNear enables the \`bundled-sqlcipher\` feature" \
   "Copyright (c) 2008-2020 Zetetic LLC" \
   "Redistribution and use in source and binary forms"; do
-  if ! rg --quiet --fixed-strings "$required_notice" "$NOTICE_PATH"; then
+  if ! grep -F -q -- "$required_notice" "$NOTICE_PATH"; then
     echo "Dependency license verification failed: SQLCipher notice is incomplete" >&2
     exit 1
   fi
