@@ -59,6 +59,8 @@ grep -F 'SQLCIPHER_FFI_PATH=' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'BROKER_SOURCE_DIR=' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'RUST_WORKSPACE_SOURCE_DIR="$ROOT_DIR/crates"' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'RUST_TOOLCHAIN_PATH="$ROOT_DIR/rust-toolchain.toml"' "$SQLCIPHER_GATE" >/dev/null
+grep -F 'CARGO_RUSTC_PROBE_TARGET_DIR="$ROOT_DIR/target/sqlcipher-toolchain-probe"' "$SQLCIPHER_GATE" >/dev/null
+grep -F 'RUSTC_VERBOSE_VERSION="$("${CARGO_RUSTC_PROBE[@]}")"' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'CARGO_TARGET_ROOT="$ROOT_DIR/target"' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
 grep -F 'CARGO_TARGET_ROOT="$ROOT_DIR/target"' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
 grep -F '"$SQLCIPHER_GATE" --distribution-host --release-target "$RUST_TARGET"' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
@@ -127,6 +129,25 @@ require_text \
   "$SQLCIPHER_GATE_OUTPUT" \
   "libsqlite3-sys 0.28.0 bundles SQLCipher 4.5.3; upgrade and source-bound revalidation are required" \
   "independent SQLCipher dependency gate"
+
+for COMPILER_OVERRIDE in \
+  RUSTC \
+  CARGO_BUILD_RUSTC \
+  RUSTC_WRAPPER \
+  RUSTC_WORKSPACE_WRAPPER \
+  CARGO_BUILD_RUSTC_WRAPPER \
+  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER; do
+  if COMPILER_OVERRIDE_OUTPUT="$(
+    env "$COMPILER_OVERRIDE=/usr/bin/false" "$SQLCIPHER_GATE" 2>&1
+  )"; then
+    echo "release profile contract violation: $COMPILER_OVERRIDE bypassed the Cargo-selected compiler probe" >&2
+    exit 1
+  fi
+  require_text \
+    "$COMPILER_OVERRIDE_OUTPUT" \
+    "Cargo-selected rustc identity probe failed" \
+    "$COMPILER_OVERRIDE compiler probe"
+done
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/keptnear-release-contract.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT

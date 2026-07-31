@@ -6,6 +6,7 @@ EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
 RUST_TOOLCHAIN_PATH="$ROOT_DIR/rust-toolchain.toml"
 WORKSPACE_MANIFEST_PATH="$ROOT_DIR/Cargo.toml"
 LOCK_PATH="$ROOT_DIR/Cargo.lock"
+CARGO_RUSTC_PROBE_TARGET_DIR="$ROOT_DIR/target/sqlcipher-toolchain-probe"
 RUST_WORKSPACE_SOURCE_DIR="$ROOT_DIR/crates"
 BROKER_MANIFEST_PATH="$ROOT_DIR/crates/psw-broker/Cargo.toml"
 BROKER_SOURCE_DIR="$ROOT_DIR/crates/psw-broker/src"
@@ -78,6 +79,13 @@ if [[ "$REQUIRE_DISTRIBUTION_HOST" == "0" && -n "$REQUESTED_RELEASE_TARGET" ]]; 
   echo "--release-target requires --distribution-host" >&2
   exit 2
 fi
+if [[ \
+  "$REQUIRE_DISTRIBUTION_HOST" == "1" && \
+  "$REQUESTED_RELEASE_TARGET" != "$REVIEWED_RELEASE_TARGET" \
+]]; then
+  echo "SQLCipher distribution gate failed: release target must be $REVIEWED_RELEASE_TARGET, got $REQUESTED_RELEASE_TARGET" >&2
+  exit 1
+fi
 
 require_file() {
   local path="$1"
@@ -110,10 +118,31 @@ for required_file in \
 done
 require_command cargo
 require_command python3
-require_command rustc
 require_command shasum
 
-RUSTC_VERBOSE_VERSION="$(rustc -Vv)"
+CARGO_RUSTC_PROBE=(
+  cargo
+  rustc
+  --quiet
+  --locked
+  --target-dir "$CARGO_RUSTC_PROBE_TARGET_DIR"
+)
+if [[ "$REQUIRE_DISTRIBUTION_HOST" == "1" ]]; then
+  CARGO_RUSTC_PROBE+=(
+    --target "$REQUESTED_RELEASE_TARGET"
+    --release
+  )
+fi
+CARGO_RUSTC_PROBE+=(
+  -p psw-core
+  --lib
+  --
+  -Vv
+)
+if ! RUSTC_VERBOSE_VERSION="$("${CARGO_RUSTC_PROBE[@]}")"; then
+  echo "SQLCipher distribution gate failed: Cargo-selected rustc identity probe failed" >&2
+  exit 1
+fi
 RUSTC_RELEASE="$(
   printf '%s\n' "$RUSTC_VERBOSE_VERSION" |
     awk -F': ' '$1 == "release" { print $2; exit }'
@@ -131,7 +160,7 @@ RUSTC_LLVM_VERSION="$(
     awk -F': ' '$1 == "LLVM version" { print $2; exit }'
 )"
 if [[ -z "$RUSTC_RELEASE" || -z "$RUSTC_COMMIT_HASH" || -z "$RUSTC_HOST" || -z "$RUSTC_LLVM_VERSION" ]]; then
-  echo "SQLCipher distribution gate failed: rustc -Vv did not provide the required compiler identity" >&2
+  echo "SQLCipher distribution gate failed: Cargo-selected rustc did not provide the required compiler identity" >&2
   exit 1
 fi
 
@@ -147,10 +176,6 @@ fi
 if [[ "$REQUIRE_DISTRIBUTION_HOST" == "1" ]]; then
   if [[ "$RUSTC_HOST" != "$REVIEWED_DISTRIBUTION_HOST" ]]; then
     echo "SQLCipher distribution gate failed: release rustc host must be $REVIEWED_DISTRIBUTION_HOST, got $RUSTC_HOST" >&2
-    exit 1
-  fi
-  if [[ "$REQUESTED_RELEASE_TARGET" != "$REVIEWED_RELEASE_TARGET" ]]; then
-    echo "SQLCipher distribution gate failed: release target must be $REVIEWED_RELEASE_TARGET, got $REQUESTED_RELEASE_TARGET" >&2
     exit 1
   fi
 fi
@@ -398,7 +423,7 @@ if not isinstance(evidence["blocker"], str) or not evidence["blocker"]:
     fail("distribution evidence blocker must be a non-empty string")
 
 required_commands = {
-    "rustc -Vv",
+    "cargo rustc --quiet --locked --target-dir target/sqlcipher-toolchain-probe --target aarch64-apple-darwin --release -p psw-core --lib -- -Vv",
     "cargo -V",
     "cargo test --locked -p psw-broker state_store::tests::",
     "cargo test --locked -p psw-broker integration_tests::ciphertext_corruption_blocks_runtime_without_replacing_state_or_key",
