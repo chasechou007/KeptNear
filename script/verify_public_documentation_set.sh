@@ -36,6 +36,8 @@ PRIVACY_PATH="$ROOT_DIR/docs/diagnostics.md"
 LOGGING_PATH="$ROOT_DIR/docs/logging-policy.md"
 SYNC_PATH="$ROOT_DIR/docs/sync.md"
 IMPORT_EXPORT_PATH="$ROOT_DIR/docs/import-formats.md"
+RELEASE_PATH="$ROOT_DIR/docs/release-readiness.md"
+SQLCIPHER_EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
 README_PATH="$ROOT_DIR/README.md"
 
 for path in \
@@ -46,6 +48,8 @@ for path in \
   "$LOGGING_PATH" \
   "$SYNC_PATH" \
   "$IMPORT_EXPORT_PATH" \
+  "$RELEASE_PATH" \
+  "$SQLCIPHER_EVIDENCE_PATH" \
   "$README_PATH"; do
   require_file "$path"
 done
@@ -80,6 +84,10 @@ require_literal "$IMPORT_EXPORT_PATH" 'KeptNear does not currently import `keptn
 require_literal "$IMPORT_EXPORT_PATH" "always allocate fresh local Credential and Secret Field IDs"
 require_literal "$IMPORT_EXPORT_PATH" "current master password"
 require_literal "$IMPORT_EXPORT_PATH" "unavailable to MCP, CLI"
+
+require_literal "$RELEASE_PATH" "script/verify_sqlcipher_distribution_gate.sh"
+require_literal "$RELEASE_PATH" "docs/sqlcipher-distribution-evidence.json"
+require_literal "$README_PATH" "docs/sqlcipher-distribution-evidence.json"
 
 for link in \
   "docs/build.md" \

@@ -31,12 +31,17 @@ explicit unsigned installation warnings. The signed profile alone performs
 Developer ID, hardened-runtime, notarization, stapling, Gatekeeper, and signed
 install checks.
 
-Both binary profiles are currently blocked by their artifact decisions. The
-bundled SQLCipher 4.5.3 dependency must be upgraded and the encrypted
-device-state suite revalidated before either decision can change from `Not
-approved` to `Approved`. Until then, strict unsigned and signed gates must exit
-non-zero. `local-test` may still create a development DMG, but its manifest
-must retain `Distribution ready: false`.
+Both binary profiles are currently blocked by their artifact decisions and by
+an independent dependency gate. `script/verify_sqlcipher_distribution_gate.sh`
+reads the actual `libsqlite3-sys` lock entry, requires the reviewed
+`bundled-sqlcipher` mapping, and verifies
+`docs/sqlcipher-distribution-evidence.json` against the current lockfile,
+Broker manifest, encrypted state implementation, schema, and regression suite.
+The bundled SQLCipher 4.5.3 mapping is hard-blocked until the dependency is
+upgraded and the source-bound suite is revalidated. Editing either Markdown
+artifact decision cannot bypass this gate. Until then, strict unsigned and
+signed gates must exit non-zero. `local-test` may still create a development
+DMG, but its manifest must retain `Distribution ready: false`.
 
 ## Dependency Review
 
@@ -128,6 +133,11 @@ readiness. The unsigned readiness command selects
 `RELEASE_MODE=unsigned-experimental`; that mode forbids a signing identity and
 notarization, requires a clean worktree and the AR-002 policy gate, and records
 `unsigned`, `unaudited`, and non-production status in the artifact manifest.
+Every DMG also carries the exact SQLCipher distribution receipt used by its
+source checkout. The verifier compares that in-image receipt, its manifest
+digest, the protocol-manifest Git revision, and the current clean checkout.
+This prevents a release-mode artifact from being approved against a different
+source revision.
 
 The existing strict public-alpha scripts implement the signed-distribution
 profile and require:

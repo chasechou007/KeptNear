@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "status": "blocked",
+  "approvedForDistribution": false,
+  "dependency": {
+    "libsqlite3SysVersion": "0.28.0",
+    "bundledSqlcipherVersion": "4.5.3"
+  },
+  "source": {
+    "cargoLockSha256": "04ae521c9029852afb74faea3f0948174d4848ceeb2a84bf1d1d5e4f8ab2c959",
+    "brokerManifestSha256": "13b1aed3aefcc3634eab55e9ac4775aa0fa671d4e9b465286626c014aad84c53",
+    "stateStoreSha256": "7d27b09b6dacc446188cd449301b9264e269fd856e2d3edbe063283122c6a788",
+    "stateSchemaSha256": "296bdd97d0fee04aafdc521b1302e48240a24e5c5fb811063da3585516bad53f",
+    "brokerIntegrationTestsSha256": "7d17389d076ac24cc2b023df5ca478528ec0fad7a7d9d2431df2a285274187d9"
+  },
+  "revalidation": {
+    "result": "not-run-for-distribution",
+    "commands": [],
+    "reviewedBy": null,
+    "reviewedAt": null
+  },
+  "blocker": "Bundled SQLCipher 4.5.3 must be upgraded and the encrypted device-state suite revalidated."
+}

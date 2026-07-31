@@ -193,6 +193,10 @@ profile; the unsigned profile requires its own verifier and disclosures.
   dedicated unsigned profile, verifier, checksum, manifest, installation
   guidance, and user-facing warnings.
 - Keep production-use recommendation separate from public alpha readiness.
+- Keep `script/verify_sqlcipher_distribution_gate.sh` independent from these
+  Markdown decisions. A binary artifact cannot pass until its reviewed
+  dependency mapping and source-bound machine-readable revalidation receipt
+  pass that executable gate.
 - Run `script/verify_security_review_evidence.sh` before an experimental
   pre-release. Strict mode passes only when either external review evidence is
   complete or the maintainer accepted-risk path is complete. `--allow-missing`

@@ -49,6 +49,9 @@ CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
 MANIFEST_PATH="$RELEASES_DIR/$ARCHIVE_BASENAME-manifest.txt"
 PROTOCOL_MANIFEST_PATH="$RELEASES_DIR/$ARCHIVE_BASENAME-protocol-manifest.json"
 PROTOCOL_MANIFEST_FILENAME="$APP_NAME-Protocol-Manifest.json"
+SQLCIPHER_EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
+SQLCIPHER_EVIDENCE_FILENAME="$APP_NAME-SQLCipher-Distribution-Evidence.json"
+SQLCIPHER_GATE="$ROOT_DIR/script/verify_sqlcipher_distribution_gate.sh"
 DMG_VOLUME_NAME="$APP_NAME $VERSION"
 
 if [[ "$NOTARIZE" != "0" && "$NOTARIZE" != "1" ]]; then
@@ -143,6 +146,7 @@ require_command hdiutil
 require_command lipo
 require_command shasum
 require_manifest_atom "$VERSION" "VERSION"
+require_file "$SQLCIPHER_EVIDENCE_PATH" "SQLCipher distribution evidence"
 
 HOST_ARCHITECTURE="$(uname -m)"
 if [[ "$HOST_ARCHITECTURE" != "$ARCHITECTURE" ]]; then
@@ -173,6 +177,12 @@ DISTRIBUTION_READY="false"
 PRODUCTION_READY="false"
 SECURITY_DECISION="not requested for local-test artifact"
 RELEASE_REASON="Local testing artifact; not approved for public distribution."
+
+if [[ "$RELEASE_MODE" != "local-test" ]]; then
+  require_executable "$SQLCIPHER_GATE" "SQLCipher distribution gate"
+  echo "Verifying SQLCipher dependency and source-bound revalidation evidence..."
+  "$SQLCIPHER_GATE"
+fi
 
 if [[ "$RELEASE_MODE" == "unsigned-experimental" ]]; then
   require_executable "$ROOT_DIR/script/verify_security_review_evidence.sh" "security decision verifier"
@@ -302,12 +312,14 @@ BROKER_PROTOCOL_DECLARATION="$(
 )"
 require_file "$PROTOCOL_MANIFEST_PATH" "protocol manifest"
 PROTOCOL_MANIFEST_SHA256="$(sha256_file "$PROTOCOL_MANIFEST_PATH")"
+SQLCIPHER_EVIDENCE_SHA256="$(sha256_file "$SQLCIPHER_EVIDENCE_PATH")"
 
 echo "Creating Apple Silicon disk image..."
 rm -rf "$DMG_STAGING_DIR"
 mkdir -p "$DMG_STAGING_DIR" "$RELEASES_DIR"
 /usr/bin/ditto "$APP_BUNDLE" "$DMG_STAGING_DIR/$APP_NAME.app"
 cp "$PROTOCOL_MANIFEST_PATH" "$DMG_STAGING_DIR/$PROTOCOL_MANIFEST_FILENAME"
+cp "$SQLCIPHER_EVIDENCE_PATH" "$DMG_STAGING_DIR/$SQLCIPHER_EVIDENCE_FILENAME"
 ln -s /Applications "$DMG_STAGING_DIR/Applications"
 rm -f "$ARCHIVE_PATH" "$CHECKSUM_PATH" "$MANIFEST_PATH"
 hdiutil create \
@@ -393,6 +405,8 @@ Size bytes: $ARCHIVE_SIZE_BYTES
 Volume name: $DMG_VOLUME_NAME
 Protocol manifest path: ${PROTOCOL_MANIFEST_PATH#$ROOT_DIR/}
 Protocol manifest SHA-256: $PROTOCOL_MANIFEST_SHA256
+SQLCipher distribution evidence in DMG: $SQLCIPHER_EVIDENCE_FILENAME
+SQLCipher distribution evidence SHA-256: $SQLCIPHER_EVIDENCE_SHA256
 
 Bundle validation
 -----------------

@@ -28,10 +28,14 @@ ID, notarization, external-audit, or production-suitability claim. See
 `docs/release-readiness.md` and `docs/security-review-evidence.md` for the
 current release and review state.
 
-Both binary artifact decisions are currently `Not approved`. Bundled SQLCipher
-4.5.3 must be upgraded and the encrypted device-state suite revalidated before
-either unsigned or signed distribution can pass its strict gate. Local-test
-DMGs remain development artifacts and cannot claim distribution readiness.
+Both binary artifact decisions are currently `Not approved`. Independently,
+`script/verify_sqlcipher_distribution_gate.sh` verifies the actual locked
+dependency, source hashes, and machine-readable
+`docs/sqlcipher-distribution-evidence.json` receipt. Bundled SQLCipher 4.5.3 is
+hard-blocked in that executable mapping until it is upgraded and the encrypted
+device-state suite is revalidated. Editing a Markdown release conclusion alone
+cannot make either unsigned or signed distribution pass. Local-test DMGs remain
+development artifacts and cannot claim distribution readiness.
 
 ## Capability Status
 
@@ -403,6 +407,7 @@ script/verify_macos_distribution_environment.sh --allow-missing
 - [Security review plan](docs/security-review-plan.md)
 - [Local security review](docs/local-security-review.md)
 - [Security review evidence](docs/security-review-evidence.md)
+- [SQLCipher distribution evidence](docs/sqlcipher-distribution-evidence.json)
 - [macOS alpha packaging](docs/macos-alpha-packaging.md)
 - [Release readiness](docs/release-readiness.md)
 - [Open-source readiness](docs/open-source-readiness.md)

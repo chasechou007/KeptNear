@@ -107,12 +107,12 @@ The script requires an Apple Silicon build host and builds:
 - `dist/releases/KeptNear-0.1.0-alpha-macos-arm64-manifest.txt`
 - `dist/releases/KeptNear-0.1.0-alpha-macos-arm64-protocol-manifest.json`
 
-The DMG contains `KeptNear.app`, `KeptNear-Protocol-Manifest.json`, and an
-`Applications` link for drag-to-install. The App bundle keeps the Broker, MCP
-adapter, and CLI under `Contents/Helpers`; the FFI remains under
-`Contents/Frameworks`. Packaging fails if any executable or the FFI is not
-arm64-only, if any component declares a different Broker protocol, or if a
-required component is absent.
+The DMG contains `KeptNear.app`, `KeptNear-Protocol-Manifest.json`,
+`KeptNear-SQLCipher-Distribution-Evidence.json`, and an `Applications` link for
+drag-to-install. The App bundle keeps the Broker, MCP adapter, and CLI under
+`Contents/Helpers`; the FFI remains under `Contents/Frameworks`. Packaging
+fails if any executable or the FFI is not arm64-only, if any component declares
+a different Broker protocol, or if a required component is absent.
 
 The protocol manifest records the exact App, Broker, MCP, CLI, and FFI paths
 and SHA-256 values, their component versions, the shared
@@ -230,11 +230,13 @@ script/verify_macos_alpha_artifact.sh dist/releases/KeptNear-0.1.0-alpha-macos-a
 ```
 
 The verifier checks the DMG checksum, image integrity, mounted app and
-Applications link, exact adjacent/in-DMG protocol-manifest equality,
-arm64-only App, Broker, MCP, CLI, and FFI architectures, component
-executability, runtime component declarations, every component hash, and the
-fixed local installation paths. It also verifies the text-manifest checksum,
-size, protocol-manifest hash, app and DMG signing status, manual update
+Applications link, exact adjacent/in-DMG protocol-manifest equality, the
+in-DMG SQLCipher distribution receipt and its source digest, arm64-only App,
+Broker, MCP, CLI, and FFI architectures, component executability, runtime
+component declarations, every component hash, and the fixed local installation
+paths. Release-mode verification also requires the protocol-manifest Git
+revision to match the current clean checkout. It verifies the text-manifest
+checksum, size, protocol-manifest hash, app and DMG signing status, manual update
 channel, release boundary, and `.pswvault` package document metadata.
 
 ## Install An Unsigned Experimental DMG

@@ -27,6 +27,9 @@ MANIFEST_PATH="$ARCHIVE_DIR/$ARCHIVE_STEM-manifest.txt"
 PROTOCOL_MANIFEST_PATH="$ARCHIVE_DIR/$ARCHIVE_STEM-protocol-manifest.json"
 PROTOCOL_MANIFEST_FILENAME="$APP_NAME-Protocol-Manifest.json"
 PACKAGE_MANIFEST_TOOL="$ROOT_DIR/target/release/keptnear-package-manifest"
+SQLCIPHER_EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
+SQLCIPHER_EVIDENCE_FILENAME="$APP_NAME-SQLCipher-Distribution-Evidence.json"
+SQLCIPHER_GATE="$ROOT_DIR/script/verify_sqlcipher_distribution_gate.sh"
 
 require_file() {
   local path="$1"
@@ -145,11 +148,14 @@ require_file "$ARCHIVE_PATH" "disk image"
 require_file "$CHECKSUM_PATH" "checksum"
 require_file "$MANIFEST_PATH" "manifest"
 require_file "$PROTOCOL_MANIFEST_PATH" "protocol manifest"
+require_file "$SQLCIPHER_EVIDENCE_PATH" "SQLCipher distribution evidence"
 require_command codesign
 require_command cmp
 require_command cargo
+require_command git
 require_command hdiutil
 require_command lipo
+require_command python3
 require_command xcrun
 
 (
@@ -172,6 +178,14 @@ assert_equals \
   "$MANIFEST_PROTOCOL_MANIFEST_SHA256" \
   "$ACTUAL_PROTOCOL_MANIFEST_SHA256"
 
+ACTUAL_SQLCIPHER_EVIDENCE_SHA256="$(shasum -a 256 "$SQLCIPHER_EVIDENCE_PATH" | awk '{print $1}')"
+MANIFEST_SQLCIPHER_EVIDENCE_SHA256="$(require_manifest_field "SQLCipher distribution evidence SHA-256")"
+assert_equals \
+  "SQLCipher distribution evidence SHA-256" \
+  "$MANIFEST_SQLCIPHER_EVIDENCE_SHA256" \
+  "$ACTUAL_SQLCIPHER_EVIDENCE_SHA256"
+assert_manifest_value "SQLCipher distribution evidence in DMG" "$SQLCIPHER_EVIDENCE_FILENAME"
+
 assert_manifest_value "Channel" "manual"
 assert_manifest_value "Automatic updates" "false"
 assert_manifest_value "Architecture" "$ARCHITECTURE"
@@ -181,12 +195,16 @@ assert_manifest_value "Supported architecture" "Apple Silicon arm64 only"
 assert_manifest_value "Production ready" "false"
 
 RELEASE_MODE="$(require_manifest_field "Release mode")"
+if [[ "$RELEASE_MODE" != "local-test" ]]; then
+  require_executable_file "$SQLCIPHER_GATE" "SQLCipher distribution gate"
+fi
 case "$RELEASE_MODE" in
   local-test)
     assert_manifest_value "Security decision" "not requested for local-test artifact"
     assert_manifest_value "Distribution ready" "false"
     ;;
   unsigned-experimental)
+    "$SQLCIPHER_GATE"
     "$ROOT_DIR/script/verify_security_review_evidence.sh" --profile unsigned
     assert_manifest_value "Security decision" "unaudited; AR-002 accepted-risk path verified"
     assert_manifest_value "Distribution ready" "true"
@@ -198,6 +216,7 @@ case "$RELEASE_MODE" in
     assert_equals "unsigned release staple status" "$(manifest_section_field "Notarization" "Staple status")" "skipped"
     ;;
   experimental-pre-release)
+    "$SQLCIPHER_GATE"
     "$ROOT_DIR/script/verify_security_review_evidence.sh" --profile signed
     assert_manifest_value "Security decision" "external-review or maintainer accepted-risk path verified"
     assert_manifest_value "Distribution ready" "true"
@@ -226,6 +245,21 @@ if [[ "$RELEASE_MODE" != "local-test" && "$SOURCE_WORKTREE_STATUS" != "clean" ]]
   echo "$RELEASE_MODE must come from a clean source worktree" >&2
   exit 1
 fi
+if [[ "$RELEASE_MODE" != "local-test" ]]; then
+  CURRENT_GIT_REVISION="$(git -C "$ROOT_DIR" rev-parse --short HEAD 2>/dev/null || true)"
+  if [[ -z "$CURRENT_GIT_REVISION" ]]; then
+    echo "distribution artifact verification requires a Git checkout" >&2
+    exit 1
+  fi
+  assert_equals \
+    "distribution artifact source revision" \
+    "$(require_manifest_field "Git revision")" \
+    "$CURRENT_GIT_REVISION"
+  if [[ -n "$(git -C "$ROOT_DIR" status --porcelain --untracked-files=normal)" ]]; then
+    echo "distribution artifact verification requires a clean Git worktree" >&2
+    exit 1
+  fi
+fi
 
 hdiutil verify "$ARCHIVE_PATH" >/dev/null
 
@@ -234,6 +268,7 @@ MOUNT_DIR="$TMP_DIR/mount"
 COPIED_ROOT="$TMP_DIR/package-root"
 COPIED_APP="$COPIED_ROOT/$APP_NAME.app"
 COPIED_PROTOCOL_MANIFEST="$TMP_DIR/$PROTOCOL_MANIFEST_FILENAME"
+COPIED_SQLCIPHER_EVIDENCE="$TMP_DIR/$SQLCIPHER_EVIDENCE_FILENAME"
 MOUNTED=0
 
 cleanup() {
@@ -250,6 +285,7 @@ MOUNTED=1
 
 require_directory "$MOUNT_DIR/$APP_NAME.app" "app bundle in disk image"
 require_file "$MOUNT_DIR/$PROTOCOL_MANIFEST_FILENAME" "protocol manifest in disk image"
+require_file "$MOUNT_DIR/$SQLCIPHER_EVIDENCE_FILENAME" "SQLCipher distribution evidence in disk image"
 if [[ ! -L "$MOUNT_DIR/Applications" ]]; then
   echo "disk image is missing Applications link" >&2
   exit 1
@@ -258,6 +294,7 @@ assert_equals "Applications link" "$(readlink "$MOUNT_DIR/Applications")" "/Appl
 
 /usr/bin/ditto "$MOUNT_DIR/$APP_NAME.app" "$COPIED_APP"
 cp "$MOUNT_DIR/$PROTOCOL_MANIFEST_FILENAME" "$COPIED_PROTOCOL_MANIFEST"
+cp "$MOUNT_DIR/$SQLCIPHER_EVIDENCE_FILENAME" "$COPIED_SQLCIPHER_EVIDENCE"
 hdiutil detach "$MOUNT_DIR" >/dev/null
 MOUNTED=0
 
@@ -265,6 +302,31 @@ if ! cmp -s "$PROTOCOL_MANIFEST_PATH" "$COPIED_PROTOCOL_MANIFEST"; then
   echo "disk image protocol manifest does not match the adjacent artifact" >&2
   exit 1
 fi
+if ! cmp -s "$SQLCIPHER_EVIDENCE_PATH" "$COPIED_SQLCIPHER_EVIDENCE"; then
+  echo "disk image SQLCipher distribution evidence does not match the current source receipt" >&2
+  exit 1
+fi
+if [[ "$RELEASE_MODE" != "local-test" ]]; then
+  "$SQLCIPHER_GATE" --evidence "$COPIED_SQLCIPHER_EVIDENCE"
+fi
+
+PROTOCOL_GIT_REVISION="$(
+  python3 - "$COPIED_PROTOCOL_MANIFEST" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as manifest_file:
+    manifest = json.load(manifest_file)
+revision = manifest.get("product", {}).get("git_revision")
+if not isinstance(revision, str) or not revision:
+    raise SystemExit("protocol manifest is missing product.git_revision")
+print(revision)
+PY
+)"
+assert_equals \
+  "protocol and package manifest Git revision" \
+  "$PROTOCOL_GIT_REVISION" \
+  "$(require_manifest_field "Git revision")"
 
 APP_BUNDLE="$COPIED_APP"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"

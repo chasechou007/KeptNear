@@ -7,6 +7,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLAN_PATH="$ROOT_DIR/docs/security-review-plan.md"
 EVIDENCE_PATH="$ROOT_DIR/docs/security-review-evidence.md"
 README_PATH="$ROOT_DIR/README.md"
+SQLCIPHER_GATE="$ROOT_DIR/script/verify_sqlcipher_distribution_gate.sh"
 
 usage() {
   cat <<'USAGE'
@@ -319,6 +320,19 @@ if [[ -f "$EVIDENCE_PATH" ]]; then
     fi
   fi
   require_release_value "Production-use recommendation" "Not recommended"
+  if [[ "$PROFILE" != "source" ]]; then
+    FAILURE_SCOPE="common"
+    printf '\nSQLCipher distribution dependency gate\n'
+    if [[ ! -x "$SQLCIPHER_GATE" ]]; then
+      status_line missing "SQLCipher distribution gate" "${SQLCIPHER_GATE#$ROOT_DIR/}"
+      add_failure "missing executable SQLCipher distribution gate"
+    elif SQLCIPHER_GATE_OUTPUT="$("$SQLCIPHER_GATE" 2>&1)"; then
+      status_line ok "SQLCipher distribution gate" "$SQLCIPHER_GATE_OUTPUT"
+    else
+      status_line missing "SQLCipher distribution gate" "$SQLCIPHER_GATE_OUTPUT"
+      add_failure "SQLCipher dependency version and source-bound revalidation are not approved"
+    fi
+  fi
   if [[ "$PROFILE" == "unsigned" ]]; then
     require_release_value "Unsigned experimental DMG artifact decision" "Approved"
   elif [[ "$PROFILE" == "signed" ]]; then
