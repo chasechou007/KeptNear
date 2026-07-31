@@ -207,7 +207,7 @@ case "$RELEASE_MODE" in
     assert_manifest_value "Distribution ready" "false"
     ;;
   unsigned-experimental)
-    "$SQLCIPHER_GATE"
+    "$SQLCIPHER_GATE" --distribution-host --release-target "$RUST_TARGET"
     "$ROOT_DIR/script/verify_security_review_evidence.sh" --profile unsigned
     assert_manifest_value "Security decision" "unaudited; AR-002 accepted-risk path verified"
     assert_manifest_value "Distribution ready" "true"
@@ -219,7 +219,7 @@ case "$RELEASE_MODE" in
     assert_equals "unsigned release staple status" "$(manifest_section_field "Notarization" "Staple status")" "skipped"
     ;;
   experimental-pre-release)
-    "$SQLCIPHER_GATE"
+    "$SQLCIPHER_GATE" --distribution-host --release-target "$RUST_TARGET"
     "$ROOT_DIR/script/verify_security_review_evidence.sh" --profile signed
     assert_manifest_value "Security decision" "external-review or maintainer accepted-risk path verified"
     assert_manifest_value "Distribution ready" "true"
@@ -310,7 +310,10 @@ if ! cmp -s "$SQLCIPHER_EVIDENCE_PATH" "$COPIED_SQLCIPHER_EVIDENCE"; then
   exit 1
 fi
 if [[ "$RELEASE_MODE" != "local-test" ]]; then
-  "$SQLCIPHER_GATE" --evidence "$COPIED_SQLCIPHER_EVIDENCE"
+  "$SQLCIPHER_GATE" \
+    --evidence "$COPIED_SQLCIPHER_EVIDENCE" \
+    --distribution-host \
+    --release-target "$RUST_TARGET"
 fi
 
 PROTOCOL_GIT_REVISION="$(

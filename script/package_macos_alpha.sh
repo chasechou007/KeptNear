@@ -184,7 +184,7 @@ RELEASE_REASON="Local testing artifact; not approved for public distribution."
 if [[ "$RELEASE_MODE" != "local-test" ]]; then
   require_executable "$SQLCIPHER_GATE" "SQLCipher distribution gate"
   echo "Verifying SQLCipher dependency and source-bound revalidation evidence..."
-  "$SQLCIPHER_GATE"
+  "$SQLCIPHER_GATE" --distribution-host --release-target "$RUST_TARGET"
 fi
 
 if [[ "$RELEASE_MODE" == "unsigned-experimental" ]]; then

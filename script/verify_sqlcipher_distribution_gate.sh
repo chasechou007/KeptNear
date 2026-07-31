@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
+RUST_TOOLCHAIN_PATH="$ROOT_DIR/rust-toolchain.toml"
 WORKSPACE_MANIFEST_PATH="$ROOT_DIR/Cargo.toml"
 LOCK_PATH="$ROOT_DIR/Cargo.lock"
 RUST_WORKSPACE_SOURCE_DIR="$ROOT_DIR/crates"
@@ -12,18 +13,24 @@ SQLCIPHER_FFI_PATH="$ROOT_DIR/crates/psw-broker/src/sqlcipher_ffi.rs"
 STATE_STORE_PATH="$ROOT_DIR/crates/psw-broker/src/state_store.rs"
 STATE_SCHEMA_PATH="$ROOT_DIR/crates/psw-broker/src/state_schema.rs"
 INTEGRATION_TESTS_PATH="$ROOT_DIR/crates/psw-broker/src/integration_tests.rs"
+REQUIRE_DISTRIBUTION_HOST=0
+REQUESTED_RELEASE_TARGET=""
+REVIEWED_DISTRIBUTION_HOST="aarch64-apple-darwin"
+REVIEWED_RELEASE_TARGET="aarch64-apple-darwin"
 
 usage() {
   cat <<'USAGE'
-usage: script/verify_sqlcipher_distribution_gate.sh [--evidence PATH]
+usage: script/verify_sqlcipher_distribution_gate.sh [--evidence PATH] [--distribution-host --release-target TARGET]
 
 Validates the actual bundled SQLCipher dependency and its machine-readable,
 source-bound revalidation receipt. This is a strict binary-distribution gate:
 known blocked and unknown dependency versions always exit non-zero.
 
 Options:
-  --evidence PATH  validate this receipt instead of the repository default
-  -h, --help       show this help
+  --evidence PATH       validate this receipt instead of the repository default
+  --distribution-host  require the reviewed release compiler host
+  --release-target      require the named reviewed release target
+  -h, --help            show this help
 USAGE
 }
 
@@ -38,6 +45,19 @@ while [[ $# -gt 0 ]]; do
       EVIDENCE_PATH="$2"
       shift 2
       ;;
+    --distribution-host)
+      REQUIRE_DISTRIBUTION_HOST=1
+      shift
+      ;;
+    --release-target)
+      if [[ $# -lt 2 ]]; then
+        echo "--release-target requires a value" >&2
+        usage >&2
+        exit 2
+      fi
+      REQUESTED_RELEASE_TARGET="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -49,6 +69,15 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$REQUIRE_DISTRIBUTION_HOST" == "1" && -z "$REQUESTED_RELEASE_TARGET" ]]; then
+  echo "--distribution-host requires --release-target" >&2
+  exit 2
+fi
+if [[ "$REQUIRE_DISTRIBUTION_HOST" == "0" && -n "$REQUESTED_RELEASE_TARGET" ]]; then
+  echo "--release-target requires --distribution-host" >&2
+  exit 2
+fi
 
 require_file() {
   local path="$1"
@@ -69,6 +98,7 @@ require_command() {
 
 for required_file in \
   "$EVIDENCE_PATH" \
+  "$RUST_TOOLCHAIN_PATH" \
   "$WORKSPACE_MANIFEST_PATH" \
   "$LOCK_PATH" \
   "$BROKER_MANIFEST_PATH" \
@@ -78,8 +108,52 @@ for required_file in \
   "$INTEGRATION_TESTS_PATH"; do
   require_file "$required_file" "distribution evidence input"
 done
+require_command cargo
 require_command python3
+require_command rustc
 require_command shasum
+
+RUSTC_VERBOSE_VERSION="$(rustc -Vv)"
+RUSTC_RELEASE="$(
+  printf '%s\n' "$RUSTC_VERBOSE_VERSION" |
+    awk -F': ' '$1 == "release" { print $2; exit }'
+)"
+RUSTC_COMMIT_HASH="$(
+  printf '%s\n' "$RUSTC_VERBOSE_VERSION" |
+    awk -F': ' '$1 == "commit-hash" { print $2; exit }'
+)"
+RUSTC_HOST="$(
+  printf '%s\n' "$RUSTC_VERBOSE_VERSION" |
+    awk -F': ' '$1 == "host" { print $2; exit }'
+)"
+RUSTC_LLVM_VERSION="$(
+  printf '%s\n' "$RUSTC_VERBOSE_VERSION" |
+    awk -F': ' '$1 == "LLVM version" { print $2; exit }'
+)"
+if [[ -z "$RUSTC_RELEASE" || -z "$RUSTC_COMMIT_HASH" || -z "$RUSTC_HOST" || -z "$RUSTC_LLVM_VERSION" ]]; then
+  echo "SQLCipher distribution gate failed: rustc -Vv did not provide the required compiler identity" >&2
+  exit 1
+fi
+
+CARGO_VERSION_OUTPUT="$(cargo -V)"
+if [[ "$CARGO_VERSION_OUTPUT" =~ ^cargo[[:space:]]+([^[:space:]]+)[[:space:]]+\(([0-9a-f]+)[[:space:]] ]]; then
+  CARGO_RELEASE="${BASH_REMATCH[1]}"
+  CARGO_COMMIT_HASH="${BASH_REMATCH[2]}"
+else
+  echo "SQLCipher distribution gate failed: cargo -V did not provide the required compiler identity" >&2
+  exit 1
+fi
+
+if [[ "$REQUIRE_DISTRIBUTION_HOST" == "1" ]]; then
+  if [[ "$RUSTC_HOST" != "$REVIEWED_DISTRIBUTION_HOST" ]]; then
+    echo "SQLCipher distribution gate failed: release rustc host must be $REVIEWED_DISTRIBUTION_HOST, got $RUSTC_HOST" >&2
+    exit 1
+  fi
+  if [[ "$REQUESTED_RELEASE_TARGET" != "$REVIEWED_RELEASE_TARGET" ]]; then
+    echo "SQLCipher distribution gate failed: release target must be $REVIEWED_RELEASE_TARGET, got $REQUESTED_RELEASE_TARGET" >&2
+    exit 1
+  fi
+fi
 
 if ! grep -E 'rusqlite[[:space:]]*=.*features[[:space:]]*=[[:space:]]*\[[^]]*"bundled-sqlcipher"' \
   "$BROKER_MANIFEST_PATH" >/dev/null; then
@@ -167,6 +241,7 @@ source_tree_sha256() {
     awk '{print $1}'
 }
 
+RUST_TOOLCHAIN_SHA256="$(sha256_file "$RUST_TOOLCHAIN_PATH")"
 WORKSPACE_MANIFEST_SHA256="$(sha256_file "$WORKSPACE_MANIFEST_PATH")"
 CARGO_LOCK_SHA256="$(sha256_file "$LOCK_PATH")"
 RUST_WORKSPACE_SOURCE_TREE_SHA256="$(source_tree_sha256 "$RUST_WORKSPACE_SOURCE_DIR" "Rust workspace")"
@@ -181,6 +256,17 @@ python3 - \
   "$EVIDENCE_PATH" \
   "$LIBSQLITE3_SYS_VERSION" \
   "$BUNDLED_SQLCIPHER_VERSION" \
+  "$RUST_TOOLCHAIN_SHA256" \
+  "$RUSTC_RELEASE" \
+  "$RUSTC_COMMIT_HASH" \
+  "$RUSTC_HOST" \
+  "$RUSTC_LLVM_VERSION" \
+  "$CARGO_RELEASE" \
+  "$CARGO_COMMIT_HASH" \
+  "$REVIEWED_DISTRIBUTION_HOST" \
+  "$REVIEWED_RELEASE_TARGET" \
+  "$REQUIRE_DISTRIBUTION_HOST" \
+  "$REQUESTED_RELEASE_TARGET" \
   "$WORKSPACE_MANIFEST_SHA256" \
   "$CARGO_LOCK_SHA256" \
   "$RUST_WORKSPACE_SOURCE_TREE_SHA256" \
@@ -200,6 +286,17 @@ import sys
     evidence_path,
     libsqlite3_sys_version,
     bundled_sqlcipher_version,
+    rust_toolchain_sha256,
+    rustc_release,
+    rustc_commit_hash,
+    rustc_host,
+    rustc_llvm_version,
+    cargo_release,
+    cargo_commit_hash,
+    reviewed_distribution_host,
+    reviewed_release_target,
+    require_distribution_host,
+    requested_release_target,
     workspace_manifest_sha256,
     cargo_lock_sha256,
     rust_workspace_source_tree_sha256,
@@ -228,6 +325,7 @@ expected_top_level = {
     "status",
     "approvedForDistribution",
     "dependency",
+    "toolchain",
     "source",
     "revalidation",
     "blocker",
@@ -247,6 +345,28 @@ if dependency["libsqlite3SysVersion"] != libsqlite3_sys_version:
     fail("distribution evidence does not match the libsqlite3-sys version in Cargo.lock")
 if dependency["bundledSqlcipherVersion"] != bundled_sqlcipher_version:
     fail("distribution evidence does not match the reviewed bundled SQLCipher mapping")
+
+toolchain = evidence["toolchain"]
+expected_toolchain = {
+    "rustToolchainSha256": rust_toolchain_sha256,
+    "rustcRelease": rustc_release,
+    "rustcCommitHash": rustc_commit_hash,
+    "rustcLlvmVersion": rustc_llvm_version,
+    "cargoRelease": cargo_release,
+    "cargoCommitHash": cargo_commit_hash,
+    "distributionHost": reviewed_distribution_host,
+    "releaseTarget": reviewed_release_target,
+}
+if not isinstance(toolchain, dict) or set(toolchain) != set(expected_toolchain):
+    fail("distribution evidence toolchain object has an unexpected schema")
+for field, expected_value in expected_toolchain.items():
+    if toolchain[field] != expected_value:
+        fail(f"distribution evidence {field} does not match the active reviewed toolchain")
+if require_distribution_host == "1":
+    if rustc_host != toolchain["distributionHost"]:
+        fail("the active rustc host does not match the reviewed distribution host")
+    if requested_release_target != toolchain["releaseTarget"]:
+        fail("the requested release target does not match the reviewed release target")
 
 source = evidence["source"]
 expected_source = {
@@ -278,12 +398,14 @@ if not isinstance(evidence["blocker"], str) or not evidence["blocker"]:
     fail("distribution evidence blocker must be a non-empty string")
 
 required_commands = {
-    "cargo test -p psw-broker state_store::tests::",
-    "cargo test -p psw-broker integration_tests::ciphertext_corruption_blocks_runtime_without_replacing_state_or_key",
-    "cargo test -p psw-broker integration_tests::wrong_device_key_blocks_runtime_without_overwriting_either_side",
-    "cargo test -p psw-broker integration_tests::insecure_database_permissions_block_runtime_and_retain_authority",
-    "cargo test -p psw-broker integration_tests::missing_database_blocks_runtime_without_silent_reinitialization",
-    "cargo test -p psw-broker integration_tests::missing_device_key_blocks_runtime_without_generating_replacement",
+    "rustc -Vv",
+    "cargo -V",
+    "cargo test --locked -p psw-broker state_store::tests::",
+    "cargo test --locked -p psw-broker integration_tests::ciphertext_corruption_blocks_runtime_without_replacing_state_or_key",
+    "cargo test --locked -p psw-broker integration_tests::wrong_device_key_blocks_runtime_without_overwriting_either_side",
+    "cargo test --locked -p psw-broker integration_tests::insecure_database_permissions_block_runtime_and_retain_authority",
+    "cargo test --locked -p psw-broker integration_tests::missing_database_blocks_runtime_without_silent_reinitialization",
+    "cargo test --locked -p psw-broker integration_tests::missing_device_key_blocks_runtime_without_generating_replacement",
     "script/verify_dependency_licenses.sh",
     "cargo clippy --workspace --all-targets --locked -- -D warnings",
 }

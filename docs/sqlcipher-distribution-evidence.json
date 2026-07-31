@@ -6,6 +6,16 @@
     "libsqlite3SysVersion": "0.28.0",
     "bundledSqlcipherVersion": "4.5.3"
   },
+  "toolchain": {
+    "rustToolchainSha256": "d58423b4a7669bbeeb985776c675470d4bd3a01eeb504e58ad70e8be36d19c9b",
+    "rustcRelease": "1.75.0",
+    "rustcCommitHash": "82e1608dfa6e0b5569232559e3d385fea5a93112",
+    "rustcLlvmVersion": "17.0.6",
+    "cargoRelease": "1.75.0",
+    "cargoCommitHash": "1d8b05cdd",
+    "distributionHost": "aarch64-apple-darwin",
+    "releaseTarget": "aarch64-apple-darwin"
+  },
   "source": {
     "workspaceManifestSha256": "7025524f303e23c4937470884012c604b6f7d7654d6899ec0c5071df777a20a8",
     "cargoLockSha256": "04ae521c9029852afb74faea3f0948174d4848ceeb2a84bf1d1d5e4f8ab2c959",

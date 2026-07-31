@@ -44,9 +44,12 @@ hard-blocked until the dependency is upgraded and the source-bound suite is
 revalidated. Editing either Markdown artifact decision cannot bypass this gate.
 Release Cargo builds use `--locked`, a fixed target triple, and a
 repository-owned target directory, so the dependency graph and selected output
-path cannot change after the receipt check. Until then, strict unsigned and
-signed gates must exit non-zero. `local-test` may still create a development
-DMG, but its manifest must retain `Distribution ready: false`.
+path cannot change after the receipt check. The receipt also binds
+`rust-toolchain.toml`, the exact Rust and Cargo release/commit identities, the
+LLVM version, and the Apple Silicon compiler host/target required by
+distribution packaging. Until then, strict unsigned and signed gates must exit
+non-zero. `local-test` may still create a development DMG, but its manifest must
+retain `Distribution ready: false`.
 
 ## Dependency Review
 
