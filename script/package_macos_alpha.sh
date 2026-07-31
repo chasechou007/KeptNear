@@ -6,6 +6,7 @@ BUILD_PRODUCT_NAME="PSWMac"
 BUNDLE_ID="app.psw.local.PSWMac"
 MIN_SYSTEM_VERSION="13.0"
 ARCHITECTURE="arm64"
+RUST_TARGET="aarch64-apple-darwin"
 VERSION="${VERSION:-0.1.0-alpha}"
 UPDATE_CHANNEL="manual"
 RELEASE_MODE="${RELEASE_MODE:-local-test}"
@@ -20,6 +21,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/script/macos_info_plist.sh"
 source "$ROOT_DIR/script/swiftpm_local_env.sh"
 
+CARGO_TARGET_ROOT="$ROOT_DIR/target"
+CARGO_RELEASE_DIR="$CARGO_TARGET_ROOT/$RUST_TARGET/release"
 DIST_DIR="$ROOT_DIR/dist"
 RELEASES_DIR="$DIST_DIR/releases"
 STAGING_DIR="$DIST_DIR/alpha-staging"
@@ -33,12 +36,12 @@ APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 APP_COMPONENT_METADATA="$APP_RESOURCES/KeptNear-App-Component.json"
-FFI_DYLIB="$ROOT_DIR/target/release/libpsw_ffi.dylib"
-APP_METADATA_PROBE="$ROOT_DIR/target/release/keptnear-app-metadata"
-PACKAGE_MANIFEST_TOOL="$ROOT_DIR/target/release/keptnear-package-manifest"
-BROKER_BINARY="$ROOT_DIR/target/release/keptnear-broker"
-MCP_BINARY="$ROOT_DIR/target/release/keptnear-mcp"
-CLI_BINARY="$ROOT_DIR/target/release/keptnear"
+FFI_DYLIB="$CARGO_RELEASE_DIR/libpsw_ffi.dylib"
+APP_METADATA_PROBE="$CARGO_RELEASE_DIR/keptnear-app-metadata"
+PACKAGE_MANIFEST_TOOL="$CARGO_RELEASE_DIR/keptnear-package-manifest"
+BROKER_BINARY="$CARGO_RELEASE_DIR/keptnear-broker"
+MCP_BINARY="$CARGO_RELEASE_DIR/keptnear-mcp"
+CLI_BINARY="$CARGO_RELEASE_DIR/keptnear"
 PACKAGED_BROKER="$APP_HELPERS/keptnear-broker"
 PACKAGED_MCP="$APP_HELPERS/keptnear-mcp"
 PACKAGED_CLI="$APP_HELPERS/keptnear"
@@ -203,6 +206,8 @@ fi
 echo "Building Rust FFI and package metadata tools..."
 cargo build \
   --locked \
+  --target-dir "$CARGO_TARGET_ROOT" \
+  --target "$RUST_TARGET" \
   -p psw-ffi \
   --release \
   --lib \
@@ -212,6 +217,8 @@ cargo build \
 echo "Building Broker, MCP adapter, and CLI components..."
 cargo build \
   --locked \
+  --target-dir "$CARGO_TARGET_ROOT" \
+  --target "$RUST_TARGET" \
   --release \
   -p psw-broker \
   -p keptnear-mcp \

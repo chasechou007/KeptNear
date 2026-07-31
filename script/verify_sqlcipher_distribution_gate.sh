@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
 LOCK_PATH="$ROOT_DIR/Cargo.lock"
 BROKER_MANIFEST_PATH="$ROOT_DIR/crates/psw-broker/Cargo.toml"
+BROKER_SOURCE_DIR="$ROOT_DIR/crates/psw-broker/src"
 SQLCIPHER_FFI_PATH="$ROOT_DIR/crates/psw-broker/src/sqlcipher_ffi.rs"
 STATE_STORE_PATH="$ROOT_DIR/crates/psw-broker/src/state_store.rs"
 STATE_SCHEMA_PATH="$ROOT_DIR/crates/psw-broker/src/state_schema.rs"
@@ -134,8 +135,36 @@ sha256_file() {
   shasum -a 256 "$1" | awk '{print $1}'
 }
 
+broker_source_tree_sha256() {
+  local source_files
+  local source_file
+  local relative_path
+
+  if [[ ! -d "$BROKER_SOURCE_DIR" || -L "$BROKER_SOURCE_DIR" ]]; then
+    echo "SQLCipher distribution gate failed: Broker source root must be a real directory" >&2
+    return 1
+  fi
+  if find "$BROKER_SOURCE_DIR" -type l -print -quit | grep -q .; then
+    echo "SQLCipher distribution gate failed: Broker source tree must not contain symbolic links" >&2
+    return 1
+  fi
+  source_files="$(find "$BROKER_SOURCE_DIR" -type f -print | LC_ALL=C sort)"
+  if [[ -z "$source_files" ]]; then
+    echo "SQLCipher distribution gate failed: Broker source tree is empty" >&2
+    return 1
+  fi
+
+  while IFS= read -r source_file; do
+    relative_path="${source_file#$ROOT_DIR/}"
+    printf '%s  %s\n' "$(sha256_file "$source_file")" "$relative_path"
+  done <<<"$source_files" |
+    shasum -a 256 |
+    awk '{print $1}'
+}
+
 CARGO_LOCK_SHA256="$(sha256_file "$LOCK_PATH")"
 BROKER_MANIFEST_SHA256="$(sha256_file "$BROKER_MANIFEST_PATH")"
+BROKER_SOURCE_TREE_SHA256="$(broker_source_tree_sha256)"
 SQLCIPHER_FFI_SHA256="$(sha256_file "$SQLCIPHER_FFI_PATH")"
 STATE_STORE_SHA256="$(sha256_file "$STATE_STORE_PATH")"
 STATE_SCHEMA_SHA256="$(sha256_file "$STATE_SCHEMA_PATH")"
@@ -147,6 +176,7 @@ python3 - \
   "$BUNDLED_SQLCIPHER_VERSION" \
   "$CARGO_LOCK_SHA256" \
   "$BROKER_MANIFEST_SHA256" \
+  "$BROKER_SOURCE_TREE_SHA256" \
   "$SQLCIPHER_FFI_SHA256" \
   "$STATE_STORE_SHA256" \
   "$STATE_SCHEMA_SHA256" \
@@ -163,6 +193,7 @@ import sys
     bundled_sqlcipher_version,
     cargo_lock_sha256,
     broker_manifest_sha256,
+    broker_source_tree_sha256,
     sqlcipher_ffi_sha256,
     state_store_sha256,
     state_schema_sha256,
@@ -210,6 +241,7 @@ source = evidence["source"]
 expected_source = {
     "cargoLockSha256": cargo_lock_sha256,
     "brokerManifestSha256": broker_manifest_sha256,
+    "brokerSourceTreeSha256": broker_source_tree_sha256,
     "sqlcipherFfiSha256": sqlcipher_ffi_sha256,
     "stateStoreSha256": state_store_sha256,
     "stateSchemaSha256": state_schema_sha256,

@@ -56,6 +56,9 @@ grep -F 'verify_sqlcipher_distribution_gate.sh' "$ROOT_DIR/script/verify_securit
 grep -F 'SQLCipher distribution evidence SHA-256' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
 grep -F 'distribution artifact source revision' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
 grep -F 'SQLCIPHER_FFI_PATH=' "$SQLCIPHER_GATE" >/dev/null
+grep -F 'BROKER_SOURCE_DIR=' "$SQLCIPHER_GATE" >/dev/null
+grep -F 'CARGO_TARGET_ROOT="$ROOT_DIR/target"' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
+grep -F 'CARGO_TARGET_ROOT="$ROOT_DIR/target"' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
 grep -F 'script/verify_source_preview_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
 grep -F 'script/verify_unsigned_alpha_release_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
 grep -F 'script/verify_public_alpha_release_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
@@ -68,6 +71,14 @@ PACKAGE_LOCKED_COUNT="$(
   awk '$1 == "--locked" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/package_macos_alpha.sh"
 )"
+PACKAGE_TARGET_DIR_COUNT="$(
+  awk '$1 == "--target-dir" { count += 1 } END { print count + 0 }' \
+    "$ROOT_DIR/script/package_macos_alpha.sh"
+)"
+PACKAGE_TARGET_COUNT="$(
+  awk '$1 == "--target" { count += 1 } END { print count + 0 }' \
+    "$ROOT_DIR/script/package_macos_alpha.sh"
+)"
 ARTIFACT_BUILD_COUNT="$(
   awk '$1 == "cargo" && $2 == "build" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
@@ -76,12 +87,30 @@ ARTIFACT_LOCKED_COUNT="$(
   awk '$1 == "--locked" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
 )"
-if [[ "$PACKAGE_BUILD_COUNT" -ne 2 || "$PACKAGE_LOCKED_COUNT" -ne "$PACKAGE_BUILD_COUNT" ]]; then
-  echo "release profile contract violation: every package Cargo build must use --locked" >&2
+ARTIFACT_TARGET_DIR_COUNT="$(
+  awk '$1 == "--target-dir" { count += 1 } END { print count + 0 }' \
+    "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
+)"
+ARTIFACT_TARGET_COUNT="$(
+  awk '$1 == "--target" { count += 1 } END { print count + 0 }' \
+    "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
+)"
+if [[ \
+  "$PACKAGE_BUILD_COUNT" -ne 2 || \
+  "$PACKAGE_LOCKED_COUNT" -ne "$PACKAGE_BUILD_COUNT" || \
+  "$PACKAGE_TARGET_DIR_COUNT" -ne "$PACKAGE_BUILD_COUNT" || \
+  "$PACKAGE_TARGET_COUNT" -ne "$PACKAGE_BUILD_COUNT" \
+]]; then
+  echo "release profile contract violation: every package Cargo build must lock dependencies, target, and output directory" >&2
   exit 1
 fi
-if [[ "$ARTIFACT_BUILD_COUNT" -ne 1 || "$ARTIFACT_LOCKED_COUNT" -ne "$ARTIFACT_BUILD_COUNT" ]]; then
-  echo "release profile contract violation: every artifact-verifier Cargo build must use --locked" >&2
+if [[ \
+  "$ARTIFACT_BUILD_COUNT" -ne 1 || \
+  "$ARTIFACT_LOCKED_COUNT" -ne "$ARTIFACT_BUILD_COUNT" || \
+  "$ARTIFACT_TARGET_DIR_COUNT" -ne "$ARTIFACT_BUILD_COUNT" || \
+  "$ARTIFACT_TARGET_COUNT" -ne "$ARTIFACT_BUILD_COUNT" \
+]]; then
+  echo "release profile contract violation: every artifact-verifier Cargo build must lock dependencies, target, and output directory" >&2
   exit 1
 fi
 

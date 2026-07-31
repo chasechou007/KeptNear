@@ -4,10 +4,13 @@ set -euo pipefail
 APP_NAME="KeptNear"
 VERSION="${VERSION:-0.1.0-alpha}"
 ARCHITECTURE="arm64"
+RUST_TARGET="aarch64-apple-darwin"
 VAULT_TYPE_IDENTIFIER="app.psw.local.vault"
 VAULT_EXTENSION="pswvault"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CARGO_TARGET_ROOT="$ROOT_DIR/target"
+CARGO_RELEASE_DIR="$CARGO_TARGET_ROOT/$RUST_TARGET/release"
 DEFAULT_ARCHIVE="$ROOT_DIR/dist/releases/$APP_NAME-$VERSION-macos-arm64.dmg"
 ARCHIVE_PATH="${1:-$DEFAULT_ARCHIVE}"
 
@@ -26,7 +29,7 @@ CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
 MANIFEST_PATH="$ARCHIVE_DIR/$ARCHIVE_STEM-manifest.txt"
 PROTOCOL_MANIFEST_PATH="$ARCHIVE_DIR/$ARCHIVE_STEM-protocol-manifest.json"
 PROTOCOL_MANIFEST_FILENAME="$APP_NAME-Protocol-Manifest.json"
-PACKAGE_MANIFEST_TOOL="$ROOT_DIR/target/release/keptnear-package-manifest"
+PACKAGE_MANIFEST_TOOL="$CARGO_RELEASE_DIR/keptnear-package-manifest"
 SQLCIPHER_EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
 SQLCIPHER_EVIDENCE_FILENAME="$APP_NAME-SQLCipher-Distribution-Evidence.json"
 SQLCIPHER_GATE="$ROOT_DIR/script/verify_sqlcipher_distribution_gate.sh"
@@ -352,13 +355,13 @@ require_arm64_binary "$BROKER_BINARY" "Broker executable"
 require_arm64_binary "$MCP_BINARY" "MCP adapter executable"
 require_arm64_binary "$CLI_BINARY" "CLI executable"
 
-if [[ ! -x "$PACKAGE_MANIFEST_TOOL" ]]; then
-  cargo build \
-    --locked \
-    --release \
-    -p psw-ffi \
-    --bin keptnear-package-manifest >/dev/null
-fi
+cargo build \
+  --locked \
+  --target-dir "$CARGO_TARGET_ROOT" \
+  --target "$RUST_TARGET" \
+  --release \
+  -p psw-ffi \
+  --bin keptnear-package-manifest >/dev/null
 require_executable_file "$PACKAGE_MANIFEST_TOOL" "protocol manifest verifier"
 PACKAGE_VERSION="$(require_manifest_field "Version")"
 PROTOCOL_DECLARATION="$(
