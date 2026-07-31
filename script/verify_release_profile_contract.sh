@@ -55,9 +55,35 @@ grep -F 'verify_sqlcipher_distribution_gate.sh' "$ROOT_DIR/script/verify_macos_a
 grep -F 'verify_sqlcipher_distribution_gate.sh' "$ROOT_DIR/script/verify_security_review_evidence.sh" >/dev/null
 grep -F 'SQLCipher distribution evidence SHA-256' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
 grep -F 'distribution artifact source revision' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
+grep -F 'SQLCIPHER_FFI_PATH=' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'script/verify_source_preview_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
 grep -F 'script/verify_unsigned_alpha_release_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
 grep -F 'script/verify_public_alpha_release_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
+
+PACKAGE_BUILD_COUNT="$(
+  awk '$1 == "cargo" && $2 == "build" { count += 1 } END { print count + 0 }' \
+    "$ROOT_DIR/script/package_macos_alpha.sh"
+)"
+PACKAGE_LOCKED_COUNT="$(
+  awk '$1 == "--locked" { count += 1 } END { print count + 0 }' \
+    "$ROOT_DIR/script/package_macos_alpha.sh"
+)"
+ARTIFACT_BUILD_COUNT="$(
+  awk '$1 == "cargo" && $2 == "build" { count += 1 } END { print count + 0 }' \
+    "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
+)"
+ARTIFACT_LOCKED_COUNT="$(
+  awk '$1 == "--locked" { count += 1 } END { print count + 0 }' \
+    "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
+)"
+if [[ "$PACKAGE_BUILD_COUNT" -ne 2 || "$PACKAGE_LOCKED_COUNT" -ne "$PACKAGE_BUILD_COUNT" ]]; then
+  echo "release profile contract violation: every package Cargo build must use --locked" >&2
+  exit 1
+fi
+if [[ "$ARTIFACT_BUILD_COUNT" -ne 1 || "$ARTIFACT_LOCKED_COUNT" -ne "$ARTIFACT_BUILD_COUNT" ]]; then
+  echo "release profile contract violation: every artifact-verifier Cargo build must use --locked" >&2
+  exit 1
+fi
 
 "$REVIEW_GATE" --profile source >/dev/null
 if SQLCIPHER_GATE_OUTPUT="$("$SQLCIPHER_GATE" 2>&1)"; then

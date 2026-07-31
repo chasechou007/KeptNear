@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
 LOCK_PATH="$ROOT_DIR/Cargo.lock"
 BROKER_MANIFEST_PATH="$ROOT_DIR/crates/psw-broker/Cargo.toml"
+SQLCIPHER_FFI_PATH="$ROOT_DIR/crates/psw-broker/src/sqlcipher_ffi.rs"
 STATE_STORE_PATH="$ROOT_DIR/crates/psw-broker/src/state_store.rs"
 STATE_SCHEMA_PATH="$ROOT_DIR/crates/psw-broker/src/state_schema.rs"
 INTEGRATION_TESTS_PATH="$ROOT_DIR/crates/psw-broker/src/integration_tests.rs"
@@ -67,6 +68,7 @@ for required_file in \
   "$EVIDENCE_PATH" \
   "$LOCK_PATH" \
   "$BROKER_MANIFEST_PATH" \
+  "$SQLCIPHER_FFI_PATH" \
   "$STATE_STORE_PATH" \
   "$STATE_SCHEMA_PATH" \
   "$INTEGRATION_TESTS_PATH"; do
@@ -134,6 +136,7 @@ sha256_file() {
 
 CARGO_LOCK_SHA256="$(sha256_file "$LOCK_PATH")"
 BROKER_MANIFEST_SHA256="$(sha256_file "$BROKER_MANIFEST_PATH")"
+SQLCIPHER_FFI_SHA256="$(sha256_file "$SQLCIPHER_FFI_PATH")"
 STATE_STORE_SHA256="$(sha256_file "$STATE_STORE_PATH")"
 STATE_SCHEMA_SHA256="$(sha256_file "$STATE_SCHEMA_PATH")"
 INTEGRATION_TESTS_SHA256="$(sha256_file "$INTEGRATION_TESTS_PATH")"
@@ -144,6 +147,7 @@ python3 - \
   "$BUNDLED_SQLCIPHER_VERSION" \
   "$CARGO_LOCK_SHA256" \
   "$BROKER_MANIFEST_SHA256" \
+  "$SQLCIPHER_FFI_SHA256" \
   "$STATE_STORE_SHA256" \
   "$STATE_SCHEMA_SHA256" \
   "$INTEGRATION_TESTS_SHA256" \
@@ -159,6 +163,7 @@ import sys
     bundled_sqlcipher_version,
     cargo_lock_sha256,
     broker_manifest_sha256,
+    sqlcipher_ffi_sha256,
     state_store_sha256,
     state_schema_sha256,
     integration_tests_sha256,
@@ -205,6 +210,7 @@ source = evidence["source"]
 expected_source = {
     "cargoLockSha256": cargo_lock_sha256,
     "brokerManifestSha256": broker_manifest_sha256,
+    "sqlcipherFfiSha256": sqlcipher_ffi_sha256,
     "stateStoreSha256": state_store_sha256,
     "stateSchemaSha256": state_schema_sha256,
     "brokerIntegrationTestsSha256": integration_tests_sha256,

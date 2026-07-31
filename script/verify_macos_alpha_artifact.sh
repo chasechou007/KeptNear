@@ -354,6 +354,7 @@ require_arm64_binary "$CLI_BINARY" "CLI executable"
 
 if [[ ! -x "$PACKAGE_MANIFEST_TOOL" ]]; then
   cargo build \
+    --locked \
     --release \
     -p psw-ffi \
     --bin keptnear-package-manifest >/dev/null

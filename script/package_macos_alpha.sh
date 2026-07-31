@@ -202,6 +202,7 @@ fi
 
 echo "Building Rust FFI and package metadata tools..."
 cargo build \
+  --locked \
   -p psw-ffi \
   --release \
   --lib \
@@ -210,6 +211,7 @@ cargo build \
 
 echo "Building Broker, MCP adapter, and CLI components..."
 cargo build \
+  --locked \
   --release \
   -p psw-broker \
   -p keptnear-mcp \
