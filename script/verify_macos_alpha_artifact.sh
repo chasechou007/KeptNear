@@ -187,6 +187,7 @@ case "$RELEASE_MODE" in
     assert_manifest_value "Distribution ready" "false"
     ;;
   unsigned-experimental)
+    "$ROOT_DIR/script/verify_security_review_evidence.sh" --profile unsigned
     assert_manifest_value "Security decision" "unaudited; AR-002 accepted-risk path verified"
     assert_manifest_value "Distribution ready" "true"
     assert_equals "unsigned release app signing status" "$(manifest_section_field "Signing" "Status")" "unsigned"
@@ -197,6 +198,7 @@ case "$RELEASE_MODE" in
     assert_equals "unsigned release staple status" "$(manifest_section_field "Notarization" "Staple status")" "skipped"
     ;;
   experimental-pre-release)
+    "$ROOT_DIR/script/verify_security_review_evidence.sh" --profile signed
     assert_manifest_value "Security decision" "external-review or maintainer accepted-risk path verified"
     assert_manifest_value "Distribution ready" "true"
     assert_equals "release app signing status" "$(manifest_section_field "Signing" "Status")" "valid"

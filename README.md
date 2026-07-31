@@ -28,6 +28,11 @@ ID, notarization, external-audit, or production-suitability claim. See
 `docs/release-readiness.md` and `docs/security-review-evidence.md` for the
 current release and review state.
 
+Both binary artifact decisions are currently `Not approved`. Bundled SQLCipher
+4.5.3 must be upgraded and the encrypted device-state suite revalidated before
+either unsigned or signed distribution can pass its strict gate. Local-test
+DMGs remain development artifacts and cannot claim distribution readiness.
+
 ## Capability Status
 
 ### Available In The macOS Source Build

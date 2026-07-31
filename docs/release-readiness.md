@@ -31,6 +31,13 @@ explicit unsigned installation warnings. The signed profile alone performs
 Developer ID, hardened-runtime, notarization, stapling, Gatekeeper, and signed
 install checks.
 
+Both binary profiles are currently blocked by their artifact decisions. The
+bundled SQLCipher 4.5.3 dependency must be upgraded and the encrypted
+device-state suite revalidated before either decision can change from `Not
+approved` to `Approved`. Until then, strict unsigned and signed gates must exit
+non-zero. `local-test` may still create a development DMG, but its manifest
+must retain `Distribution ready: false`.
+
 ## Dependency Review
 
 Current security-sensitive Rust dependencies:

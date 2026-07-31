@@ -43,13 +43,33 @@ require_text "$REVIEW_HELP" "--profile source|unsigned|signed" "review policy pr
 
 grep -F 'local-test|unsigned-experimental|experimental-pre-release' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
 grep -F 'unsigned-experimental)' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
+grep -F 'verify_security_review_evidence.sh" --profile unsigned' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
+grep -F 'verify_security_review_evidence.sh" --profile signed' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
+grep -F 'verify_security_review_evidence.sh" --profile unsigned' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
+grep -F 'verify_security_review_evidence.sh" --profile signed' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
 grep -F 'script/verify_source_preview_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
 grep -F 'script/verify_unsigned_alpha_release_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
 grep -F 'script/verify_public_alpha_release_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
 
 "$REVIEW_GATE" --profile source >/dev/null
-"$REVIEW_GATE" --profile unsigned >/dev/null
-"$REVIEW_GATE" --profile signed >/dev/null
+if UNSIGNED_REVIEW_OUTPUT="$("$REVIEW_GATE" --profile unsigned 2>&1)"; then
+  echo "release profile contract violation: unsigned artifact gate ignored the current Not approved decision" >&2
+  exit 1
+fi
+require_text \
+  "$UNSIGNED_REVIEW_OUTPUT" \
+  "Unsigned experimental DMG artifact decision: expected 'Approved', got 'Not approved'" \
+  "unsigned artifact decision gate"
+
+if SIGNED_REVIEW_OUTPUT="$("$REVIEW_GATE" --profile signed 2>&1)"; then
+  echo "release profile contract violation: signed artifact gate ignored the current Not approved decision" >&2
+  exit 1
+fi
+require_text \
+  "$SIGNED_REVIEW_OUTPUT" \
+  "Signed public alpha artifact decision: expected 'Approved', got 'Not approved'" \
+  "signed artifact decision gate"
+
 if "$REVIEW_GATE" --profile invalid >/dev/null 2>&1; then
   echo "release profile contract violation: invalid review profile was accepted" >&2
   exit 1

@@ -319,6 +319,11 @@ if [[ -f "$EVIDENCE_PATH" ]]; then
     fi
   fi
   require_release_value "Production-use recommendation" "Not recommended"
+  if [[ "$PROFILE" == "unsigned" ]]; then
+    require_release_value "Unsigned experimental DMG artifact decision" "Approved"
+  elif [[ "$PROFILE" == "signed" ]]; then
+    require_release_value "Signed public alpha artifact decision" "Approved"
+  fi
 
   FAILURE_SCOPE="external"
   printf '\nExternal review path\n'

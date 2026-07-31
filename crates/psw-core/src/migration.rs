@@ -581,8 +581,29 @@ pub(crate) fn recover_interrupted_migration(source: &Path) -> VaultResult<()> {
         return Ok(());
     }
     let recovery_path = migration_sibling_path(source, "original", None)?;
-    if !recovery_path.exists() {
-        return Ok(());
+    match fs::symlink_metadata(&recovery_path) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => return Err(invalid_vault("migration recovery entry is not a directory")),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(VaultError::io(
+                "inspect interrupted vault migration recovery",
+                source,
+            ))
+        }
+    }
+
+    let stage_path = migration_sibling_path(source, "stage", None)?;
+    match fs::symlink_metadata(&stage_path) {
+        Ok(metadata) if metadata.file_type().is_dir() => {}
+        Ok(_) => return Err(invalid_vault("migration recovery stage is not a directory")),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(VaultError::io(
+                "inspect interrupted vault migration stage",
+                source,
+            ))
+        }
     }
 
     let parent = source
@@ -592,7 +613,6 @@ pub(crate) fn recover_interrupted_migration(source: &Path) -> VaultResult<()> {
         .map_err(|source| VaultError::io("recover interrupted vault migration", source))?;
     sync_directory(parent)?;
 
-    let stage_path = migration_sibling_path(source, "stage", None)?;
     remove_directory_if_present(&stage_path);
     sync_directory(parent)
 }
@@ -1070,6 +1090,33 @@ mod tests {
         assert!(vault_path.is_dir());
         assert!(!recovery_path.exists());
         assert!(!stage_path.exists());
+        fs::remove_dir_all(root).expect("remove test root");
+    }
+
+    #[test]
+    fn opening_does_not_restore_stale_original_without_active_stage() {
+        let root = unique_temp_dir("migration_stale_original");
+        fs::create_dir_all(&root).expect("create test root");
+        let vault_path = root.join("Missing.pswvault");
+        let password = SecretBytes::new(b"migration-password".to_vec());
+        let core = VaultCore::new();
+        crate::storage::create_migration_source_vault_directory(
+            &vault_path,
+            Some("Stale original".to_owned()),
+            &password,
+        )
+        .expect("create stale original");
+        let recovery_path =
+            migration_sibling_path(&vault_path, "original", None).expect("recovery path");
+        fs::rename(&vault_path, &recovery_path).expect("leave stale original");
+
+        assert!(core
+            .open_vault(OpenVaultRequest {
+                path: vault_path.clone(),
+            })
+            .is_err());
+        assert!(!vault_path.exists());
+        assert!(recovery_path.is_dir());
         fs::remove_dir_all(root).expect("remove test root");
     }
 
