@@ -4,7 +4,8 @@
 
 - Document status: approved product direction
 - Current release maturity: experimental pre-alpha
-- Current binary preview: `v0.1.0-prealpha.2`
+- Current binary preview:
+  [v0.1.0-prealpha.2](https://github.com/chasechou007/KeptNear/releases/tag/v0.1.0-prealpha.2)
 
 ## In One Sentence
 

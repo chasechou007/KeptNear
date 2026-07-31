@@ -4,7 +4,8 @@
 
 - 文档状态：产品方向已确认
 - 当前发布成熟度：实验性 pre-alpha
-- 当前二进制预览版：`v0.1.0-prealpha.2`
+- 当前二进制预览版：
+  [v0.1.0-prealpha.2](https://github.com/chasechou007/KeptNear/releases/tag/v0.1.0-prealpha.2)
 
 ## 一句话说明
 
