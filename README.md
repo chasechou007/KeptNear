@@ -30,7 +30,8 @@ current release and review state.
 
 Both binary artifact decisions are currently `Not approved`. Independently,
 `script/verify_sqlcipher_distribution_gate.sh` verifies the actual locked
-dependency, source hashes, and machine-readable
+dependency, first-party source and release-script hashes, reviewed Rust/Cargo
+executables, isolated Apple Clang and native build tools, and the machine-readable
 `docs/sqlcipher-distribution-evidence.json` receipt. Bundled SQLCipher 4.5.3 is
 hard-blocked in that executable mapping until it is upgraded and the encrypted
 device-state suite is revalidated. Editing a Markdown release conclusion alone

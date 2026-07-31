@@ -2,6 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+TOOLCHAIN_LIBRARY_PATH="$ROOT_DIR/script/reviewed_distribution_toolchain.sh"
+DISTRIBUTION_CARGO_RUNNER_PATH="$ROOT_DIR/script/run_reviewed_distribution_cargo.sh"
+source "$TOOLCHAIN_LIBRARY_PATH"
+
 EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
 RUST_TOOLCHAIN_PATH="$ROOT_DIR/rust-toolchain.toml"
 WORKSPACE_MANIFEST_PATH="$ROOT_DIR/Cargo.toml"
@@ -14,10 +18,13 @@ SQLCIPHER_FFI_PATH="$ROOT_DIR/crates/psw-broker/src/sqlcipher_ffi.rs"
 STATE_STORE_PATH="$ROOT_DIR/crates/psw-broker/src/state_store.rs"
 STATE_SCHEMA_PATH="$ROOT_DIR/crates/psw-broker/src/state_schema.rs"
 INTEGRATION_TESTS_PATH="$ROOT_DIR/crates/psw-broker/src/integration_tests.rs"
+PACKAGE_SCRIPT_PATH="$ROOT_DIR/script/package_macos_alpha.sh"
+ARTIFACT_VERIFIER_PATH="$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
+GATE_SCRIPT_PATH="$ROOT_DIR/script/verify_sqlcipher_distribution_gate.sh"
 REQUIRE_DISTRIBUTION_HOST=0
 REQUESTED_RELEASE_TARGET=""
-REVIEWED_DISTRIBUTION_HOST="aarch64-apple-darwin"
-REVIEWED_RELEASE_TARGET="aarch64-apple-darwin"
+REVIEWED_DISTRIBUTION_HOST="$KEPTNEAR_REVIEWED_DISTRIBUTION_HOST"
+REVIEWED_RELEASE_TARGET="$KEPTNEAR_REVIEWED_RELEASE_TARGET"
 
 usage() {
   cat <<'USAGE'
@@ -86,19 +93,6 @@ if [[ \
   echo "SQLCipher distribution gate failed: release target must be $REVIEWED_RELEASE_TARGET, got $REQUESTED_RELEASE_TARGET" >&2
   exit 1
 fi
-if [[ "$REQUIRE_DISTRIBUTION_HOST" == "1" ]]; then
-  for WRAPPER_VARIABLE in \
-    RUSTC_WRAPPER \
-    RUSTC_WORKSPACE_WRAPPER \
-    CARGO_BUILD_RUSTC_WRAPPER \
-    CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER; do
-    if [[ -n "${!WRAPPER_VARIABLE:-}" ]]; then
-      echo "SQLCipher distribution gate failed: distribution compiler wrapper $WRAPPER_VARIABLE is not permitted" >&2
-      exit 1
-    fi
-  done
-fi
-
 require_file() {
   local path="$1"
   local description="$2"
@@ -125,15 +119,32 @@ for required_file in \
   "$SQLCIPHER_FFI_PATH" \
   "$STATE_STORE_PATH" \
   "$STATE_SCHEMA_PATH" \
-  "$INTEGRATION_TESTS_PATH"; do
+  "$INTEGRATION_TESTS_PATH" \
+  "$PACKAGE_SCRIPT_PATH" \
+  "$ARTIFACT_VERIFIER_PATH" \
+  "$GATE_SCRIPT_PATH" \
+  "$TOOLCHAIN_LIBRARY_PATH" \
+  "$DISTRIBUTION_CARGO_RUNNER_PATH"; do
   require_file "$required_file" "distribution evidence input"
 done
-require_command cargo
 require_command python3
 require_command shasum
 
+if [[ "$REQUIRE_DISTRIBUTION_HOST" == "1" ]]; then
+  if ! keptnear_assert_reviewed_distribution_toolchain \
+    "$REQUESTED_RELEASE_TARGET" \
+    "$KEPTNEAR_REVIEWED_MACOS_DEPLOYMENT_TARGET"; then
+    echo "SQLCipher distribution gate failed: reviewed distribution toolchain validation failed" >&2
+    exit 1
+  fi
+else
+  if ! keptnear_resolve_active_rust_toolchain; then
+    echo "SQLCipher distribution gate failed: active Rust toolchain resolution failed" >&2
+    exit 1
+  fi
+fi
+
 CARGO_RUSTC_PROBE=(
-  cargo
   rustc
   --quiet
   --locked
@@ -151,14 +162,12 @@ CARGO_RUSTC_PROBE+=(
   --
   -Vv
 )
-if ! RUSTC_VERBOSE_VERSION="$(
-  env \
-    RUSTC_WRAPPER= \
-    RUSTC_WORKSPACE_WRAPPER= \
-    CARGO_BUILD_RUSTC_WRAPPER= \
-    CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= \
-    "${CARGO_RUSTC_PROBE[@]}"
-)"; then
+if [[ "$REQUIRE_DISTRIBUTION_HOST" == "1" ]]; then
+  RUSTC_PROBE_RUNNER=(keptnear_run_reviewed_distribution_cargo)
+else
+  RUSTC_PROBE_RUNNER=(keptnear_run_current_rust_cargo)
+fi
+if ! RUSTC_VERBOSE_VERSION="$("${RUSTC_PROBE_RUNNER[@]}" "${CARGO_RUSTC_PROBE[@]}")"; then
   echo "SQLCipher distribution gate failed: Cargo-selected rustc identity probe failed" >&2
   exit 1
 fi
@@ -183,7 +192,7 @@ if [[ -z "$RUSTC_RELEASE" || -z "$RUSTC_COMMIT_HASH" || -z "$RUSTC_HOST" || -z "
   exit 1
 fi
 
-CARGO_VERSION_OUTPUT="$(cargo -V)"
+CARGO_VERSION_OUTPUT="$("$KEPTNEAR_ACTIVE_CARGO_PATH" -V)"
 if [[ "$CARGO_VERSION_OUTPUT" =~ ^cargo[[:space:]]+([^[:space:]]+)[[:space:]]+\(([0-9a-f]+)[[:space:]] ]]; then
   CARGO_RELEASE="${BASH_REMATCH[1]}"
   CARGO_COMMIT_HASH="${BASH_REMATCH[2]}"
@@ -295,6 +304,11 @@ SQLCIPHER_FFI_SHA256="$(sha256_file "$SQLCIPHER_FFI_PATH")"
 STATE_STORE_SHA256="$(sha256_file "$STATE_STORE_PATH")"
 STATE_SCHEMA_SHA256="$(sha256_file "$STATE_SCHEMA_PATH")"
 INTEGRATION_TESTS_SHA256="$(sha256_file "$INTEGRATION_TESTS_PATH")"
+PACKAGE_SCRIPT_SHA256="$(sha256_file "$PACKAGE_SCRIPT_PATH")"
+ARTIFACT_VERIFIER_SHA256="$(sha256_file "$ARTIFACT_VERIFIER_PATH")"
+GATE_SCRIPT_SHA256="$(sha256_file "$GATE_SCRIPT_PATH")"
+TOOLCHAIN_LIBRARY_SHA256="$(sha256_file "$TOOLCHAIN_LIBRARY_PATH")"
+DISTRIBUTION_CARGO_RUNNER_SHA256="$(sha256_file "$DISTRIBUTION_CARGO_RUNNER_PATH")"
 
 python3 - \
   "$EVIDENCE_PATH" \
@@ -305,10 +319,24 @@ python3 - \
   "$RUSTC_COMMIT_HASH" \
   "$RUSTC_HOST" \
   "$RUSTC_LLVM_VERSION" \
+  "$KEPTNEAR_REVIEWED_RUSTC_BINARY_SHA256" \
   "$CARGO_RELEASE" \
   "$CARGO_COMMIT_HASH" \
+  "$KEPTNEAR_REVIEWED_CARGO_BINARY_SHA256" \
   "$REVIEWED_DISTRIBUTION_HOST" \
   "$REVIEWED_RELEASE_TARGET" \
+  "$KEPTNEAR_REVIEWED_APPLE_CLANG_VERSION" \
+  "$KEPTNEAR_REVIEWED_APPLE_CLANG_SHA256" \
+  "$KEPTNEAR_REVIEWED_APPLE_AR_SHA256" \
+  "$KEPTNEAR_REVIEWED_APPLE_RANLIB_SHA256" \
+  "$KEPTNEAR_REVIEWED_XCODEBUILD_SHA256" \
+  "$KEPTNEAR_REVIEWED_XCODE_VERSION" \
+  "$KEPTNEAR_REVIEWED_XCODE_BUILD_VERSION" \
+  "$KEPTNEAR_REVIEWED_MACOS_SDK_VERSION" \
+  "$KEPTNEAR_REVIEWED_MACOS_SDK_BUILD_VERSION" \
+  "$KEPTNEAR_REVIEWED_MACOS_SDK_NAME" \
+  "$KEPTNEAR_REVIEWED_MACOS_DEPLOYMENT_TARGET" \
+  "$KEPTNEAR_REVIEWED_CFLAGS" \
   "$REQUIRE_DISTRIBUTION_HOST" \
   "$REQUESTED_RELEASE_TARGET" \
   "$WORKSPACE_MANIFEST_SHA256" \
@@ -320,6 +348,11 @@ python3 - \
   "$STATE_STORE_SHA256" \
   "$STATE_SCHEMA_SHA256" \
   "$INTEGRATION_TESTS_SHA256" \
+  "$PACKAGE_SCRIPT_SHA256" \
+  "$ARTIFACT_VERIFIER_SHA256" \
+  "$GATE_SCRIPT_SHA256" \
+  "$TOOLCHAIN_LIBRARY_SHA256" \
+  "$DISTRIBUTION_CARGO_RUNNER_SHA256" \
   "$VERSION_POLICY" <<'PY'
 import datetime
 import json
@@ -335,10 +368,24 @@ import sys
     rustc_commit_hash,
     rustc_host,
     rustc_llvm_version,
+    reviewed_rustc_binary_sha256,
     cargo_release,
     cargo_commit_hash,
+    reviewed_cargo_binary_sha256,
     reviewed_distribution_host,
     reviewed_release_target,
+    reviewed_apple_clang_version,
+    reviewed_apple_clang_sha256,
+    reviewed_apple_ar_sha256,
+    reviewed_apple_ranlib_sha256,
+    reviewed_xcodebuild_sha256,
+    reviewed_xcode_version,
+    reviewed_xcode_build_version,
+    reviewed_macos_sdk_version,
+    reviewed_macos_sdk_build_version,
+    reviewed_macos_sdk_name,
+    reviewed_macos_deployment_target,
+    reviewed_cflags,
     require_distribution_host,
     requested_release_target,
     workspace_manifest_sha256,
@@ -350,6 +397,11 @@ import sys
     state_store_sha256,
     state_schema_sha256,
     integration_tests_sha256,
+    package_script_sha256,
+    artifact_verifier_sha256,
+    gate_script_sha256,
+    toolchain_library_sha256,
+    distribution_cargo_runner_sha256,
     version_policy,
 ) = sys.argv[1:]
 
@@ -370,14 +422,15 @@ expected_top_level = {
     "approvedForDistribution",
     "dependency",
     "toolchain",
+    "nativeToolchain",
     "source",
     "revalidation",
     "blocker",
 }
 if not isinstance(evidence, dict) or set(evidence) != expected_top_level:
     fail("distribution evidence has an unexpected top-level schema")
-if evidence["schemaVersion"] != 1:
-    fail("distribution evidence schemaVersion must be 1")
+if evidence["schemaVersion"] != 2:
+    fail("distribution evidence schemaVersion must be 2")
 
 dependency = evidence["dependency"]
 if not isinstance(dependency, dict) or set(dependency) != {
@@ -396,8 +449,10 @@ expected_toolchain = {
     "rustcRelease": rustc_release,
     "rustcCommitHash": rustc_commit_hash,
     "rustcLlvmVersion": rustc_llvm_version,
+    "rustcBinarySha256": reviewed_rustc_binary_sha256,
     "cargoRelease": cargo_release,
     "cargoCommitHash": cargo_commit_hash,
+    "cargoBinarySha256": reviewed_cargo_binary_sha256,
     "distributionHost": reviewed_distribution_host,
     "releaseTarget": reviewed_release_target,
 }
@@ -412,6 +467,30 @@ if require_distribution_host == "1":
     if requested_release_target != toolchain["releaseTarget"]:
         fail("the requested release target does not match the reviewed release target")
 
+native_toolchain = evidence["nativeToolchain"]
+expected_native_toolchain = {
+    "appleClangVersion": reviewed_apple_clang_version,
+    "appleClangSha256": reviewed_apple_clang_sha256,
+    "appleArSha256": reviewed_apple_ar_sha256,
+    "appleRanlibSha256": reviewed_apple_ranlib_sha256,
+    "xcodebuildSha256": reviewed_xcodebuild_sha256,
+    "xcodeVersion": reviewed_xcode_version,
+    "xcodeBuildVersion": reviewed_xcode_build_version,
+    "macosSdkVersion": reviewed_macos_sdk_version,
+    "macosSdkBuildVersion": reviewed_macos_sdk_build_version,
+    "macosSdkName": reviewed_macos_sdk_name,
+    "deploymentTarget": reviewed_macos_deployment_target,
+    "cFlags": reviewed_cflags,
+}
+if (
+    not isinstance(native_toolchain, dict)
+    or set(native_toolchain) != set(expected_native_toolchain)
+):
+    fail("distribution evidence nativeToolchain object has an unexpected schema")
+for field, expected_value in expected_native_toolchain.items():
+    if native_toolchain[field] != expected_value:
+        fail(f"distribution evidence {field} does not match the reviewed native toolchain")
+
 source = evidence["source"]
 expected_source = {
     "workspaceManifestSha256": workspace_manifest_sha256,
@@ -423,6 +502,11 @@ expected_source = {
     "stateStoreSha256": state_store_sha256,
     "stateSchemaSha256": state_schema_sha256,
     "brokerIntegrationTestsSha256": integration_tests_sha256,
+    "packageScriptSha256": package_script_sha256,
+    "artifactVerifierSha256": artifact_verifier_sha256,
+    "distributionGateSha256": gate_script_sha256,
+    "distributionToolchainSha256": toolchain_library_sha256,
+    "distributionCargoRunnerSha256": distribution_cargo_runner_sha256,
 }
 if not isinstance(source, dict) or set(source) != set(expected_source):
     fail("distribution evidence source object has an unexpected schema")
@@ -441,21 +525,18 @@ if not isinstance(revalidation["commands"], list) or not all(
 if not isinstance(evidence["blocker"], str) or not evidence["blocker"]:
     fail("distribution evidence blocker must be a non-empty string")
 
-wrapper_free_cargo = (
-    "RUSTC_WRAPPER= RUSTC_WORKSPACE_WRAPPER= "
-    "CARGO_BUILD_RUSTC_WRAPPER= CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= cargo"
-)
+reviewed_cargo = "script/run_reviewed_distribution_cargo.sh"
 required_commands = {
-    f"{wrapper_free_cargo} rustc --quiet --locked --target-dir target/sqlcipher-toolchain-probe --target aarch64-apple-darwin --release -p psw-core --lib -- -Vv",
-    "cargo -V",
-    f"{wrapper_free_cargo} test --locked -p psw-broker state_store::tests::",
-    f"{wrapper_free_cargo} test --locked -p psw-broker integration_tests::ciphertext_corruption_blocks_runtime_without_replacing_state_or_key",
-    f"{wrapper_free_cargo} test --locked -p psw-broker integration_tests::wrong_device_key_blocks_runtime_without_overwriting_either_side",
-    f"{wrapper_free_cargo} test --locked -p psw-broker integration_tests::insecure_database_permissions_block_runtime_and_retain_authority",
-    f"{wrapper_free_cargo} test --locked -p psw-broker integration_tests::missing_database_blocks_runtime_without_silent_reinitialization",
-    f"{wrapper_free_cargo} test --locked -p psw-broker integration_tests::missing_device_key_blocks_runtime_without_generating_replacement",
+    f"{reviewed_cargo} rustc --quiet --locked --target-dir target/sqlcipher-toolchain-probe --target aarch64-apple-darwin --release -p psw-core --lib -- -Vv",
+    f"{reviewed_cargo} -V",
+    f"{reviewed_cargo} test --locked -p psw-broker state_store::tests::",
+    f"{reviewed_cargo} test --locked -p psw-broker integration_tests::ciphertext_corruption_blocks_runtime_without_replacing_state_or_key",
+    f"{reviewed_cargo} test --locked -p psw-broker integration_tests::wrong_device_key_blocks_runtime_without_overwriting_either_side",
+    f"{reviewed_cargo} test --locked -p psw-broker integration_tests::insecure_database_permissions_block_runtime_and_retain_authority",
+    f"{reviewed_cargo} test --locked -p psw-broker integration_tests::missing_database_blocks_runtime_without_silent_reinitialization",
+    f"{reviewed_cargo} test --locked -p psw-broker integration_tests::missing_device_key_blocks_runtime_without_generating_replacement",
     "script/verify_dependency_licenses.sh",
-    f"{wrapper_free_cargo} clippy --workspace --all-targets --locked -- -D warnings",
+    f"{reviewed_cargo} clippy --workspace --all-targets --locked -- -D warnings",
 }
 
 if version_policy == "blocked":

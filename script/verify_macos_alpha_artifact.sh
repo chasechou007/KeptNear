@@ -9,6 +9,7 @@ VAULT_TYPE_IDENTIFIER="app.psw.local.vault"
 VAULT_EXTENSION="pswvault"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+source "$ROOT_DIR/script/reviewed_distribution_toolchain.sh"
 CARGO_TARGET_ROOT="$ROOT_DIR/target"
 CARGO_RELEASE_DIR="$CARGO_TARGET_ROOT/$RUST_TARGET/release"
 DEFAULT_ARCHIVE="$ROOT_DIR/dist/releases/$APP_NAME-$VERSION-macos-arm64.dmg"
@@ -33,6 +34,7 @@ PACKAGE_MANIFEST_TOOL="$CARGO_RELEASE_DIR/keptnear-package-manifest"
 SQLCIPHER_EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
 SQLCIPHER_EVIDENCE_FILENAME="$APP_NAME-SQLCipher-Distribution-Evidence.json"
 SQLCIPHER_GATE="$ROOT_DIR/script/verify_sqlcipher_distribution_gate.sh"
+DISTRIBUTION_CARGO_RUNNER="$ROOT_DIR/script/run_reviewed_distribution_cargo.sh"
 
 require_file() {
   local path="$1"
@@ -200,6 +202,9 @@ assert_manifest_value "Production ready" "false"
 RELEASE_MODE="$(require_manifest_field "Release mode")"
 if [[ "$RELEASE_MODE" != "local-test" ]]; then
   require_executable_file "$SQLCIPHER_GATE" "SQLCipher distribution gate"
+  require_executable_file \
+    "$DISTRIBUTION_CARGO_RUNNER" \
+    "reviewed distribution Cargo runner"
 fi
 case "$RELEASE_MODE" in
   local-test)
@@ -358,12 +363,15 @@ require_arm64_binary "$BROKER_BINARY" "Broker executable"
 require_arm64_binary "$MCP_BINARY" "MCP adapter executable"
 require_arm64_binary "$CLI_BINARY" "CLI executable"
 
-env \
-  RUSTC_WRAPPER= \
-  RUSTC_WORKSPACE_WRAPPER= \
-  CARGO_BUILD_RUSTC_WRAPPER= \
-  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= \
-  cargo build \
+artifact_cargo() {
+  if [[ "$RELEASE_MODE" == "local-test" ]]; then
+    keptnear_run_current_rust_cargo "$@"
+  else
+    "$DISTRIBUTION_CARGO_RUNNER" "$@"
+  fi
+}
+
+artifact_cargo build \
   --locked \
   --target-dir "$CARGO_TARGET_ROOT" \
   --target "$RUST_TARGET" \

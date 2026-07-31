@@ -48,13 +48,17 @@ path cannot change after the receipt check. The receipt also binds
 `rust-toolchain.toml`, the exact Rust and Cargo release/commit identities, the
 LLVM version, and the Apple Silicon compiler host/target required by
 distribution packaging. The Rust identity comes from a locked `cargo rustc`
-probe under the reviewed target and release profile, so `RUSTC` and Cargo
-`build.rustc` overrides are checked as the compiler Cargo actually selects
-rather than as an unrelated PATH lookup. Compiler wrappers are not permitted
-for distribution, and every packaging and artifact-verification Cargo
-invocation resets both global and workspace wrapper settings to empty,
-overriding user or workspace Cargo configuration. Until then, strict unsigned
-and signed gates must exit non-zero. `local-test` may still create a development
+probe under the reviewed target and release profile. The receipt binds the
+actual Rust and Cargo executable hashes, and every distribution Cargo command
+selects those resolved binaries directly while removing compiler shims,
+wrappers, custom Rust flags, and linker overrides. Bundled SQLCipher builds also
+use source-bound Apple Clang, `ar`, and `ranlib` binaries, a reviewed Xcode and
+macOS SDK build, fixed C flags, and the macOS 13 deployment target. Ambient
+`CC`, target-specific compiler variables, `CFLAGS`, include/library paths,
+OpenSSL selection, and `libsqlite3-sys` build-script overrides are removed
+before Cargo starts. The receipt also binds the gate, toolchain runner,
+packaging, and artifact-verification scripts. Until then, strict unsigned and
+signed gates must exit non-zero. `local-test` may still create a development
 DMG, but its manifest must retain `Distribution ready: false`.
 
 ## Dependency Review

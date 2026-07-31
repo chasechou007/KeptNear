@@ -7,6 +7,8 @@ UNSIGNED_PROFILE="$ROOT_DIR/script/verify_unsigned_alpha_release_ready.sh"
 SIGNED_PROFILE="$ROOT_DIR/script/verify_public_alpha_release_ready.sh"
 REVIEW_GATE="$ROOT_DIR/script/verify_security_review_evidence.sh"
 SQLCIPHER_GATE="$ROOT_DIR/script/verify_sqlcipher_distribution_gate.sh"
+DISTRIBUTION_TOOLCHAIN="$ROOT_DIR/script/reviewed_distribution_toolchain.sh"
+DISTRIBUTION_CARGO_RUNNER="$ROOT_DIR/script/run_reviewed_distribution_cargo.sh"
 
 require_executable() {
   local path="$1"
@@ -26,15 +28,26 @@ require_text() {
   fi
 }
 
-for profile in "$SOURCE_PROFILE" "$UNSIGNED_PROFILE" "$SIGNED_PROFILE" "$REVIEW_GATE" "$SQLCIPHER_GATE"; do
+for profile in \
+  "$SOURCE_PROFILE" \
+  "$UNSIGNED_PROFILE" \
+  "$SIGNED_PROFILE" \
+  "$REVIEW_GATE" \
+  "$SQLCIPHER_GATE" \
+  "$DISTRIBUTION_CARGO_RUNNER"; do
   require_executable "$profile"
 done
+if [[ ! -f "$DISTRIBUTION_TOOLCHAIN" || -L "$DISTRIBUTION_TOOLCHAIN" ]]; then
+  echo "release profile contract violation: missing regular script/reviewed_distribution_toolchain.sh" >&2
+  exit 1
+fi
 
 SOURCE_HELP="$("$SOURCE_PROFILE" --help)"
 UNSIGNED_HELP="$("$UNSIGNED_PROFILE" --help)"
 SIGNED_HELP="$("$SIGNED_PROFILE" --help)"
 REVIEW_HELP="$("$REVIEW_GATE" --help)"
 SQLCIPHER_HELP="$("$SQLCIPHER_GATE" --help)"
+DISTRIBUTION_CARGO_HELP="$("$DISTRIBUTION_CARGO_RUNNER" --help)"
 
 require_text "$SOURCE_HELP" "Profile: source-preview." "source profile"
 require_text "$SOURCE_HELP" "does not require Apple signing or external security review" "source profile"
@@ -43,6 +56,7 @@ require_text "$UNSIGNED_HELP" "not require Developer ID signing, notarization, o
 require_text "$SIGNED_HELP" "signed-experimental profile only" "signed profile"
 require_text "$REVIEW_HELP" "--profile source|unsigned|signed" "review policy profile catalog"
 require_text "$SQLCIPHER_HELP" "strict binary-distribution gate" "SQLCipher distribution gate"
+require_text "$DISTRIBUTION_CARGO_HELP" "source-bound Apple Silicon Rust and native toolchains" "distribution Cargo runner"
 
 grep -F 'local-test|unsigned-experimental|experimental-pre-release' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
 grep -F 'unsigned-experimental)' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
@@ -62,17 +76,32 @@ grep -F 'RUST_TOOLCHAIN_PATH="$ROOT_DIR/rust-toolchain.toml"' "$SQLCIPHER_GATE" 
 grep -F 'CARGO_RUSTC_PROBE_TARGET_DIR="$ROOT_DIR/target/sqlcipher-toolchain-probe"' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'RUSTC_VERBOSE_VERSION="$(' "$SQLCIPHER_GATE" >/dev/null
 grep -F '"${CARGO_RUSTC_PROBE[@]}"' "$SQLCIPHER_GATE" >/dev/null
-grep -F 'distribution compiler wrapper $WRAPPER_VARIABLE is not permitted' "$SQLCIPHER_GATE" >/dev/null
+grep -F 'keptnear_assert_reviewed_distribution_toolchain' "$SQLCIPHER_GATE" >/dev/null
+grep -F 'reviewed_distribution_toolchain.sh' "$SQLCIPHER_GATE" >/dev/null
+grep -F 'run_reviewed_distribution_cargo.sh' "$SQLCIPHER_GATE" >/dev/null
 grep -F 'CARGO_TARGET_ROOT="$ROOT_DIR/target"' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
 grep -F 'CARGO_TARGET_ROOT="$ROOT_DIR/target"' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
 grep -F '"$SQLCIPHER_GATE" --distribution-host --release-target "$RUST_TARGET"' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
 grep -F '"$SQLCIPHER_GATE" --distribution-host --release-target "$RUST_TARGET"' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
+grep -F '"$DISTRIBUTION_CARGO_RUNNER" "$@"' "$ROOT_DIR/script/package_macos_alpha.sh" >/dev/null
+grep -F '"$DISTRIBUTION_CARGO_RUNNER" "$@"' "$ROOT_DIR/script/verify_macos_alpha_artifact.sh" >/dev/null
+grep -F 'KEPTNEAR_REVIEWED_RUSTC_BINARY_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_REVIEWED_CARGO_BINARY_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_REVIEWED_APPLE_CLANG_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_REVIEWED_APPLE_AR_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_REVIEWED_APPLE_RANLIB_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_REVIEWED_XCODEBUILD_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F '"CC=$KEPTNEAR_ACTIVE_CLANG_PATH"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F '"CFLAGS=$KEPTNEAR_ACTIVE_CFLAGS"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'LIBSQLITE3_SYS_USE_PKG_CONFIG' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'SQLCIPHER_LIB_DIR' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'script/verify_source_preview_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
 grep -F 'script/verify_unsigned_alpha_release_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
 grep -F 'script/verify_public_alpha_release_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
 
 PACKAGE_BUILD_COUNT="$(
-  awk '$1 == "cargo" && $2 == "build" { count += 1 } END { print count + 0 }' \
+  awk '$1 == "package_cargo" && $2 == "build" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/package_macos_alpha.sh"
 )"
 PACKAGE_LOCKED_COUNT="$(
@@ -88,7 +117,7 @@ PACKAGE_TARGET_COUNT="$(
     "$ROOT_DIR/script/package_macos_alpha.sh"
 )"
 ARTIFACT_BUILD_COUNT="$(
-  awk '$1 == "cargo" && $2 == "build" { count += 1 } END { print count + 0 }' \
+  awk '$1 == "artifact_cargo" && $2 == "build" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
 )"
 ARTIFACT_LOCKED_COUNT="$(
@@ -122,31 +151,9 @@ if [[ \
   exit 1
 fi
 
-for WRAPPER_VARIABLE in \
-  RUSTC_WRAPPER \
-  RUSTC_WORKSPACE_WRAPPER \
-  CARGO_BUILD_RUSTC_WRAPPER \
-  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER; do
-  WRAPPER_ASSIGNMENT="$WRAPPER_VARIABLE="
-  PACKAGE_WRAPPER_RESET_COUNT="$(
-    awk -v assignment="$WRAPPER_ASSIGNMENT" \
-      '$1 == assignment { count += 1 } END { print count + 0 }' \
-      "$ROOT_DIR/script/package_macos_alpha.sh"
-  )"
-  ARTIFACT_WRAPPER_RESET_COUNT="$(
-    awk -v assignment="$WRAPPER_ASSIGNMENT" \
-      '$1 == assignment { count += 1 } END { print count + 0 }' \
-      "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
-  )"
-  if [[ "$PACKAGE_WRAPPER_RESET_COUNT" -ne "$PACKAGE_BUILD_COUNT" ]]; then
-    echo "release profile contract violation: every package Cargo build must reset $WRAPPER_VARIABLE" >&2
-    exit 1
-  fi
-  if [[ "$ARTIFACT_WRAPPER_RESET_COUNT" -ne "$ARTIFACT_BUILD_COUNT" ]]; then
-    echo "release profile contract violation: every artifact-verifier Cargo build must reset $WRAPPER_VARIABLE" >&2
-    exit 1
-  fi
-done
+grep -F 'environment_command+=(-u "$variable_name")' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F '"RUSTC=$KEPTNEAR_ACTIVE_RUSTC_PATH"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F '"CARGO_BUILD_RUSTC=$KEPTNEAR_ACTIVE_RUSTC_PATH"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 
 "$REVIEW_GATE" --profile source >/dev/null
 if SQLCIPHER_GATE_OUTPUT="$("$SQLCIPHER_GATE" 2>&1)"; then
@@ -158,55 +165,46 @@ require_text \
   "libsqlite3-sys 0.28.0 bundles SQLCipher 4.5.3; upgrade and source-bound revalidation are required" \
   "independent SQLCipher dependency gate"
 
-for COMPILER_OVERRIDE in \
+for RUST_TOOLCHAIN_OVERRIDE in \
   RUSTC \
-  CARGO_BUILD_RUSTC; do
-  if COMPILER_OVERRIDE_OUTPUT="$(
-    env "$COMPILER_OVERRIDE=/usr/bin/false" "$SQLCIPHER_GATE" 2>&1
-  )"; then
-    echo "release profile contract violation: $COMPILER_OVERRIDE bypassed the Cargo-selected compiler probe" >&2
-    exit 1
-  fi
-  require_text \
-    "$COMPILER_OVERRIDE_OUTPUT" \
-    "Cargo-selected rustc identity probe failed" \
-    "$COMPILER_OVERRIDE compiler probe"
-done
-
-for COMPILER_WRAPPER in \
+  CARGO_BUILD_RUSTC \
   RUSTC_WRAPPER \
   RUSTC_WORKSPACE_WRAPPER \
   CARGO_BUILD_RUSTC_WRAPPER \
   CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER; do
-  if WRAPPER_RESET_OUTPUT="$(
-    env "$COMPILER_WRAPPER=/usr/bin/false" "$SQLCIPHER_GATE" 2>&1
+  if RUST_OVERRIDE_OUTPUT="$(
+    env "$RUST_TOOLCHAIN_OVERRIDE=/usr/bin/false" "$SQLCIPHER_GATE" 2>&1
   )"; then
-    echo "release profile contract violation: resetting $COMPILER_WRAPPER allowed the blocked dependency to pass" >&2
+    echo "release profile contract violation: resetting $RUST_TOOLCHAIN_OVERRIDE allowed the blocked dependency to pass" >&2
     exit 1
   fi
   require_text \
-    "$WRAPPER_RESET_OUTPUT" \
+    "$RUST_OVERRIDE_OUTPUT" \
     "libsqlite3-sys 0.28.0 bundles SQLCipher 4.5.3; upgrade and source-bound revalidation are required" \
-    "$COMPILER_WRAPPER reset"
-  if [[ "$WRAPPER_RESET_OUTPUT" == *"Cargo-selected rustc identity probe failed"* ]]; then
-    echo "release profile contract violation: $COMPILER_WRAPPER executed during the wrapper-free compiler probe" >&2
+    "$RUST_TOOLCHAIN_OVERRIDE reset"
+  if [[ "$RUST_OVERRIDE_OUTPUT" == *"Cargo-selected rustc identity probe failed"* ]]; then
+    echo "release profile contract violation: $RUST_TOOLCHAIN_OVERRIDE executed during the isolated compiler probe" >&2
     exit 1
   fi
-
-  if DISTRIBUTION_WRAPPER_OUTPUT="$(
-    env "$COMPILER_WRAPPER=/usr/bin/false" \
-      "$SQLCIPHER_GATE" \
-      --distribution-host \
-      --release-target aarch64-apple-darwin 2>&1
-  )"; then
-    echo "release profile contract violation: distribution accepted $COMPILER_WRAPPER" >&2
-    exit 1
-  fi
-  require_text \
-    "$DISTRIBUTION_WRAPPER_OUTPUT" \
-    "distribution compiler wrapper $COMPILER_WRAPPER is not permitted" \
-    "$COMPILER_WRAPPER distribution rejection"
 done
+
+if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
+  ISOLATED_CARGO_VERSION="$(
+    env \
+      RUSTC=/usr/bin/false \
+      CARGO_BUILD_RUSTC=/usr/bin/false \
+      RUSTC_WRAPPER=/usr/bin/false \
+      CC=/usr/bin/false \
+      CFLAGS="-include /private/tmp/keptnear-untrusted.h" \
+      CPPFLAGS="-I/private/tmp/keptnear-untrusted" \
+      LIBSQLITE3_FLAGS="-DSQLITE_UNTRUSTED" \
+      "$DISTRIBUTION_CARGO_RUNNER" -V
+  )"
+  require_text \
+    "$ISOLATED_CARGO_VERSION" \
+    "cargo 1.75.0 (1d8b05cdd 2023-11-20)" \
+    "isolated Rust and native distribution environment"
+fi
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/keptnear-release-contract.XXXXXX")"
 trap 'rm -rf "$TMP_DIR"' EXIT

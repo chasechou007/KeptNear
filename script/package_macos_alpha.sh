@@ -20,6 +20,7 @@ APPLE_APP_SPECIFIC_PASSWORD="${APPLE_APP_SPECIFIC_PASSWORD:-}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT_DIR/script/macos_info_plist.sh"
 source "$ROOT_DIR/script/swiftpm_local_env.sh"
+source "$ROOT_DIR/script/reviewed_distribution_toolchain.sh"
 
 CARGO_TARGET_ROOT="$ROOT_DIR/target"
 CARGO_RELEASE_DIR="$CARGO_TARGET_ROOT/$RUST_TARGET/release"
@@ -55,6 +56,7 @@ PROTOCOL_MANIFEST_FILENAME="$APP_NAME-Protocol-Manifest.json"
 SQLCIPHER_EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
 SQLCIPHER_EVIDENCE_FILENAME="$APP_NAME-SQLCipher-Distribution-Evidence.json"
 SQLCIPHER_GATE="$ROOT_DIR/script/verify_sqlcipher_distribution_gate.sh"
+DISTRIBUTION_CARGO_RUNNER="$ROOT_DIR/script/run_reviewed_distribution_cargo.sh"
 DMG_VOLUME_NAME="$APP_NAME $VERSION"
 
 if [[ "$NOTARIZE" != "0" && "$NOTARIZE" != "1" ]]; then
@@ -183,6 +185,7 @@ RELEASE_REASON="Local testing artifact; not approved for public distribution."
 
 if [[ "$RELEASE_MODE" != "local-test" ]]; then
   require_executable "$SQLCIPHER_GATE" "SQLCipher distribution gate"
+  require_executable "$DISTRIBUTION_CARGO_RUNNER" "reviewed distribution Cargo runner"
   echo "Verifying SQLCipher dependency and source-bound revalidation evidence..."
   "$SQLCIPHER_GATE" --distribution-host --release-target "$RUST_TARGET"
 fi
@@ -203,13 +206,16 @@ elif [[ "$RELEASE_MODE" == "experimental-pre-release" ]]; then
   RELEASE_REASON="Experimental pre-release only; production use is not recommended."
 fi
 
+package_cargo() {
+  if [[ "$RELEASE_MODE" == "local-test" ]]; then
+    keptnear_run_current_rust_cargo "$@"
+  else
+    "$DISTRIBUTION_CARGO_RUNNER" "$@"
+  fi
+}
+
 echo "Building Rust FFI and package metadata tools..."
-env \
-  RUSTC_WRAPPER= \
-  RUSTC_WORKSPACE_WRAPPER= \
-  CARGO_BUILD_RUSTC_WRAPPER= \
-  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= \
-  cargo build \
+package_cargo build \
   --locked \
   --target-dir "$CARGO_TARGET_ROOT" \
   --target "$RUST_TARGET" \
@@ -220,12 +226,7 @@ env \
   --bin keptnear-package-manifest
 
 echo "Building Broker, MCP adapter, and CLI components..."
-env \
-  RUSTC_WRAPPER= \
-  RUSTC_WORKSPACE_WRAPPER= \
-  CARGO_BUILD_RUSTC_WRAPPER= \
-  CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER= \
-  cargo build \
+package_cargo build \
   --locked \
   --target-dir "$CARGO_TARGET_ROOT" \
   --target "$RUST_TARGET" \

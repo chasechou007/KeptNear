@@ -114,6 +114,14 @@ drag-to-install. The App bundle keeps the Broker, MCP adapter, and CLI under
 fails if any executable or the FFI is not arm64-only, if any component declares
 a different Broker protocol, or if a required component is absent.
 
+Non-local packaging routes every Cargo command through
+`script/run_reviewed_distribution_cargo.sh`. That runner resolves and hashes
+the exact Rust/Cargo and Xcode native tools recorded in the SQLCipher receipt,
+removes ambient compiler, wrapper, flags, linker, SDK, OpenSSL, and SQLite build
+overrides, and supplies the reviewed Apple Clang, SDK, deployment target, and
+C flags explicitly. `local-test` remains a development-only path and does not
+claim this distribution evidence.
+
 The protocol manifest records the exact App, Broker, MCP, CLI, and FFI paths
 and SHA-256 values, their component versions, the shared
 `keptnear.broker/1.0` declaration, and fixed paths below
