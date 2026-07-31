@@ -125,8 +125,12 @@ grep -F 'KEPTNEAR_REVIEWED_APPLE_RANLIB_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev
 grep -F 'KEPTNEAR_REVIEWED_XCODEBUILD_SHA256=' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_SYSTEM_SHASUM="/usr/bin/shasum"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_SYSTEM_PRINTF="/usr/bin/printf"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
-grep -F 'KEPTNEAR_REVIEWED_CARGO_REGISTRY_NAME="keptnear-reviewed-registry"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
-grep -F 'KEPTNEAR_REVIEWED_CARGO_REGISTRY_URL="sparse+https://rsproxy.cn/index/"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_REVIEWED_CRATES_IO_PROTOCOL="sparse"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY="index.crates.io-1949cf8c6b5b557f"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+if grep -F 'replace-with' "$DISTRIBUTION_TOOLCHAIN" >/dev/null; then
+  echo "release profile contract violation: reviewed Cargo must not replace crates.io" >&2
+  exit 1
+fi
 grep -F 'keptnear_run_clean_shasum()' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'environment_command=("$KEPTNEAR_SYSTEM_ENV" -i)' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F 'KEPTNEAR_SYSTEM_XCODE_SELECT="/usr/bin/xcode-select"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null

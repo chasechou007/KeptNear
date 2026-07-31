@@ -19,8 +19,8 @@ KEPTNEAR_REVIEWED_MACOS_SDK_VERSION="26.5"
 KEPTNEAR_REVIEWED_MACOS_SDK_BUILD_VERSION="25F70"
 KEPTNEAR_REVIEWED_MACOS_SDK_NAME="MacOSX26.5.sdk"
 KEPTNEAR_REVIEWED_CFLAGS="-arch arm64 -mmacosx-version-min=13.0 -isysroot <reviewed-macos-sdk>"
-KEPTNEAR_REVIEWED_CARGO_REGISTRY_NAME="keptnear-reviewed-registry"
-KEPTNEAR_REVIEWED_CARGO_REGISTRY_URL="sparse+https://rsproxy.cn/index/"
+KEPTNEAR_REVIEWED_CRATES_IO_PROTOCOL="sparse"
+KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY="index.crates.io-1949cf8c6b5b557f"
 
 KEPTNEAR_SYSTEM_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
 KEPTNEAR_RUSTUP_RESOLUTION_PATH="/opt/homebrew/bin:/usr/local/bin:$KEPTNEAR_SYSTEM_PATH"
@@ -320,17 +320,19 @@ keptnear_resolve_active_rust_toolchain() {
   cargo_home_candidate="${KEPTNEAR_ACTIVE_CARGO_PATH%%/toolchains/*}"
   if [[ \
     "$cargo_home_candidate" == "$KEPTNEAR_ACTIVE_CARGO_PATH" || \
-    ! -d "$cargo_home_candidate/registry/cache" || \
-    ! -d "$cargo_home_candidate/registry/index" \
+    ! -d "$cargo_home_candidate/registry/cache/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY" || \
+    ! -d "$cargo_home_candidate/registry/index/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY" \
   ]]; then
     cargo_home_candidate="$KEPTNEAR_CURRENT_USER_HOME/.cargo"
   fi
   if [[ \
     "$cargo_home_candidate" != /* || \
     ! -d "$cargo_home_candidate" || \
-    -L "$cargo_home_candidate" \
+    -L "$cargo_home_candidate" || \
+    ! -d "$cargo_home_candidate/registry/cache/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY" || \
+    ! -d "$cargo_home_candidate/registry/index/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY" \
   ]]; then
-    keptnear_toolchain_fail "could not resolve an absolute Cargo home"
+    keptnear_toolchain_fail "could not resolve the reviewed crates.io Cargo cache"
     return 1
   fi
   KEPTNEAR_ACTIVE_CARGO_CACHE_HOME="$(cd "$cargo_home_candidate" && /bin/pwd -P)"
@@ -589,6 +591,8 @@ keptnear_prepare_isolated_cargo_home() {
     "$KEPTNEAR_ISOLATED_HOME" \
     "$KEPTNEAR_ISOLATED_CARGO_HOME" \
     "$KEPTNEAR_ISOLATED_CARGO_HOME/registry" \
+    "$KEPTNEAR_ISOLATED_CARGO_HOME/registry/cache" \
+    "$KEPTNEAR_ISOLATED_CARGO_HOME/registry/index" \
     "$KEPTNEAR_ISOLATED_BIN" \
     "$KEPTNEAR_ISOLATED_TMPDIR"
   "$KEPTNEAR_SYSTEM_CHMOD" \
@@ -608,24 +612,21 @@ keptnear_prepare_isolated_cargo_home() {
     "$KEPTNEAR_ISOLATED_BIN/clippy-driver"
 
   for cargo_registry_entry in cache index; do
-    if [[ ! -d "$KEPTNEAR_ACTIVE_CARGO_CACHE_HOME/registry/$cargo_registry_entry" ]]; then
+    if [[ ! -d "$KEPTNEAR_ACTIVE_CARGO_CACHE_HOME/registry/$cargo_registry_entry/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY" ]]; then
       keptnear_cleanup_isolated_cargo_home
       keptnear_toolchain_fail "reviewed Cargo registry $cargo_registry_entry is unavailable"
       return 1
     fi
     "$KEPTNEAR_SYSTEM_LN" \
       -s \
-      "$KEPTNEAR_ACTIVE_CARGO_CACHE_HOME/registry/$cargo_registry_entry" \
-      "$KEPTNEAR_ISOLATED_CARGO_HOME/registry/$cargo_registry_entry"
+      "$KEPTNEAR_ACTIVE_CARGO_CACHE_HOME/registry/$cargo_registry_entry/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY" \
+      "$KEPTNEAR_ISOLATED_CARGO_HOME/registry/$cargo_registry_entry/$KEPTNEAR_REVIEWED_CRATES_IO_CACHE_DIRECTORY"
   done
 
   isolated_cargo_config="$KEPTNEAR_ISOLATED_CARGO_HOME/config.toml"
   "$KEPTNEAR_SYSTEM_PRINTF" '%s\n' \
-    '[source.crates-io]' \
-    "replace-with = \"$KEPTNEAR_REVIEWED_CARGO_REGISTRY_NAME\"" \
-    '' \
-    "[source.$KEPTNEAR_REVIEWED_CARGO_REGISTRY_NAME]" \
-    "registry = \"$KEPTNEAR_REVIEWED_CARGO_REGISTRY_URL\"" \
+    '[registries.crates-io]' \
+    "protocol = \"$KEPTNEAR_REVIEWED_CRATES_IO_PROTOCOL\"" \
     '' \
     '[net]' \
     'offline = true' \

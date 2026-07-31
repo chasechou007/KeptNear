@@ -45,7 +45,7 @@
     "packageScriptSha256": "3cf43df94369e3fd5440b1b2ec55808fc04a657221c4d11a3b042aa164f79815",
     "artifactVerifierSha256": "d236129d7a9539b9c87d84f420b35ab2f8e8f2dbb456f0d3505fd6de952a61c6",
     "distributionGateSha256": "0543dc91301b275fdd2e7d135dab04cfcf2c8f2198e4f0d88f9166725c4c2e43",
-    "distributionToolchainSha256": "350506f59fcce3a627b7f1682be406ab3a4d258f01d7e2c059c7b39e850c114a",
+    "distributionToolchainSha256": "6f2543d81d4d1fdfcb9f800adba9b8d208ff917458a17f3fb98f235c04919679",
     "distributionCargoRunnerSha256": "269264157e48406bc1c4e4b2834845301375d8f634091597a9186bd5893522f4"
   },
   "revalidation": {
@@ -63,7 +63,7 @@
       "script/run_reviewed_distribution_cargo.sh clippy --workspace --all-targets --locked -- -D warnings"
     ],
     "reviewedBy": "Chase Chou",
-    "reviewedAt": "2026-07-31T14:56:53Z"
+    "reviewedAt": "2026-07-31T15:28:18Z"
   },
   "blocker": "None for the unsigned experimental profile; signed distribution remains separately gated."
 }

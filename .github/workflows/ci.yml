@@ -24,7 +24,7 @@ jobs:
         run: |
           rustup toolchain install 1.93.0 --profile minimal --component rustfmt --component clippy
           rustup default 1.93.0
-          cargo fetch --locked
+          CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse cargo fetch --locked
 
       - name: Run repository checks
         run: scripts/check.sh
