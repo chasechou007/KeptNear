@@ -1,0 +1,15 @@
+{
+  "format": "psw-local-vault-key-envelope",
+  "version": 1,
+  "kdf": {
+    "algorithm": "argon2id",
+    "version": 19,
+    "memory_kib": 65536,
+    "iterations": 3,
+    "parallelism": 1,
+    "salt_hex": "d81afcaaff3cae44596595d79249c6e2"
+  },
+  "aead": "xchacha20poly1305",
+  "nonce_hex": "ecabf386c7121546781cacb8aca9e44acf37de183af69f19",
+  "ciphertext_hex": "9be18b02a4071301aeba05a2760ec5ee66492fd6435d2c80d1f52edfbb43b0983edb5cefef5caf56dac5e53b73221b2a"
+}

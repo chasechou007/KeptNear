@@ -1,12 +1,18 @@
 # KeptNear Brand
 
-**Public descriptor:** Local-first password manager
+**Approved public descriptor:** Local Password & Token Manager
 
-**中文副标题：** 本地密码管理器
+**中文副标题：** 本地密码与令牌管理器
 
 KeptNear is the public product name. `PSW`, `PSWMac`, the existing bundle
 identifier, and the `.pswvault` extension remain internal compatibility
 identifiers until a separate migration is designed and tested.
+
+The pre-alpha App and README now use the approved descriptor because typed
+token storage, Apps & Tools, Broker capabilities, MCP, and CLI are implemented
+and tested in source. Public copy must still distinguish source implementation,
+components bundled without service activation, and released end-user
+capabilities.
 
 ## Mark
 

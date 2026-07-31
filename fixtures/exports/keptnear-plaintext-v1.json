@@ -1,0 +1,39 @@
+{
+  "format": "keptnear-plaintext-export",
+  "version": 1,
+  "warning": "This file contains plaintext-equivalent secrets. Base64 is reversible encoding, not encryption.",
+  "sourceVaultId": "vault_000102030405060708090a0b0c0d0e0f",
+  "items": [
+    {
+      "sourceCredentialId": "credential_101112131415161718191a1b1c1d1e1f",
+      "status": "active",
+      "title": "Synthetic API Token",
+      "templateId": "api-token",
+      "fields": [
+        {
+          "role": "token",
+          "label": "Synthetic token",
+          "value": {
+            "type": "secret",
+            "sourceSecretFieldId": "secret_field_202122232425262728292a2b2c2d2e2f",
+            "kind": "api-token",
+            "encoding": "base64",
+            "valueBase64": "c2FuaXRpemVkLXRva2Vu"
+          }
+        },
+        {
+          "role": "notes",
+          "value": {
+            "type": "text",
+            "text": "Synthetic fixture only"
+          }
+        }
+      ],
+      "tags": [
+        "fixture"
+      ],
+      "favorite": false
+    }
+  ],
+  "omissions": []
+}

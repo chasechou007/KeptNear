@@ -1,6 +1,6 @@
 # Open-Source Readiness
 
-Review date: 2026-07-24
+Review date: 2026-07-31
 
 ## Current Position
 
@@ -8,12 +8,14 @@ The repository is being prepared as a personal-interest, primarily self-used
 password manager that may be published as a public source preview. External
 security review is not a prerequisite for source publication, but the project
 must remain clearly described as experimental, unaudited, and unsuitable for
-production secrets. Source publication is not approval of a public binary or a
-production-ready password-manager release.
+production secrets. Source publication and binary publication use separate
+readiness profiles.
 
-The first public publication is source-only. It does not include `.app`,
-`.dmg`, or other installable release artifacts, and no GitHub Release is
-required for the initial repository opening.
+The source preview does not require Apple signing or external security review.
+An unsigned Apple Silicon DMG may also be published as a separate, explicitly
+unsigned and unaudited experimental artifact after its local build, integrity,
+privacy, license, disclosure, and installation checks pass. Signed and
+notarized distribution remains a stricter optional profile.
 
 ## Ready Before Public Source Publication
 
@@ -33,32 +35,56 @@ required for the initial repository opening.
 
 ## Local Pre-Publication Audit
 
-The 2026-07-24 local audit completed without using an external security-review
-service:
+The 2026-07-31 local publication audit completed without using Codex Security
+or another external security-review service:
 
-- `scripts/check.sh` passed 87 Rust tests and 171 Swift tests.
-- `cargo clippy --workspace --all-targets --locked -- -D warnings` passed.
-- RustSec `cargo-audit` scanned 46 resolved crate dependencies against 1,169
-  advisories and reported no known vulnerabilities.
-- `script/verify_dependency_licenses.sh` found only the project GPLv3 license
-  and reviewed permissive dependency license expressions.
-- `script/verify_public_source_tree.sh` found no private development context,
-  real vaults, plaintext export artifacts, private keys, access tokens, or
-  developer-machine paths in the candidate source tree.
-- The Swift package has no third-party package dependencies.
+- `scripts/check.sh` passed 509 Rust tests, 232 Swift tests, the FFI build, and
+  the Swift build.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+  passed.
+- Strict OpenSpec validation passed 33 of 33 active items.
+- `script/verify_dependency_licenses.sh` reviewed 116 resolved registry
+  packages, required every workspace crate to inherit `GPL-3.0-only`, rejected
+  non-registry dependency sources, checked the MPL secondary-license
+  compatibility condition, and verified the bundled SQLCipher notice.
+- The exact-expression allowlist contains only license choices reviewed for
+  GPLv3 distribution. The current `MPL-2.0` dependency is
+  `webpki-roots 0.26.7`, whose source does not opt out with an
+  `Incompatible With Secondary Licenses` notice.
+- `script/verify_public_source_tree.sh` checked 229 candidate files and found
+  no private development context, real vaults, plaintext export artifacts,
+  signing material, or build products.
+- `script/verify_repository_secrets.sh` checks the same candidate tree plus
+  every reachable historical Git blob for known private-key and provider-token
+  formats, credential-bearing filenames, private AI-development paths, and the
+  current developer home path.
+- The Swift package has no third-party package or binary-target dependencies.
+
+The compatibility policy follows the
+[GNU GPL-compatible license list](https://www.gnu.org/licenses/license-list.html),
+the [Mozilla MPL 2.0 compatibility conditions](https://www.mozilla.org/en-US/MPL/2.0/FAQ/),
+and the [Unicode License v3 description](https://unicode.org/faq/unicode_license.html).
+It is a conservative automated project check, not legal advice. New license
+expressions, non-registry sources, Swift dependencies, binary targets, or an
+MPL secondary-license opt-out fail closed for human review.
 
 This is a bounded local review, not an external security audit or a claim that
 the application is safe for production secrets.
 
-## Still Not Ready For Public Alpha Distribution
+## Remaining Distribution Work
 
 - External security review has not started.
-- Public alpha release readiness is not approved.
+- The current source and unsigned-DMG readiness profiles must be rerun against
+  the exact revision selected for publication.
 - Signed and notarized distribution has not been verified with real release
-  credentials.
-- The vault format remains experimental until an explicit freeze decision.
+  credentials and must not be claimed.
+- Vault v2 is frozen as the released pre-alpha source-preview schema, but the
+  application remains experimental and unaudited.
 - Public release notes, tester onboarding, and feedback intake still need a
   final pass.
+
+Missing external review evidence requires the `unaudited` label but does not
+block source publication or an explicitly unsigned experimental DMG.
 
 ## Files That Must Not Be Published
 
@@ -80,6 +106,8 @@ the application is safe for production secrets.
 
 - Run `scripts/check.sh`.
 - Run `script/verify_public_source_tree.sh` immediately before staging.
+- Run `script/verify_repository_secrets.sh` against the final reachable Git
+  history before the first public push.
 - Run `script/verify_dependency_licenses.sh` after dependency changes.
 - Review `git status --short` and confirm only intentional source files are
   staged.
@@ -90,3 +118,8 @@ the application is safe for production secrets.
   `https://github.com/chasechou007/KeptNear`.
 - Configure the public repository to use the checked-in Issue templates and
   keep the no-external-PR policy visible in the README.
+- If publishing an unsigned DMG, run the unsigned artifact verifier, publish
+  its checksum and manifest, and keep unsigned installation instructions and
+  the unaudited pre-alpha warning adjacent to the download.
+- Do not reuse the signed-distribution readiness label for an unsigned
+  artifact.

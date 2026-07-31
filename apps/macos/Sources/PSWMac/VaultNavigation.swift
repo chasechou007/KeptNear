@@ -1,8 +1,19 @@
 import Foundation
 
+enum VaultSmartView: String, CaseIterable, Hashable, Identifiable {
+    case logins
+    case developerCredentials
+    case keysAndCertificates
+    case appsToolsAuthorized
+
+    var id: String { rawValue }
+}
+
 enum VaultNavigationDestination: Hashable {
     case allItems
     case favorites
+    case appsAndTools
+    case smartView(VaultSmartView)
     case security
     case conflicts
     case archive
@@ -10,7 +21,7 @@ enum VaultNavigationDestination: Hashable {
     case tag(String)
 
     var isItemDestination: Bool {
-        self != .security
+        self != .security && self != .appsAndTools
     }
 }
 
@@ -33,18 +44,42 @@ struct VaultNavigationCounts: Equatable {
 
     let allItems: Int
     let favorites: Int
+    let logins: Int
+    let developerCredentials: Int
+    let keysAndCertificates: Int
+    let appsToolsAuthorized: Int
     let security: Int
     let conflicts: Int
     let archived: Int
     let itemTypes: [VaultNavigationCount]
     let tags: [VaultNavigationCount]
 
-    static let empty = VaultNavigationCounts(items: [], passwordHealth: nil)
+    static let empty = VaultNavigationCounts(
+        items: [],
+        passwordHealth: nil,
+        authorizedCredentialIds: []
+    )
 
-    init(items: [VaultItemView], passwordHealth: PasswordHealthPayload?) {
+    init(
+        items: [VaultItemView],
+        passwordHealth: PasswordHealthPayload?,
+        authorizedCredentialIds: Set<String> = []
+    ) {
         let activeItems = items.filter { !$0.isArchived }
         allItems = activeItems.count
         favorites = activeItems.filter(\.favorite).count
+        logins = activeItems.filter {
+            $0.appears(in: .logins, authorizedCredentialIds: authorizedCredentialIds)
+        }.count
+        developerCredentials = activeItems.filter {
+            $0.appears(in: .developerCredentials, authorizedCredentialIds: authorizedCredentialIds)
+        }.count
+        keysAndCertificates = activeItems.filter {
+            $0.appears(in: .keysAndCertificates, authorizedCredentialIds: authorizedCredentialIds)
+        }.count
+        appsToolsAuthorized = activeItems.filter {
+            $0.appears(in: .appsToolsAuthorized, authorizedCredentialIds: authorizedCredentialIds)
+        }.count
         conflicts = activeItems.filter(\.isConflicted).count
         archived = items.filter(\.isArchived).count
         security = Set(passwordHealth?.issues.map(\.itemId) ?? []).count
@@ -61,6 +96,19 @@ struct VaultNavigationCounts: Equatable {
             return allItems
         case .favorites:
             return favorites
+        case .appsAndTools:
+            return appsToolsAuthorized
+        case let .smartView(smartView):
+            switch smartView {
+            case .logins:
+                return logins
+            case .developerCredentials:
+                return developerCredentials
+            case .keysAndCertificates:
+                return keysAndCertificates
+            case .appsToolsAuthorized:
+                return appsToolsAuthorized
+            }
         case .security:
             return security
         case .conflicts:
@@ -116,5 +164,44 @@ struct VaultNavigationCounts: Equatable {
     ) -> Int {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return counts.first { $0.id == normalized }?.count ?? 0
+    }
+}
+
+extension VaultItemView {
+    func appears(
+        in smartView: VaultSmartView,
+        authorizedCredentialIds: Set<String>
+    ) -> Bool {
+        let normalizedSecretKinds = Set(secretKinds.map(Self.normalizeSmartViewValue))
+        let normalizedItemType = Self.normalizeSmartViewValue(itemType)
+        switch smartView {
+        case .logins:
+            return normalizedSecretKinds.contains("password")
+                || credentialTemplateKind == .login
+                || normalizedItemType == "login"
+        case .developerCredentials:
+            return !normalizedSecretKinds.isDisjoint(with: [
+                "api-token",
+                "api-key",
+                "private-key",
+                "certificate"
+            ])
+                || credentialTemplateKind.map {
+                    [.apiToken, .apiKey, .sshKey, .certificate].contains($0)
+                } == true
+                || ["api token", "api key", "ssh key", "certificate"].contains(normalizedItemType)
+        case .keysAndCertificates:
+            return !normalizedSecretKinds.isDisjoint(with: ["private-key", "certificate"])
+                || credentialTemplateKind.map {
+                    [.sshKey, .certificate].contains($0)
+                } == true
+                || ["ssh key", "certificate"].contains(normalizedItemType)
+        case .appsToolsAuthorized:
+            return authorizedCredentialIds.contains(id)
+        }
+    }
+
+    private static func normalizeSmartViewValue(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 }

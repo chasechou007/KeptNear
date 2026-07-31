@@ -29,7 +29,7 @@ while IFS= read -r path; do
   esac
 
   case "$path" in
-    fixtures/vaults/golden-vault-v1.pswvault/*)
+    fixtures/vaults/golden-vault-v1.pswvault/*|fixtures/vaults/golden-vault-v2.pswvault/*)
       ;;
     *.pswvault|*.pswvault/*)
       report_violation "non-fixture vault path is publishable: $path"
@@ -60,9 +60,13 @@ while IFS= read -r path; do
 
   case "$(basename "$path")" in
     keys.enc)
-      if [[ "$path" != "fixtures/vaults/golden-vault-v1.pswvault/keys.enc" ]]; then
-        report_violation "vault key envelope outside the approved fixture is publishable: $path"
-      fi
+      case "$path" in
+        fixtures/vaults/golden-vault-v1.pswvault/keys.enc|fixtures/vaults/golden-vault-v2.pswvault/keys.enc)
+          ;;
+        *)
+          report_violation "vault key envelope outside an approved fixture is publishable: $path"
+          ;;
+      esac
       ;;
     local_unlock.enc)
       report_violation "local convenience-unlock envelope is publishable: $path"

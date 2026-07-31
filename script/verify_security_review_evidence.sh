@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ALLOW_MISSING=0
+PROFILE="signed"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PLAN_PATH="$ROOT_DIR/docs/security-review-plan.md"
 EVIDENCE_PATH="$ROOT_DIR/docs/security-review-evidence.md"
@@ -9,13 +10,15 @@ README_PATH="$ROOT_DIR/README.md"
 
 usage() {
   cat <<'USAGE'
-usage: script/verify_security_review_evidence.sh [--allow-missing]
+usage: script/verify_security_review_evidence.sh [--profile source|unsigned|signed] [--allow-missing]
 
-Verifies whether either external security review evidence or an explicit
-maintainer accepted-risk record is complete enough for experimental
-public-alpha security approval. Distribution gates remain separate.
+Verifies the review-policy evidence for one release profile. External review is
+optional for source preview and the explicitly unsigned experimental profile.
+The signed profile requires either external-review evidence or the AR-001
+accepted-risk path. Distribution gates remain separate.
 
 Options:
+  --profile PROFILE               select source, unsigned, or signed (default: signed)
   --allow-missing                  report missing evidence but exit 0
   -h, --help                       show this help
 USAGE
@@ -26,6 +29,15 @@ while [[ $# -gt 0 ]]; do
     --allow-missing)
       ALLOW_MISSING=1
       shift
+      ;;
+    --profile)
+      if [[ $# -lt 2 ]]; then
+        echo "--profile requires a value" >&2
+        usage >&2
+        exit 2
+      fi
+      PROFILE="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -39,21 +51,36 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "$PROFILE" in
+  source|unsigned|signed) ;;
+  *)
+    echo "invalid profile: $PROFILE" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
 COMMON_FAILURES=()
 EXTERNAL_REVIEW_FAILURES=()
 ACCEPTED_RISK_FAILURES=()
+COMMON_FAILURE_COUNT=0
+EXTERNAL_REVIEW_FAILURE_COUNT=0
+ACCEPTED_RISK_FAILURE_COUNT=0
 FAILURE_SCOPE="common"
 
 add_failure() {
   case "$FAILURE_SCOPE" in
     common)
       COMMON_FAILURES+=("$1")
+      COMMON_FAILURE_COUNT=$((COMMON_FAILURE_COUNT + 1))
       ;;
     external)
       EXTERNAL_REVIEW_FAILURES+=("$1")
+      EXTERNAL_REVIEW_FAILURE_COUNT=$((EXTERNAL_REVIEW_FAILURE_COUNT + 1))
       ;;
     accepted-risk)
       ACCEPTED_RISK_FAILURES+=("$1")
+      ACCEPTED_RISK_FAILURE_COUNT=$((ACCEPTED_RISK_FAILURE_COUNT + 1))
       ;;
     *)
       echo "invalid failure scope: $FAILURE_SCOPE" >&2
@@ -235,6 +262,7 @@ require_accepted_risk_row() {
 }
 
 printf 'Security review decision gate\n'
+printf 'Profile: %s\n' "$PROFILE"
 printf 'Mode: %s\n\n' "$(if [[ "$ALLOW_MISSING" == "1" ]]; then printf 'allow-missing report'; else printf 'strict'; fi)"
 
 printf 'Required documents\n'
@@ -282,11 +310,13 @@ if [[ -f "$EVIDENCE_PATH" ]]; then
     status_line missing "scripts/check.sh validation" "expected Passed row"
     add_failure "missing passed scripts/check.sh validation evidence"
   fi
-  if grep -E '^\|[^|]*\|[[:space:]]*`script/package_macos_alpha\.sh`[[:space:]]*\|[[:space:]]*Passed[[:space:]]*\|' "$EVIDENCE_PATH" >/dev/null; then
-    status_line ok "alpha package validation evidence" "Passed"
-  else
-    status_line missing "alpha package validation evidence" "expected Passed row"
-    add_failure "missing passed alpha package validation evidence"
+  if [[ "$PROFILE" != "source" ]]; then
+    if grep -E '^\|[^|]*\|[[:space:]]*`script/package_macos_alpha\.sh`[[:space:]]*\|[[:space:]]*Passed[[:space:]]*\|' "$EVIDENCE_PATH" >/dev/null; then
+      status_line ok "alpha package validation evidence" "Passed"
+    else
+      status_line missing "alpha package validation evidence" "expected Passed row"
+      add_failure "missing passed alpha package validation evidence"
+    fi
   fi
   require_release_value "Production-use recommendation" "Not recommended"
 
@@ -324,53 +354,94 @@ if [[ -f "$EVIDENCE_PATH" ]]; then
   require_release_value "Security model or readiness claims updated after review" "Yes"
   require_release_value "Public alpha decision" "Approved"
 
-  FAILURE_SCOPE="accepted-risk"
-  printf '\nMaintainer accepted-risk path\n'
-  require_release_value "Experimental pre-release risk accepted" "Yes"
-  require_release_present "Accepted risk ID"
-  accepted_risk_id="$(release_value "Accepted risk ID")"
-  require_release_value "Risk acceptance owner" "Chase Chou"
-  accepted_risk_owner="$(release_value "Risk acceptance owner")"
-  if ! is_missing_external_value "$accepted_risk_id" && ! is_missing_external_value "$accepted_risk_owner"; then
-    require_accepted_risk_row "$accepted_risk_id" "$accepted_risk_owner"
+  if [[ "$PROFILE" == "source" ]]; then
+    FAILURE_SCOPE="common"
+    printf '\nSource-preview review policy\n'
+    require_release_value "External review required before source or unsigned experimental publication" "No"
+    require_contains "$README_PATH" "unaudited source warning" "received an external security audit"
+    require_contains "$README_PATH" "production-credential warning" "Do not use it to store production"
+  else
+    FAILURE_SCOPE="accepted-risk"
+    printf '\nMaintainer accepted-risk path\n'
+    require_release_value "Experimental pre-release risk accepted" "Yes"
+    require_release_value "Risk acceptance owner" "Chase Chou"
+    accepted_risk_owner="$(release_value "Risk acceptance owner")"
+
+    if [[ "$PROFILE" == "unsigned" ]]; then
+      require_release_present "Unsigned accepted risk ID"
+      accepted_risk_id="$(release_value "Unsigned accepted risk ID")"
+      require_release_date "Unsigned risk acceptance date"
+      risk_acceptance_date="$(release_value "Unsigned risk acceptance date")"
+      require_release_value "Unsigned accepted release scope" "v0.1.x pre-alpha macOS 13+ Apple Silicon DMG"
+      require_release_value "Unsigned experimental security-policy decision" "Approved for the bounded unsigned profile"
+      require_release_value "External review required before source or unsigned experimental publication" "No"
+      require_contains "$README_PATH" "AR-002 user warning" "AR-002"
+      require_contains "$README_PATH" "unsigned warning" "unsigned"
+      require_contains "$README_PATH" "unaudited warning" "unaudited"
+    else
+      require_release_present "Accepted risk ID"
+      accepted_risk_id="$(release_value "Accepted risk ID")"
+      require_release_date "Risk acceptance date"
+      risk_acceptance_date="$(release_value "Risk acceptance date")"
+      require_release_value "Accepted release scope" "v0.1.x pre-alpha macOS 13+ Apple Silicon DMG"
+      require_release_value "Public alpha security decision" "Approved for experimental pre-release"
+      require_contains "$README_PATH" "AR-001 user warning" "AR-001"
+    fi
+
+    if ! is_missing_external_value "$accepted_risk_id" && ! is_missing_external_value "$accepted_risk_owner"; then
+      require_accepted_risk_row "$accepted_risk_id" "$accepted_risk_owner"
+    fi
+    if [[ "$risk_acceptance_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+      require_validation_on_date "$risk_acceptance_date" "scripts/check.sh" "Risk-date repository validation"
+      require_validation_on_date "$risk_acceptance_date" "script/package_macos_alpha.sh" "Risk-date DMG packaging validation"
+      require_validation_on_date "$risk_acceptance_date" "script/verify_macos_alpha_artifact.sh" "Risk-date DMG artifact validation"
+      require_validation_on_date "$risk_acceptance_date" "script/verify_public_source_tree.sh" "Risk-date public-source validation"
+    fi
+    require_release_value "External review required before production use" "Yes"
+    require_contains "$README_PATH" "production-credential warning" "Do not use it to store production"
   fi
-  require_release_date "Risk acceptance date"
-  risk_acceptance_date="$(release_value "Risk acceptance date")"
-  if [[ "$risk_acceptance_date" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
-    require_validation_on_date "$risk_acceptance_date" "scripts/check.sh" "Risk-date repository validation"
-    require_validation_on_date "$risk_acceptance_date" "script/package_macos_alpha.sh" "Risk-date DMG packaging validation"
-    require_validation_on_date "$risk_acceptance_date" "script/verify_macos_alpha_artifact.sh" "Risk-date DMG artifact validation"
-    require_validation_on_date "$risk_acceptance_date" "script/verify_public_source_tree.sh" "Risk-date public-source validation"
-  fi
-  require_release_value "Accepted release scope" "v0.1.x pre-alpha macOS 13+ Apple Silicon DMG"
-  require_release_value "Public alpha security decision" "Approved for experimental pre-release"
-  require_release_value "External review required before production use" "Yes"
-  require_contains "$README_PATH" "AR-001 user warning" "AR-001"
-  require_contains "$README_PATH" "production-credential warning" "Do not use it to store production"
 fi
 
 printf '\nResult\n'
-if [[ "${#COMMON_FAILURES[@]}" -eq 0 && "${#EXTERNAL_REVIEW_FAILURES[@]}" -eq 0 ]]; then
+if [[ "$(release_value "External review completed")" == "Yes" ]]; then
+  printf '  Audit status: externally-reviewed\n'
+else
+  printf '  Audit status: unaudited\n'
+fi
+
+if [[ "$PROFILE" == "source" && "$COMMON_FAILURE_COUNT" -eq 0 ]]; then
+  printf '  Source-preview review policy passed without requiring external review or Apple signing.\n'
+  printf '  Production use is not recommended.\n'
+  exit 0
+fi
+
+if [[ "$COMMON_FAILURE_COUNT" -eq 0 && "$EXTERNAL_REVIEW_FAILURE_COUNT" -eq 0 ]]; then
   printf '  External security review path passed for public-alpha security readiness.\n'
   printf '  Production-use recommendation remains separate.\n'
   exit 0
 fi
 
-if [[ "${#COMMON_FAILURES[@]}" -eq 0 && "${#ACCEPTED_RISK_FAILURES[@]}" -eq 0 ]]; then
-  printf '  Maintainer accepted-risk path passed for experimental pre-release security readiness.\n'
+if [[ "$COMMON_FAILURE_COUNT" -eq 0 && "$ACCEPTED_RISK_FAILURE_COUNT" -eq 0 ]]; then
+  printf '  Maintainer accepted-risk path passed for the %s experimental profile.\n' "$PROFILE"
   printf '  External review remains incomplete and production use is not recommended.\n'
   exit 0
 fi
 
-for failure in "${COMMON_FAILURES[@]}"; do
-  printf '  common missing: %s\n' "$failure"
-done
-for failure in "${EXTERNAL_REVIEW_FAILURES[@]}"; do
-  printf '  external path missing: %s\n' "$failure"
-done
-for failure in "${ACCEPTED_RISK_FAILURES[@]}"; do
-  printf '  accepted-risk path missing: %s\n' "$failure"
-done
+if [[ "$COMMON_FAILURE_COUNT" -gt 0 ]]; then
+  for failure in "${COMMON_FAILURES[@]}"; do
+    printf '  common missing: %s\n' "$failure"
+  done
+fi
+if [[ "$EXTERNAL_REVIEW_FAILURE_COUNT" -gt 0 ]]; then
+  for failure in "${EXTERNAL_REVIEW_FAILURES[@]}"; do
+    printf '  external path missing: %s\n' "$failure"
+  done
+fi
+if [[ "$ACCEPTED_RISK_FAILURE_COUNT" -gt 0 ]]; then
+  for failure in "${ACCEPTED_RISK_FAILURES[@]}"; do
+    printf '  accepted-risk path missing: %s\n' "$failure"
+  done
+fi
 printf '  Strict security decision readiness is not approved.\n'
 printf '  This gate verifies documented evidence and accepted-risk completeness; it does not perform an external review.\n'
 

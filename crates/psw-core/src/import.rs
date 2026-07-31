@@ -1,15 +1,18 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 use csv::StringRecord;
 use serde::Deserialize;
+use zeroize::Zeroizing;
 
-use crate::error::{VaultError, VaultResult};
-use crate::totp::normalize_totp_secret;
-use crate::types::{
-    CreditCardItem, LoginItem, SecretBytes, SecureNoteItem, VaultItemContent, VaultItemDraft,
+use crate::credential_model::{
+    CredentialDraft, CredentialField, SecretFieldKind, TEMPLATE_CREDIT_CARD, TEMPLATE_LOGIN,
+    TEMPLATE_SECURE_NOTE,
 };
+use crate::error::{VaultError, VaultResult};
+use crate::safe_fs::{read_regular_file_limited, MAX_PLAINTEXT_IMPORT_FILE_BYTES};
+use crate::totp::normalize_totp_secret;
+use crate::types::SecretBytes;
 
 /// First alpha import format: unencrypted Bitwarden JSON export subset.
 pub(crate) const BITWARDEN_JSON_FORMAT: &str = "bitwarden-json";
@@ -20,7 +23,7 @@ pub(crate) const GENERIC_LOGIN_CSV_FORMAT: &str = "generic-login-csv";
 #[derive(Debug, Default)]
 pub(crate) struct ParsedImport {
     /// Drafts that can be imported.
-    pub drafts: Vec<VaultItemDraft>,
+    pub drafts: Vec<CredentialDraft>,
     /// Records skipped during parsing.
     pub skipped_records: usize,
     /// Warnings to show to the user.
@@ -39,13 +42,15 @@ pub(crate) fn parse_import_file(path: &Path, source_format: &str) -> VaultResult
 }
 
 fn parse_generic_login_csv(path: &Path) -> VaultResult<ParsedImport> {
+    let bytes = Zeroizing::new(read_regular_file_limited(
+        path,
+        MAX_PLAINTEXT_IMPORT_FILE_BYTES,
+        "read import file",
+    )?);
     let mut reader = csv::ReaderBuilder::new()
         .flexible(true)
         .trim(csv::Trim::All)
-        .from_path(path)
-        .map_err(|source| VaultError::InvalidVault {
-            reason: format!("open generic login CSV failed: {source}"),
-        })?;
+        .from_reader(bytes.as_slice());
     let headers = reader
         .headers()
         .map_err(|source| VaultError::InvalidVault {
@@ -186,22 +191,20 @@ fn generic_csv_record_to_draft(
         });
 
     Some(ConvertedDraft {
-        draft: VaultItemDraft {
+        draft: CredentialDraft {
             title,
-            content: VaultItemContent::Login(LoginItem {
-                username: headers.username.and_then(|index| csv_value(record, index)),
-                password: headers
-                    .password
-                    .and_then(|index| csv_value(record, index))
-                    .map(|password| SecretBytes::new(password.into_bytes())),
-                urls: headers
+            template_id: Some(TEMPLATE_LOGIN.to_owned()),
+            fields: login_fields(
+                headers.username.and_then(|index| csv_value(record, index)),
+                headers.password.and_then(|index| csv_value(record, index)),
+                headers
                     .url
                     .and_then(|index| csv_value(record, index))
                     .into_iter()
                     .collect(),
-                notes: headers.notes.and_then(|index| csv_value(record, index)),
+                headers.notes.and_then(|index| csv_value(record, index)),
                 totp_secret,
-            }),
+            ),
             tags: generic_csv_tags(record, headers),
             favorite: headers
                 .favorite
@@ -266,7 +269,11 @@ fn csv_truthy(value: &str) -> bool {
 }
 
 fn parse_bitwarden_json(path: &Path) -> VaultResult<ParsedImport> {
-    let bytes = fs::read(path).map_err(|source| VaultError::io("read import file", source))?;
+    let bytes = Zeroizing::new(read_regular_file_limited(
+        path,
+        MAX_PLAINTEXT_IMPORT_FILE_BYTES,
+        "read import file",
+    )?);
     let export: BitwardenExport =
         serde_json::from_slice(&bytes).map_err(|source| VaultError::InvalidVault {
             reason: format!("parse Bitwarden JSON failed: {source}"),
@@ -330,7 +337,7 @@ fn parse_bitwarden_json(path: &Path) -> VaultResult<ParsedImport> {
 }
 
 struct ConvertedDraft {
-    draft: VaultItemDraft,
+    draft: CredentialDraft,
     warnings: Vec<String>,
 }
 
@@ -353,16 +360,16 @@ fn bitwarden_login_to_draft(item: BitwardenItem, tags: Vec<String>) -> Option<Co
         }
     });
     Some(ConvertedDraft {
-        draft: VaultItemDraft {
+        draft: CredentialDraft {
             title,
-            content: VaultItemContent::Login(LoginItem {
-                username: non_empty(login.username),
-                password: non_empty(login.password)
-                    .map(|password| SecretBytes::new(password.into_bytes())),
+            template_id: Some(TEMPLATE_LOGIN.to_owned()),
+            fields: login_fields(
+                non_empty(login.username),
+                non_empty(login.password),
                 urls,
-                notes: non_empty(item.notes),
+                non_empty(item.notes),
                 totp_secret,
-            }),
+            ),
             tags,
             favorite: item.favorite.unwrap_or(false),
         },
@@ -370,34 +377,110 @@ fn bitwarden_login_to_draft(item: BitwardenItem, tags: Vec<String>) -> Option<Co
     })
 }
 
-fn bitwarden_note_to_draft(item: BitwardenItem, tags: Vec<String>) -> Option<VaultItemDraft> {
+fn bitwarden_note_to_draft(item: BitwardenItem, tags: Vec<String>) -> Option<CredentialDraft> {
     let title = non_empty(item.name)?;
-    Some(VaultItemDraft {
+    Some(CredentialDraft {
         title,
-        content: VaultItemContent::SecureNote(SecureNoteItem {
-            body: item.notes.unwrap_or_default(),
-        }),
+        template_id: Some(TEMPLATE_SECURE_NOTE.to_owned()),
+        fields: vec![CredentialField::secret(
+            "body",
+            SecretFieldKind::GenericSecret,
+            SecretBytes::new(item.notes.unwrap_or_default().into_bytes()),
+        )],
         tags,
         favorite: item.favorite.unwrap_or(false),
     })
 }
 
-fn bitwarden_card_to_draft(item: BitwardenItem, tags: Vec<String>) -> Option<VaultItemDraft> {
+fn bitwarden_card_to_draft(item: BitwardenItem, tags: Vec<String>) -> Option<CredentialDraft> {
     let title = non_empty(item.name)?;
     let card = item.card.unwrap_or_default();
-    Some(VaultItemDraft {
+    let mut fields = Vec::new();
+    push_optional_text(
+        &mut fields,
+        "cardholder-name",
+        non_empty(card.cardholder_name),
+    );
+    push_optional_secret(
+        &mut fields,
+        "number",
+        SecretFieldKind::GenericSecret,
+        non_empty(card.number),
+    );
+    push_optional_text(
+        &mut fields,
+        "expiry-month",
+        parse_expiry_month(card.exp_month).map(|month| month.to_string()),
+    );
+    push_optional_text(
+        &mut fields,
+        "expiry-year",
+        parse_expiry_year(card.exp_year).map(|year| year.to_string()),
+    );
+    push_optional_secret(
+        &mut fields,
+        "verification-code",
+        SecretFieldKind::GenericSecret,
+        non_empty(card.code),
+    );
+    push_optional_text(&mut fields, "notes", non_empty(item.notes));
+    Some(CredentialDraft {
         title,
-        content: VaultItemContent::CreditCard(CreditCardItem {
-            cardholder_name: non_empty(card.cardholder_name),
-            number: non_empty(card.number).map(|number| SecretBytes::new(number.into_bytes())),
-            expiry_month: parse_expiry_month(card.exp_month),
-            expiry_year: parse_expiry_year(card.exp_year),
-            verification_code: non_empty(card.code).map(|code| SecretBytes::new(code.into_bytes())),
-            notes: non_empty(item.notes),
-        }),
+        template_id: Some(TEMPLATE_CREDIT_CARD.to_owned()),
+        fields,
         tags,
         favorite: item.favorite.unwrap_or(false),
     })
+}
+
+fn login_fields(
+    username: Option<String>,
+    password: Option<String>,
+    urls: Vec<String>,
+    notes: Option<String>,
+    totp_secret: Option<SecretBytes>,
+) -> Vec<CredentialField> {
+    let mut fields = Vec::new();
+    push_optional_text(&mut fields, "username", username);
+    push_optional_secret(&mut fields, "password", SecretFieldKind::Password, password);
+    fields.extend(
+        urls.into_iter()
+            .map(|url| CredentialField::text("url", url)),
+    );
+    push_optional_text(&mut fields, "notes", notes);
+    if let Some(secret) = totp_secret {
+        fields.push(CredentialField::secret(
+            "totp-seed",
+            SecretFieldKind::TotpSeed,
+            secret,
+        ));
+    }
+    fields
+}
+
+fn push_optional_text(
+    fields: &mut Vec<CredentialField>,
+    role: &'static str,
+    value: Option<String>,
+) {
+    if let Some(value) = value {
+        fields.push(CredentialField::text(role, value));
+    }
+}
+
+fn push_optional_secret(
+    fields: &mut Vec<CredentialField>,
+    role: &'static str,
+    kind: SecretFieldKind,
+    value: Option<String>,
+) {
+    if let Some(value) = value {
+        fields.push(CredentialField::secret(
+            role,
+            kind,
+            SecretBytes::new(value.into_bytes()),
+        ));
+    }
 }
 
 fn bitwarden_folder_names(folders: Vec<BitwardenFolder>) -> BTreeMap<String, String> {

@@ -185,12 +185,53 @@ struct VaultItemDetailView: View {
         switch model.content {
         case let .login(login):
             loginContent(login)
+        case let .credential(credential):
+            credentialContent(credential)
         case let .secureNote(note):
             secureNoteContent(note)
         case let .creditCard(card):
             creditCardContent(card)
         case let .softwareLicense(license):
             softwareLicenseContent(license)
+        }
+    }
+
+    private func credentialContent(_ credential: VaultItemDetailModel.Credential) -> some View {
+        VStack(alignment: .leading, spacing: 22) {
+            if !credential.secretFields.isEmpty {
+                VaultDetailSection(title: text.protectedFields) {
+                    ForEach(Array(credential.secretFields.enumerated()), id: \.element.id) { index, field in
+                        if index > 0 {
+                            Divider()
+                        }
+                        secretRow(
+                            label: text.credentialFieldName(role: field.role, label: field.label),
+                            field: .credential(field.secretFieldId),
+                            copyAction: .credentialSecret(field.secretFieldId),
+                            copyLabel: text.copySecret
+                        )
+                    }
+                }
+            }
+
+            if !credential.textFields.isEmpty {
+                VaultDetailSection(title: text.otherDetails) {
+                    ForEach(Array(credential.textFields.enumerated()), id: \.offset) { index, field in
+                        if index > 0 {
+                            Divider()
+                        }
+                        VaultDetailFieldRow(
+                            label: text.credentialFieldName(role: field.role, label: field.label),
+                            value: displayValue(field.text),
+                            multiline: true
+                        ) {
+                            EmptyView()
+                        }
+                    }
+                }
+            }
+
+            metadataSection(tags: model.item.tags, notes: nil)
         }
     }
 
@@ -461,6 +502,8 @@ struct VaultItemDetailView: View {
         switch model.content {
         case .login:
             return .password
+        case let .credential(credential):
+            return .credentialSecret(credential.secretFields.first?.secretFieldId ?? "")
         case .secureNote:
             return .secureNoteBody
         case .creditCard:
@@ -488,6 +531,8 @@ struct VaultItemDetailView: View {
             return text.copyVerificationCode
         case .licenseKey:
             return text.copyLicenseKey
+        case .credentialSecret:
+            return text.copySecret
         }
     }
 

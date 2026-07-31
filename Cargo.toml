@@ -1,6 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/keptnear-client",
+    "crates/keptnear-mcp",
+    "crates/psw-broker",
     "crates/psw-cli",
     "crates/psw-core",
     "crates/psw-ffi",

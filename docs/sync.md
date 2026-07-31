@@ -24,8 +24,11 @@ Users can also trigger `Refresh Sync` manually from the toolbar.
 
 The app can also handle `.pswvault` paths supplied by macOS file-open events,
 using the same open-vault workflow as the in-app Open action. Unsupported paths
-are rejected before the Rust core is called. Packaged document type registration
-and Finder double-click association are separate distribution-layer work.
+are rejected before the Rust core is called. Generated App bundles register
+`.pswvault` as a package document type, and the packaging verifier checks that
+metadata. Finder double-click behavior still depends on installing or
+registering the App bundle with Launch Services on the current Mac; metadata
+verification alone does not prove clean-install acceptance.
 
 To place an existing vault in a sync folder, use `Copy to Sync` from the macOS
 toolbar. The app copies the selected vault's portable encrypted structure to a
@@ -33,6 +36,21 @@ new destination, clears the previous decrypted state, selects the copied vault,
 and leaves it locked until normal unlock. The source vault is not deleted or
 moved. This workflow is local file copying only; provider upload/download status
 remains outside the app.
+
+Every Vault presented to Apps & Tools is registered by canonical local path and
+stable `vault_id`. If the current Broker process sees the same `vault_id` at a
+second path, or a tracked path now contains another identity, it rejects the
+machine association. The human password-manager session remains unlocked, but
+Apps & Tools access and its authorization inventory fail closed for that
+session. The App shows only a localized copy-conflict warning; Consumers,
+diagnostics, and audit receive no full path or path-conflict detail.
+
+This check occurs when paths are presented to the Broker; KeptNear does not
+scan the filesystem for every possible copy. Because `Copy to Sync` deliberately
+leaves the source in place, opening both source and destination in one App
+process can trigger this protection when Apps & Tools is configured. In the
+current alpha, quit KeptNear and reopen only the intended working copy before
+using Apps & Tools again.
 
 After Copy to Sync succeeds, the macOS app shows a result confirmation with
 aggregate copied counts for item records, attachments, and tombstones. The
@@ -122,16 +140,19 @@ For scripted checks or support workflows, use the Rust CLI to inspect a local
 vault directory without unlocking it:
 
 ```sh
-cargo run -p psw-cli -- doctor path/to/Vault.pswvault
-cargo run -p psw-cli -- doctor --json path/to/Vault.pswvault
+cargo run -p psw-cli --bin keptnear -- vault doctor path/to/Vault.pswvault
+cargo run -p psw-cli --bin keptnear -- vault doctor --json path/to/Vault.pswvault
 ```
 
-`psw doctor` checks only local filesystem readiness. It reports required
+`keptnear vault doctor` checks only local filesystem readiness. It reports required
 portable structure, supported vault and record format metadata, encrypted item,
 attachment, and tombstone file counts, and whether `local_unlock.enc` is
 present. Exit code `0` means the vault structure and format are locally usable
 by this client. Missing required paths, wrong file types, malformed metadata, or
 unsupported future formats exit non-zero.
+
+The legacy `psw doctor [--json] <vault-path>` entrypoint remains available for
+compatibility and produces the same bounded report.
 
 The command does not ask for the master password, decrypt item records, print
 item titles or secret fields, repair files, or contact provider APIs. The JSON
@@ -183,24 +204,69 @@ again until the provider-side copy is also handled outside the app.
 When a refreshed item is marked as conflicted, select it in the item list. The
 editor command area can load conflict candidate summaries for that conflict and
 let you choose which version to keep, or merge selected safe fields from another
-candidate into a chosen base revision. Candidate summaries include non-secret
-context such as title, item type, status, favorite state, tags, revision, and a
-short preview. They also include structured comparison fields so candidates can
-be scanned field by field. High-risk values such as passwords, TOTP secrets,
-credit card numbers, verification codes, secure-note bodies, and software
-license keys are shown as hidden/redacted fields rather than plaintext values.
-Changed-field labels still identify which fields differ from at least one other
-candidate, such as `username`, `password`, `TOTP`, `tags`, `body`, `card number`,
-or `license key`.
+candidate into a chosen base revision when every candidate has a lossless
+built-in legacy mapping. Current-format candidate summaries support open typed
+Credentials and include deletion revisions instead of skipping them. They
+include non-secret context such as title, template, status, favorite state,
+tags, and revision.
+
+The unlocked comparison lists ordered text and Secret Fields. Text values are
+available to the human control plane. A Secret Field row contains only its role,
+optional label, immutable Secret Field ID, provider-neutral kind, value-presence
+flag, and whether the complete field differs from at least one candidate.
+Secret bytes never enter the Core summary, FFI response, or Swift conflict
+model. Field additions, removals, type changes, or Secret Field reordering are
+shown as a field-layout change. The UI offers no automatic or implicit Secret
+Field merge.
+
+Losslessly mapped built-in candidates retain the existing structured comparison
+and explicit safe non-secret field merge. High-risk values such as passwords,
+TOTP secrets, credit card numbers, verification codes, secure-note bodies, and
+software license keys remain hidden/redacted in that compatibility view.
 
 While an item is conflicted, ordinary save, favorite, archive, delete, and tag
 replacement actions are unavailable; resolve the conflict first, then edit the
 kept version if more changes are needed.
 
-Choosing a candidate writes a new active revision based on that specific
-candidate, then refreshes item summaries and sync counts. The existing quick
-`Resolve Conflict` action remains available for simple alpha workflows, but the
+Choosing a candidate writes a new revision with that candidate's complete typed
+Credential and lifecycle, naming every current logical conflict head as a
+parent, then refreshes item summaries and sync counts. Selecting a deletion
+candidate therefore preserves deletion rather than silently restoring it.
+Source item and tombstone records remain immutable. The existing quick `Resolve
+Conflict` action remains available for simple alpha workflows, but the
 candidate-based flow is the safer path when competing edits need inspection.
+
+For current-format vaults, an explicit refresh first attempts a conservative
+ancestry-aware three-way merge. It writes a new encrypted revision naming both
+heads as parents only when there are exactly two logical heads, a unique known
+authenticated common base, matching non-deleted lifecycle state, and
+independent changes. Title, template, tags, and favorite are separate
+components. Secret Fields are separate only by immutable Secret Field ID.
+Because text fields do not yet have stable identities, all text fields are one
+indivisible component.
+
+The core does not automatically merge a Secret Field changed on both sides,
+two independently changed text fields, field additions/removals/reordering,
+delete-edit or lifecycle differences, more than two heads, rejected records,
+missing ancestry, or ambiguous ancestry. Both encrypted heads remain available
+for unlocked human resolution. Modification time and lexical revision order are
+never merge evidence.
+
+Unsafe refresh is non-destructive. It does not rewrite, move, truncate, or
+delete either authenticated head. A delete-edit conflict retains the edited
+revision under `items/` and the deletion revision under `tombstones/`.
+Different same-field values, equal ordinary single-parent Secret Field edits,
+and every unprovable head remain distinct conflict revisions. Manual keep or
+merge resolution adds a descendant naming the resolved heads as parents; it
+does not erase their encrypted history.
+
+Two devices can independently calculate the same safe merge while offline.
+Those revisions retain random revision and device identities, but readers
+collapse them to one logical head only when their complete credential,
+lifecycle, and exact parent set are equal and both are multi-parent merge
+revisions. A later descendant of either canonical equivalent also subsumes the
+alternate equivalent head. Ordinary single-parent edits, different content, or
+different parent sets remain a conflict.
 
 Safe field merge writes a new active revision using one selected candidate as
 the base and copying only explicitly allowed non-secret fields from selected
@@ -226,13 +292,14 @@ keeps the rejected local edit visible as an unsaved draft. Review the current
 synced state, then save the preserved draft again only if the local edit is
 still intended.
 
-This is optimistic concurrency protection, not automatic merge. It prevents a
-stale editor form from silently hiding a newer synced edit, and it keeps the
-local input available for deliberate follow-up. After a stale save, the macOS
-client shows a review summary comparing the current synced value with the
-preserved local draft for non-secret fields. Secret-bearing fields are labeled
-but remain hidden. The user must still explicitly save again to apply the
-preserved draft over the current synced item.
+This stale-editor path is optimistic concurrency protection, not an attempt to
+feed an uncommitted local form into automatic merge. It prevents a stale editor
+form from silently hiding a newer synced edit, and it keeps the local input
+available for deliberate follow-up. After a stale save, the macOS client shows
+a review summary comparing the current synced value with the preserved local
+draft for non-secret fields. Secret-bearing fields are labeled but remain
+hidden. The user must still explicitly save again to apply the preserved draft
+over the current synced item.
 
 ## Security Boundary
 
@@ -251,11 +318,14 @@ are never exposed in the current UI contract.
 - Stale edit protection preserves rejected editor saves as local drafts and can
   show non-secret differences for review, but it does not merge rejected local
   edits automatically.
-- Conflict resolution can keep one selected version or merge explicitly safe
-  non-secret fields by candidate revision. It does not yet merge passwords,
-  TOTP secrets, secure-note bodies, credit-card numbers, verification codes,
-  license keys, notes fields, arbitrary edited values, or reveal secrets inside
-  the conflict picker.
+- Automatic three-way merge is intentionally narrower than the persisted field
+  model. Field shape changes, concurrent text-field changes, same-Secret-Field
+  changes, unknown or ambiguous ancestry, delete-edit, and three-or-more-head
+  conflicts require unlocked human resolution.
+- Manual conflict resolution can keep one selected version or merge explicitly
+  safe non-secret fields by candidate revision when lossless built-in mapping
+  exists. Open typed and delete-edit conflicts support whole-version selection.
+  Secret Field bytes never enter the conflict picker.
 - Provider-specific status such as "uploading" or "download complete" is outside
   the app's trust boundary and not shown. The sidebar placement hint can only
   identify common local sync-folder markers.

@@ -3,6 +3,7 @@ use chacha20poly1305::aead::{Aead, Payload};
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 use crate::error::{VaultError, VaultResult};
 use crate::types::SecretBytes;
@@ -10,6 +11,12 @@ use crate::types::SecretBytes;
 const VAULT_KEY_LEN: usize = 32;
 const SALT_LEN: usize = 16;
 const XNONCE_LEN: usize = 24;
+const AEAD_TAG_LEN: usize = 16;
+const WRAPPED_VAULT_KEY_LEN: usize = VAULT_KEY_LEN + AEAD_TAG_LEN;
+const ARGON2_VERSION: u32 = 0x13;
+const ARGON2_MEMORY_KIB: u32 = 64 * 1024;
+const ARGON2_ITERATIONS: u32 = 3;
+const ARGON2_PARALLELISM: u32 = 1;
 const KEY_AAD: &[u8] = b"psw-local-vault:key-envelope:v1";
 const LOCAL_UNLOCK_AAD: &[u8] = b"psw-local-vault:local-unlock-envelope:v1";
 
@@ -18,6 +25,7 @@ pub const LOCAL_UNLOCK_KEY_LEN: usize = VAULT_KEY_LEN;
 
 /// Serialized key envelope stored in `keys.enc`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct KeyEnvelope {
     /// Envelope format name.
     pub format: String,
@@ -35,6 +43,7 @@ pub struct KeyEnvelope {
 
 /// Argon2id metadata for the key envelope.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct KdfMetadata {
     /// KDF algorithm name.
     pub algorithm: String,
@@ -52,6 +61,7 @@ pub struct KdfMetadata {
 
 /// Serialized local unlock envelope stored beside vault files.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LocalUnlockEnvelope {
     /// Envelope format name.
     pub format: String,
@@ -69,10 +79,10 @@ impl KdfMetadata {
     fn current(salt: &[u8]) -> Self {
         Self {
             algorithm: "argon2id".to_owned(),
-            version: 0x13,
-            memory_kib: 64 * 1024,
-            iterations: 3,
-            parallelism: 1,
+            version: ARGON2_VERSION,
+            memory_kib: ARGON2_MEMORY_KIB,
+            iterations: ARGON2_ITERATIONS,
+            parallelism: ARGON2_PARALLELISM,
             salt_hex: hex::encode(salt),
         }
     }
@@ -85,11 +95,18 @@ pub fn create_key_envelope(master_password: &SecretBytes) -> VaultResult<KeyEnve
     let mut vault_key = [0_u8; VAULT_KEY_LEN];
     OsRng.fill_bytes(&mut vault_key);
 
-    let envelope = wrap_vault_key(master_password, &vault_key)?;
+    let envelope = wrap_vault_key(master_password, &vault_key);
+    vault_key.zeroize();
+    envelope
+}
 
-    vault_key.fill(0);
-
-    Ok(envelope)
+/// Wraps an existing random vault key with a new master password.
+pub(crate) fn create_key_envelope_for_vault_key(
+    master_password: &SecretBytes,
+    vault_key: &SecretBytes,
+) -> VaultResult<KeyEnvelope> {
+    validate_master_password_policy(master_password)?;
+    wrap_vault_key(master_password, fixed_vault_key(vault_key)?)
 }
 
 /// Decrypts the vault key from an encrypted key envelope.
@@ -108,15 +125,16 @@ pub fn decrypt_key_envelope(
         });
     }
 
-    let nonce = decode_fixed_hex::<XNONCE_LEN>(&envelope.nonce_hex, "decode key nonce")?;
-    let ciphertext = hex::decode(&envelope.ciphertext_hex).map_err(|error| VaultError::Crypto {
-        operation: "decode key ciphertext",
-        reason: error.to_string(),
-    })?;
-    let wrapping_key = derive_wrapping_key(master_password.expose(), &envelope.kdf)?;
-    let vault_key = decrypt_with_key(&wrapping_key, &nonce, &ciphertext, KEY_AAD)?;
+    let nonce = decode_canonical_fixed_hex::<XNONCE_LEN>(&envelope.nonce_hex, "decode key nonce")?;
+    let ciphertext = decode_canonical_fixed_hex::<WRAPPED_VAULT_KEY_LEN>(
+        &envelope.ciphertext_hex,
+        "decode key ciphertext",
+    )?;
+    let mut wrapping_key = derive_wrapping_key(master_password.expose(), &envelope.kdf)?;
+    let vault_key = decrypt_with_key(&wrapping_key, &nonce, &ciphertext, KEY_AAD);
+    wrapping_key.zeroize();
 
-    Ok(SecretBytes::new(vault_key))
+    Ok(SecretBytes::new(vault_key?))
 }
 
 /// Rewraps an existing key envelope with a new master password.
@@ -145,6 +163,7 @@ pub fn validate_master_password_policy(master_password: &SecretBytes) -> VaultRe
 pub fn create_local_unlock_envelope(
     vault_key: &SecretBytes,
 ) -> VaultResult<(SecretBytes, LocalUnlockEnvelope)> {
+    let vault_key = fixed_vault_key(vault_key)?;
     let mut local_unlock_key = [0_u8; LOCAL_UNLOCK_KEY_LEN];
     let mut nonce = [0_u8; XNONCE_LEN];
     OsRng.fill_bytes(&mut local_unlock_key);
@@ -153,12 +172,13 @@ pub fn create_local_unlock_envelope(
     let ciphertext = encrypt_with_key(
         &local_unlock_key,
         &nonce,
-        fixed_vault_key(vault_key)?,
+        vault_key,
         LOCAL_UNLOCK_AAD,
         "encrypt local unlock envelope",
-    )?;
+    );
     let material = SecretBytes::new(local_unlock_key.to_vec());
-    local_unlock_key.fill(0);
+    local_unlock_key.zeroize();
+    let ciphertext = ciphertext?;
 
     Ok((
         material,
@@ -188,11 +208,12 @@ pub fn decrypt_local_unlock_envelope(
         });
     }
     let key = fixed_local_unlock_key(local_unlock_key)?;
-    let nonce = decode_fixed_hex::<XNONCE_LEN>(&envelope.nonce_hex, "decode local unlock nonce")?;
-    let ciphertext = hex::decode(&envelope.ciphertext_hex).map_err(|error| VaultError::Crypto {
-        operation: "decode local unlock ciphertext",
-        reason: error.to_string(),
-    })?;
+    let nonce =
+        decode_canonical_fixed_hex::<XNONCE_LEN>(&envelope.nonce_hex, "decode local unlock nonce")?;
+    let ciphertext = decode_canonical_fixed_hex::<WRAPPED_VAULT_KEY_LEN>(
+        &envelope.ciphertext_hex,
+        "decode local unlock ciphertext",
+    )?;
     let vault_key = decrypt_with_key(key, &nonce, &ciphertext, LOCAL_UNLOCK_AAD)?;
 
     Ok(SecretBytes::new(vault_key))
@@ -208,14 +229,16 @@ fn wrap_vault_key(
     OsRng.fill_bytes(&mut nonce);
 
     let kdf = KdfMetadata::current(&salt);
-    let wrapping_key = derive_wrapping_key(master_password.expose(), &kdf)?;
+    let mut wrapping_key = derive_wrapping_key(master_password.expose(), &kdf)?;
     let ciphertext = encrypt_with_key(
         &wrapping_key,
         &nonce,
         vault_key,
         KEY_AAD,
         "encrypt vault key",
-    )?;
+    );
+    wrapping_key.zeroize();
+    let ciphertext = ciphertext?;
 
     Ok(KeyEnvelope {
         format: "psw-local-vault-key-envelope".to_owned(),
@@ -249,20 +272,22 @@ fn derive_wrapping_key(
     password: &[u8],
     metadata: &KdfMetadata,
 ) -> VaultResult<[u8; VAULT_KEY_LEN]> {
-    if metadata.algorithm != "argon2id" || metadata.version != 0x13 {
+    if metadata.algorithm != "argon2id"
+        || metadata.version != ARGON2_VERSION
+        || metadata.memory_kib != ARGON2_MEMORY_KIB
+        || metadata.iterations != ARGON2_ITERATIONS
+        || metadata.parallelism != ARGON2_PARALLELISM
+    {
         return Err(VaultError::InvalidVault {
             reason: "unsupported key derivation metadata".to_owned(),
         });
     }
 
-    let salt = hex::decode(&metadata.salt_hex).map_err(|error| VaultError::Crypto {
-        operation: "decode key salt",
-        reason: error.to_string(),
-    })?;
+    let salt = decode_canonical_fixed_hex::<SALT_LEN>(&metadata.salt_hex, "decode key salt")?;
     let params = Params::new(
-        metadata.memory_kib,
-        metadata.iterations,
-        metadata.parallelism,
+        ARGON2_MEMORY_KIB,
+        ARGON2_ITERATIONS,
+        ARGON2_PARALLELISM,
         Some(VAULT_KEY_LEN),
     )
     .map_err(|error| VaultError::Crypto {
@@ -271,12 +296,16 @@ fn derive_wrapping_key(
     })?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut output = [0_u8; VAULT_KEY_LEN];
-    argon2
+    let result = argon2
         .hash_password_into(password, &salt, &mut output)
         .map_err(|error| VaultError::Crypto {
             operation: "derive wrapping key",
             reason: error.to_string(),
-        })?;
+        });
+    if let Err(error) = result {
+        output.zeroize();
+        return Err(error);
+    }
     Ok(output)
 }
 
@@ -320,10 +349,20 @@ fn decrypt_with_key(
         .map_err(|_| VaultError::InvalidCredentials)
 }
 
-fn decode_fixed_hex<const LEN: usize>(
+fn decode_canonical_fixed_hex<const LEN: usize>(
     value: &str,
     operation: &'static str,
 ) -> VaultResult<[u8; LEN]> {
+    if value.len() != LEN * 2
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(VaultError::Crypto {
+            operation,
+            reason: format!("expected {LEN} bytes of lowercase hexadecimal"),
+        });
+    }
     let decoded = hex::decode(value).map_err(|error| VaultError::Crypto {
         operation,
         reason: error.to_string(),
@@ -337,8 +376,8 @@ fn decode_fixed_hex<const LEN: usize>(
 #[cfg(test)]
 mod tests {
     use crate::crypto::{
-        create_key_envelope, create_local_unlock_envelope, decrypt_key_envelope,
-        decrypt_local_unlock_envelope, rewrap_key_envelope,
+        create_key_envelope, create_key_envelope_for_vault_key, create_local_unlock_envelope,
+        decrypt_key_envelope, decrypt_local_unlock_envelope, rewrap_key_envelope, KeyEnvelope,
     };
     use crate::SecretBytes;
 
@@ -380,6 +419,63 @@ mod tests {
         let error = decrypt_key_envelope(&envelope, &wrong_password).expect_err("wrong password");
 
         assert!(matches!(error, crate::VaultError::InvalidCredentials));
+    }
+
+    #[test]
+    fn key_envelope_rejects_unbounded_or_noncanonical_kdf_metadata() {
+        let password = SecretBytes::new(b"correct horse battery staple".to_vec());
+        let mut envelope = create_key_envelope(&password).expect("create envelope");
+        envelope.kdf.memory_kib = u32::MAX;
+
+        let error = decrypt_key_envelope(&envelope, &password).expect_err("reject KDF cost");
+
+        assert!(matches!(error, crate::VaultError::InvalidVault { .. }));
+
+        let mut envelope = create_key_envelope(&password).expect("create envelope");
+        envelope.kdf.salt_hex = "AA".repeat(16);
+        let error =
+            decrypt_key_envelope(&envelope, &password).expect_err("reject noncanonical salt");
+        assert!(matches!(error, crate::VaultError::Crypto { .. }));
+    }
+
+    #[test]
+    fn key_envelope_rejects_noncanonical_ciphertext_length() {
+        let password = SecretBytes::new(b"correct horse battery staple".to_vec());
+        let mut envelope = create_key_envelope(&password).expect("create envelope");
+        envelope.ciphertext_hex.push_str("00");
+
+        let error =
+            decrypt_key_envelope(&envelope, &password).expect_err("reject ciphertext length");
+
+        assert!(matches!(error, crate::VaultError::Crypto { .. }));
+    }
+
+    #[test]
+    fn key_envelope_schema_rejects_unknown_fields() {
+        let password = SecretBytes::new(b"correct horse battery staple".to_vec());
+        let envelope = create_key_envelope(&password).expect("create envelope");
+        let mut encoded = serde_json::to_value(envelope).expect("serialize envelope");
+        encoded
+            .as_object_mut()
+            .expect("envelope object")
+            .insert("unexpected".to_owned(), serde_json::json!(true));
+
+        let error = serde_json::from_value::<KeyEnvelope>(encoded)
+            .expect_err("reject unknown envelope field");
+
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn key_envelope_can_wrap_an_existing_vault_key() {
+        let password = SecretBytes::new(b"new master password".to_vec());
+        let vault_key = SecretBytes::new(vec![0x5a; 32]);
+
+        let envelope = create_key_envelope_for_vault_key(&password, &vault_key)
+            .expect("wrap existing vault key");
+        let reopened = decrypt_key_envelope(&envelope, &password).expect("decrypt wrapped key");
+
+        assert_eq!(reopened.expose(), vault_key.expose());
     }
 
     #[test]

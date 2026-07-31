@@ -123,6 +123,7 @@ struct PSWMacApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(store)
+                .environment(\.locale, text.locale)
                 .tint(KeptNearBrand.primary)
                 .frame(minWidth: 1_040, minHeight: 680)
                 .onAppear {
@@ -151,6 +152,7 @@ struct PSWMacApp: App {
         Settings {
             SettingsView()
                 .environmentObject(store)
+                .environment(\.locale, text.locale)
                 .tint(KeptNearBrand.primary)
         }
     }

@@ -1,0 +1,27 @@
+[package]
+name = "keptnear-mcp"
+version = "0.1.0"
+description = "Local MCP adapter for the KeptNear credential Broker."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "keptnear-mcp"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "=0.22.1"
+keptnear-client = { path = "../keptnear-client" }
+psw-broker = { path = "../psw-broker" }
+serde = "=1.0.228"
+serde_json = "=1.0.150"
+
+[lints]
+workspace = true

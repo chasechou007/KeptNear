@@ -1,0 +1,12 @@
+{
+  "registryVersion": 1,
+  "sourceVersions": [
+    {
+      "sourceId": "vault-v1-record-v1",
+      "vaultFormatVersion": 1,
+      "recordFormatVersion": 1,
+      "manifestPath": "golden-vault-manifest.json",
+      "fixturePath": "golden-vault-v1.pswvault"
+    }
+  ]
+}

@@ -32,7 +32,19 @@ final class VaultStore: ObservableObject {
     static let autoLockSecondsKey = "security.autoLockSeconds"
     static let bitwardenJsonImportFormat = "bitwarden-json"
     static let genericLoginCsvImportFormat = "generic-login-csv"
-    static let knownItemTypeOrder = ["login", "secure note", "credit card", "software license"]
+    nonisolated static let appsToolsVaultPathConflictStatus =
+        "Vault copy conflict detected; Apps & Tools access is unavailable"
+    static let knownItemTypeOrder = [
+        "login",
+        "api token",
+        "api key",
+        "ssh key",
+        "certificate",
+        "secure note",
+        "custom",
+        "credit card",
+        "software license"
+    ]
 
     @MainActor
     private struct NavigationFilterState {
@@ -41,6 +53,7 @@ final class VaultStore: ObservableObject {
         let showArchivedOnly: Bool
         let showFavoritesOnly: Bool
         let showConflictsOnly: Bool
+        let selectedSmartView: VaultSmartView?
         let selectedItemTypeFilter: String?
         let selectedTagFilter: String?
 
@@ -50,6 +63,7 @@ final class VaultStore: ObservableObject {
             showArchivedOnly = store.showArchivedOnly
             showFavoritesOnly = store.showFavoritesOnly
             showConflictsOnly = store.showConflictsOnly
+            selectedSmartView = store.selectedSmartView
             selectedItemTypeFilter = store.selectedItemTypeFilter
             selectedTagFilter = store.selectedTagFilter
         }
@@ -60,6 +74,7 @@ final class VaultStore: ObservableObject {
             store.showArchivedOnly = showArchivedOnly
             store.showFavoritesOnly = showFavoritesOnly
             store.showConflictsOnly = showConflictsOnly
+            store.selectedSmartView = selectedSmartView
             store.selectedItemTypeFilter = selectedItemTypeFilter
             store.selectedTagFilter = selectedTagFilter
         }
@@ -73,6 +88,7 @@ final class VaultStore: ObservableObject {
     @Published var selectedSecureNoteDetail: SecureNoteDetail?
     @Published var selectedCreditCardDetail: CreditCardDetail?
     @Published var selectedSoftwareLicenseDetail: SoftwareLicenseDetail?
+    @Published var selectedCredentialDetail: CredentialDetail?
     @Published var conflictCandidates: [ConflictCandidateView] = []
     @Published var searchText = ""
     @Published var statusMessage = ""
@@ -81,12 +97,25 @@ final class VaultStore: ObservableObject {
     @Published var showArchivedOnly = false
     @Published var showFavoritesOnly = false
     @Published var showConflictsOnly = false
+    @Published var selectedSmartView: VaultSmartView?
     @Published var selectedItemTypeFilter: String?
     @Published private(set) var availableItemTypes: [String] = []
     @Published var selectedTagFilter: String?
     @Published private(set) var availableTags: [String] = []
     @Published private(set) var navigationDestination = VaultNavigationDestination.allItems
     @Published private(set) var navigationItems: [VaultItemView] = []
+    @Published private(set) var authorizedCredentialIds: Set<String> = []
+    @Published private(set) var appsToolsAuthorizationInventoryAvailable = true
+    @Published private(set) var appsToolsVaultPathConflict = false
+    @Published private(set) var appsToolsSnapshot = AppsToolsSnapshot.empty
+    @Published private(set) var selectedAppsToolsConsumerId: String?
+    @Published private(set) var selectedAppsToolsConsumerDetail: AppsToolsConsumerDetail?
+    @Published private(set) var appsToolsUsageProfileSetup: AppsToolsUsageProfileSetup?
+    @Published private(set) var appsToolsUsageProfileActionFailed = false
+    @Published private(set) var appsToolsPendingRequests = AppsToolsPendingRequestQueue.empty
+    @Published private(set) var appsToolsPendingRequestsAvailable = true
+    @Published private(set) var appsToolsPendingRequestActionInFlightId: String?
+    @Published private(set) var appsToolsPendingRequestActionFailed = false
     @Published var clipboardTimeout: TimeInterval = VaultStore.defaultClipboardTimeout {
         didSet {
             let normalizedValue = normalizePreference(
@@ -125,6 +154,11 @@ final class VaultStore: ObservableObject {
     @Published var restoreBackupResult: RestoreBackupResultPayload?
     @Published var copyVaultToSyncResult: RestoreBackupResultPayload?
     @Published var plaintextExportURL: URL?
+    @Published private(set) var recoveryStatus: RecoveryStatusPayload?
+    @Published private(set) var recoveryKit: RecoveryKitPayload?
+    @Published private(set) var recoveryKitHasExternalCopy = false
+    @Published private(set) var lockedRecoveryStatus: RecoveryStatusPayload?
+    @Published private(set) var lockedRecoveryStatusCheckFailed = false
     @Published var backupDestinationURL: URL?
     @Published var restoredBackupURL: URL?
     @Published var copiedSyncVaultURL: URL?
@@ -141,11 +175,15 @@ final class VaultStore: ObservableObject {
     private let convenienceUnlockStore: ConvenienceUnlockStoring
     private let importSourceHandler: ImportSourceHandling
     private let urlOpener: URLOpening
+    private let recoveryKitHandler: RecoveryKitHandling
+    private var approvalNotificationScheduler: ApprovalNotificationScheduling?
     private let userDefaults: UserDefaults
     private let now: () -> Date
     private var autoLockTimer: Timer?
     private var syncPollTimer: Timer?
+    private var approvalPollTimer: Timer?
     private var cancellables = Set<AnyCancellable>()
+    private var knownPendingRequestIds = Set<String>()
     private var lastActivity = Date()
     private var lastVaultSignature: String?
     private var editorHasUnsavedChanges = false
@@ -161,7 +199,11 @@ final class VaultStore: ObservableObject {
     }
 
     var navigationCounts: VaultNavigationCounts {
-        VaultNavigationCounts(items: navigationItems, passwordHealth: passwordHealth)
+        VaultNavigationCounts(
+            items: navigationItems,
+            passwordHealth: passwordHealth,
+            authorizedCredentialIds: authorizedCredentialIds
+        )
     }
 
     var hasActiveListFilters: Bool {
@@ -169,6 +211,7 @@ final class VaultStore: ObservableObject {
             || showArchivedOnly
             || showFavoritesOnly
             || showConflictsOnly
+            || selectedSmartView != nil
             || selectedItemTypeFilter != nil
             || selectedTagFilter != nil
             || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -204,6 +247,7 @@ final class VaultStore: ObservableObject {
             || selectedItem.isSecureNote
             || selectedItem.isCreditCard
             || selectedItem.isSoftwareLicense
+            || selectedItem.isTemplateCredential
     }
 
     var canCopyLoginFields: Bool {
@@ -229,6 +273,12 @@ final class VaultStore: ObservableObject {
 
     var canCopySoftwareLicenseFields: Bool {
         selectedItem?.isSoftwareLicense == true && canMutateSelectedItem
+    }
+
+    var canUseSelectedCredentialSecret: Bool {
+        selectedItem?.isTemplateCredential == true
+            && selectedItem?.isConflicted == false
+            && selectedCredentialDetail?.secretFields.contains(where: \.hasValue) == true
     }
 
     var canExport: Bool {
@@ -270,12 +320,13 @@ final class VaultStore: ObservableObject {
 
     func diagnosticsSnapshot(languageRaw: String) -> DiagnosticsSnapshot {
         let readiness = syncReadiness
+        let coreAvailable = service.isAvailable
         return DiagnosticsSnapshot(
             appName: bundleValue("CFBundleName", fallback: KeptNearBrand.name),
             appVersion: bundleValue("CFBundleShortVersionString", fallback: "development"),
             appBuild: bundleValue("CFBundleVersion", fallback: "development"),
-            coreAvailable: service.isAvailable,
-            coreStatus: service.status,
+            coreAvailable: coreAvailable,
+            coreStatus: coreAvailable ? .connected : .unavailable,
             vaultSelected: vaultURL != nil,
             vaultName: vaultURL?.lastPathComponent,
             unlocked: isUnlocked,
@@ -348,6 +399,8 @@ final class VaultStore: ObservableObject {
         convenienceUnlockStore: ConvenienceUnlockStoring = KeychainConvenienceUnlockStore(),
         importSourceHandler: ImportSourceHandling = MacImportSourceHandler(),
         urlOpener: URLOpening = MacURLOpener(),
+        recoveryKitHandler: RecoveryKitHandling? = nil,
+        approvalNotificationScheduler: ApprovalNotificationScheduling? = nil,
         now: @escaping () -> Date = Date.init,
         userDefaults: UserDefaults = .standard
     ) {
@@ -357,6 +410,8 @@ final class VaultStore: ObservableObject {
         self.convenienceUnlockStore = convenienceUnlockStore
         self.importSourceHandler = importSourceHandler
         self.urlOpener = urlOpener
+        self.recoveryKitHandler = recoveryKitHandler ?? MacRecoveryKitHandler()
+        self.approvalNotificationScheduler = approvalNotificationScheduler
         self.now = now
         self.userDefaults = userDefaults
         statusMessage = service.status
@@ -412,8 +467,28 @@ final class VaultStore: ObservableObject {
             refreshConvenienceUnlockAvailability()
             resetVaultSignature()
             startSyncPolling()
-            statusMessage = "Vault created"
             didCreate = true
+
+            guard let createdSessionId = sessionId else {
+                throw CoreBridgeError.commandFailed("Vault session was not created")
+            }
+            do {
+                recoveryKit = try service.beginRecoverySetup(sessionId: createdSessionId)
+                recoveryKitHasExternalCopy = false
+                recoveryStatus = RecoveryStatusPayload(
+                    hasRecoveryEnvelope: true,
+                    recoveryKeyId: recoveryKit?.recoveryKeyId
+                )
+                statusMessage = "Vault created"
+            } catch {
+                recoveryKit = nil
+                recoveryKitHasExternalCopy = false
+                refreshRecoveryStatus()
+                statusMessage = "Vault created without recovery setup"
+            }
+            if appsToolsVaultPathConflict {
+                statusMessage = Self.appsToolsVaultPathConflictStatus
+            }
         }
         return didCreate
     }
@@ -431,6 +506,7 @@ final class VaultStore: ObservableObject {
             vaultURL = url
             rememberVault(url)
             refreshConvenienceUnlockAvailability()
+            refreshLockedRecoveryStatus()
             statusMessage = url.lastPathComponent
             didOpen = true
         }
@@ -459,7 +535,9 @@ final class VaultStore: ObservableObject {
                 try saveConvenienceUnlockMaterial(for: vaultURL)
                 refreshConvenienceUnlockAvailability()
             }
-            statusMessage = "Vault unlocked"
+            statusMessage = appsToolsVaultPathConflict
+                ? Self.appsToolsVaultPathConflictStatus
+                : "Vault unlocked"
         }
     }
 
@@ -479,7 +557,9 @@ final class VaultStore: ObservableObject {
                 refreshConvenienceUnlockAvailability()
                 throw error
             }
-            statusMessage = "Vault unlocked with Keychain"
+            statusMessage = appsToolsVaultPathConflict
+                ? Self.appsToolsVaultPathConflictStatus
+                : "Vault unlocked with Keychain"
         }
     }
 
@@ -548,11 +628,251 @@ final class VaultStore: ObservableObject {
         }
     }
 
+    func refreshRecoveryStatus() {
+        guard let sessionId else {
+            recoveryStatus = nil
+            return
+        }
+        do {
+            recoveryStatus = try service.recoveryStatus(sessionId: sessionId)
+        } catch {
+            recoveryStatus = nil
+        }
+    }
+
+    func refreshLockedRecoveryStatus() {
+        guard !isUnlocked, let vaultURL else {
+            lockedRecoveryStatus = nil
+            lockedRecoveryStatusCheckFailed = false
+            return
+        }
+        do {
+            lockedRecoveryStatus = try service.lockedRecoveryStatus(path: vaultURL.path)
+            lockedRecoveryStatusCheckFailed = false
+        } catch {
+            lockedRecoveryStatus = nil
+            lockedRecoveryStatusCheckFailed = true
+        }
+    }
+
+    @discardableResult
+    func recoverVault(
+        recoveryCode: String,
+        newPassword: String,
+        confirmation: String
+    ) -> Bool {
+        guard let vaultURL, !isUnlocked else {
+            statusMessage = "Select a locked vault first"
+            return false
+        }
+        guard lockedRecoveryStatus?.hasRecoveryEnvelope == true else {
+            statusMessage = "Offline recovery is not available for this vault"
+            return false
+        }
+        guard !recoveryCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            statusMessage = "Recovery code is required"
+            return false
+        }
+        guard !newPassword.isEmpty else {
+            statusMessage = "New master password is required"
+            return false
+        }
+        guard newPassword == confirmation else {
+            statusMessage = "New master passwords do not match"
+            return false
+        }
+
+        touch()
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            let unlocked = try service.recoverVault(
+                path: vaultURL.path,
+                recoveryCode: recoveryCode,
+                newPassword: newPassword
+            )
+            applyUnlocked(unlocked)
+            let keychainCleanupSucceeded = clearConvenienceUnlockMaterial(for: vaultURL)
+            refreshConvenienceUnlockAvailability()
+            resetVaultSignature()
+            startSyncPolling()
+            statusMessage = appsToolsVaultPathConflict
+                ? Self.appsToolsVaultPathConflictStatus
+                : keychainCleanupSucceeded
+                    ? "Vault recovered"
+                    : "Vault recovered, but Keychain cleanup failed"
+            return true
+        } catch {
+            let message = statusMessage(for: error)
+            statusMessage = message.localizedCaseInsensitiveContains("invalid vault credentials")
+                || message.localizedCaseInsensitiveContains("invalid KeptNear recovery key")
+                ? "Recovery code is invalid or does not match this vault"
+                : message
+            return false
+        }
+    }
+
+    @discardableResult
+    func beginRecoverySetup() -> Bool {
+        beginRecoveryWorkflow(rotation: false)
+    }
+
+    @discardableResult
+    func beginRecoveryRotation() -> Bool {
+        beginRecoveryWorkflow(rotation: true)
+    }
+
+    private func beginRecoveryWorkflow(rotation: Bool) -> Bool {
+        guard let sessionId else {
+            statusMessage = "Unlock a vault first"
+            return false
+        }
+        guard recoveryKit == nil else {
+            statusMessage = "Finish or defer the pending recovery kit first"
+            return false
+        }
+
+        touch()
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            recoveryKit = rotation
+                ? try service.beginRecoveryRotation(sessionId: sessionId)
+                : try service.beginRecoverySetup(sessionId: sessionId)
+            recoveryKitHasExternalCopy = false
+            recoveryStatus = RecoveryStatusPayload(
+                hasRecoveryEnvelope: true,
+                recoveryKeyId: recoveryKit?.workflowKind == .setup
+                    ? recoveryKit?.recoveryKeyId
+                    : recoveryStatus?.recoveryKeyId
+            )
+            statusMessage = "Save or print the recovery kit"
+            return true
+        } catch {
+            statusMessage = statusMessage(for: error)
+            return false
+        }
+    }
+
+    @discardableResult
+    func saveRecoveryKit(
+        destinationURL: URL,
+        copy: RecoveryKitDocumentCopy
+    ) -> Bool {
+        guard let recoveryKit else {
+            statusMessage = "No recovery kit is pending"
+            return false
+        }
+        touch()
+        do {
+            try recoveryKitHandler.savePDF(
+                kit: recoveryKit,
+                copy: copy,
+                destinationURL: destinationURL
+            )
+            recoveryKitHasExternalCopy = true
+            statusMessage = "Recovery kit saved"
+            return true
+        } catch {
+            statusMessage = "Recovery kit could not be saved"
+            return false
+        }
+    }
+
+    @discardableResult
+    func printRecoveryKit(copy: RecoveryKitDocumentCopy) -> Bool {
+        guard let recoveryKit else {
+            statusMessage = "No recovery kit is pending"
+            return false
+        }
+        touch()
+        do {
+            try recoveryKitHandler.printKit(kit: recoveryKit, copy: copy)
+            recoveryKitHasExternalCopy = true
+            statusMessage = "Recovery kit sent to print"
+            return true
+        } catch {
+            statusMessage = "Recovery kit was not printed"
+            return false
+        }
+    }
+
+    @discardableResult
+    func confirmRecoveryKit(recoveryCode: String) -> Bool {
+        guard let sessionId, let recoveryKit else {
+            statusMessage = "No recovery kit is pending"
+            return false
+        }
+        guard recoveryKitHasExternalCopy else {
+            statusMessage = "Save or print the recovery kit first"
+            return false
+        }
+        guard !recoveryCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            statusMessage = "Enter the saved recovery code"
+            return false
+        }
+
+        touch()
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            let confirmation = try service.confirmRecoveryWorkflow(
+                sessionId: sessionId,
+                workflowId: recoveryKit.workflowId,
+                recoveryCode: recoveryCode
+            )
+            recoveryStatus = RecoveryStatusPayload(
+                hasRecoveryEnvelope: true,
+                recoveryKeyId: confirmation.recoveryKeyId
+            )
+            self.recoveryKit = nil
+            recoveryKitHasExternalCopy = false
+            statusMessage = confirmation.workflowKind == .rotation
+                ? "Recovery key rotated"
+                : "Recovery setup confirmed"
+            return true
+        } catch {
+            let message = statusMessage(for: error)
+            if message.contains("recovery rotation commit failed") {
+                self.recoveryKit = nil
+                recoveryKitHasExternalCopy = false
+                refreshRecoveryStatus()
+                statusMessage = "Recovery rotation failed; start again"
+            } else {
+                statusMessage = message
+            }
+            return false
+        }
+    }
+
+    func deferRecoveryKit() {
+        guard let sessionId, let recoveryKit else { return }
+        let workflowKind = recoveryKit.workflowKind
+        touch()
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            try service.cancelRecoveryWorkflow(
+                sessionId: sessionId,
+                workflowId: recoveryKit.workflowId
+            )
+            self.recoveryKit = nil
+            recoveryKitHasExternalCopy = false
+            refreshRecoveryStatus()
+            statusMessage = workflowKind == .rotation
+                ? "Recovery rotation cancelled; the existing recovery key remains active"
+                : "Recovery setup remains unconfirmed"
+        } catch {
+            statusMessage = statusMessage(for: error)
+        }
+    }
+
     func lock() {
         guard let sessionId else { return }
         perform {
             clearActiveVaultSession(sessionId: sessionId)
             refreshConvenienceUnlockAvailability()
+            refreshLockedRecoveryStatus()
             statusMessage = "Vault locked"
         }
     }
@@ -655,6 +975,7 @@ final class VaultStore: ObservableObject {
         showArchivedOnly = false
         showFavoritesOnly = false
         showConflictsOnly = false
+        selectedSmartView = nil
         selectedItemTypeFilter = nil
         selectedTagFilter = nil
         _ = search()
@@ -679,6 +1000,7 @@ final class VaultStore: ObservableObject {
         showArchivedOnly = false
         showFavoritesOnly = false
         showConflictsOnly = false
+        selectedSmartView = nil
         selectedItemTypeFilter = nil
         selectedTagFilter = nil
         let applied = search()
@@ -689,16 +1011,47 @@ final class VaultStore: ObservableObject {
         return applied
     }
 
+    private var appsToolsUnavailableStatusMessage: String {
+        appsToolsVaultPathConflict
+            ? Self.appsToolsVaultPathConflictStatus
+            : "Apps & Tools authorization inventory unavailable"
+    }
+
     @discardableResult
     func applyNavigationDestination(
         _ destination: VaultNavigationDestination,
         discardingUnsavedEdits: Bool = false
     ) -> Bool {
         guard isUnlocked else { return false }
-        guard destination != navigationDestination else { return true }
+        let usesAppsToolsInventory = destination == .appsAndTools
+            || destination == .smartView(.appsToolsAuthorized)
+        if usesAppsToolsInventory {
+            refreshAuthorizationInventory(loadConsumerDetail: destination == .appsAndTools)
+        }
+        guard destination != navigationDestination else {
+            guard usesAppsToolsInventory else { return true }
+            if destination == .appsAndTools {
+                statusMessage = appsToolsAuthorizationInventoryAvailable
+                    ? ""
+                    : appsToolsUnavailableStatusMessage
+                return true
+            }
+            let applied = search()
+            if applied {
+                statusMessage = appsToolsAuthorizationInventoryAvailable
+                    ? ""
+                    : appsToolsUnavailableStatusMessage
+            }
+            return applied
+        }
 
-        if destination == .security {
-            navigationDestination = .security
+        if destination == .security || destination == .appsAndTools {
+            navigationDestination = destination
+            if destination == .appsAndTools {
+                statusMessage = appsToolsAuthorizationInventoryAvailable
+                    ? ""
+                    : appsToolsUnavailableStatusMessage
+            }
             return true
         }
 
@@ -714,7 +1067,397 @@ final class VaultStore: ObservableObject {
         }
 
         navigationDestination = destination
+        if destination == .smartView(.appsToolsAuthorized) {
+            statusMessage = appsToolsAuthorizationInventoryAvailable
+                ? ""
+                : appsToolsUnavailableStatusMessage
+        }
         return true
+    }
+
+    func selectAppsToolsConsumer(_ consumerId: String) {
+        guard isUnlocked,
+              appsToolsAuthorizationInventoryAvailable,
+              appsToolsSnapshot.consumers.contains(where: { $0.consumerId == consumerId })
+        else {
+            return
+        }
+        selectedAppsToolsConsumerId = consumerId
+        selectedAppsToolsConsumerDetail = nil
+        appsToolsUsageProfileSetup = nil
+        appsToolsUsageProfileActionFailed = false
+        loadSelectedAppsToolsConsumerDetail()
+    }
+
+    func startApprovalMonitoring() {
+        guard approvalPollTimer == nil else { return }
+        if approvalNotificationScheduler == nil {
+            approvalNotificationScheduler = MacApprovalNotificationScheduler()
+        }
+        approvalNotificationScheduler?.prepare()
+        refreshAppsToolsPendingRequests()
+        approvalPollTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) {
+            [weak self] _ in
+            guard let self else { return }
+            Task { @MainActor in
+                self.refreshAppsToolsPendingRequests()
+            }
+        }
+        approvalPollTimer?.tolerance = 0.5
+    }
+
+    func refreshAppsToolsPendingRequests() {
+        do {
+            let queue = try service.appsToolsPendingRequests()
+            let activeIds = Set(queue.requests.map(\.id))
+            let newIds = activeIds.subtracting(knownPendingRequestIds)
+            let text = AppText(
+                userDefaults.string(forKey: AppLanguage.storageKey)
+                    ?? AppLanguage.english.rawValue
+            )
+
+            appsToolsPendingRequests = queue
+            appsToolsPendingRequestsAvailable = true
+            for requestId in newIds.sorted() {
+                approvalNotificationScheduler?.postPendingRequest(
+                    identifier: requestId,
+                    title: text.approvalNotificationTitle,
+                    body: text.approvalNotificationBody
+                )
+            }
+            approvalNotificationScheduler?.reconcile(
+                activeRequestIdentifiers: activeIds
+            )
+            knownPendingRequestIds = activeIds
+        } catch {
+            appsToolsPendingRequests = .empty
+            appsToolsPendingRequestsAvailable = false
+        }
+    }
+
+    func clearAppsToolsPendingRequestActionError() {
+        appsToolsPendingRequestActionFailed = false
+    }
+
+    @discardableResult
+    func denyAppsToolsPendingRequest(_ request: AppsToolsPendingRequest) -> Bool {
+        performAppsToolsPendingRequestAction(request) {
+            let decision = try service.denyAppsToolsPendingRequest(
+                requestSource: request.requestSource,
+                requestId: request.requestId
+            )
+            guard decision.action == "deny", decision.status == "denied" else {
+                throw CoreBridgeError.unexpectedResponse
+            }
+            return decision
+        } != nil
+    }
+
+    @discardableResult
+    func approveAppsToolsPairing(
+        _ request: AppsToolsPendingRequest,
+        label: String
+    ) -> Bool {
+        let normalizedLabel = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard request.requestSource == "pairing",
+              request.kind == "pairing",
+              !normalizedLabel.isEmpty
+        else {
+            markAppsToolsPendingRequestActionFailed()
+            return false
+        }
+        return performAppsToolsPendingRequestAction(request) {
+            let decision = try service.approveAppsToolsPairing(
+                requestId: request.requestId,
+                label: normalizedLabel
+            )
+            guard decision.action == "pair", decision.status == "awaiting-proof" else {
+                throw CoreBridgeError.unexpectedResponse
+            }
+            return decision
+        } != nil
+    }
+
+    @discardableResult
+    func approveAppsToolsPendingUnlock(_ request: AppsToolsPendingRequest) -> Bool {
+        guard request.requestSource == "approval",
+              request.kind == "unlock",
+              let sessionId
+        else {
+            markAppsToolsPendingRequestActionFailed()
+            return false
+        }
+        return performAppsToolsPendingRequestAction(request) {
+            let decision = try service.approveAppsToolsPendingUnlock(
+                sessionId: sessionId,
+                requestId: request.requestId
+            )
+            guard decision.action == "approve-unlock", decision.status == "approved" else {
+                throw CoreBridgeError.unexpectedResponse
+            }
+            return decision
+        } != nil
+    }
+
+    func reviewAppsToolsPendingCredential(
+        _ request: AppsToolsPendingRequest
+    ) -> AppsToolsCredentialReview? {
+        guard request.requestSource == "approval",
+              request.kind == "credential-access",
+              let sessionId
+        else {
+            markAppsToolsPendingRequestActionFailed()
+            return nil
+        }
+        return performAppsToolsPendingRequestAction(request, refreshAfterSuccess: false) {
+            try service.reviewAppsToolsPendingCredential(
+                sessionId: sessionId,
+                requestId: request.requestId
+            )
+        }
+    }
+
+    @discardableResult
+    func allowAppsToolsPendingRequestOnce(
+        _ request: AppsToolsPendingRequest,
+        selection: AppsToolsCredentialSelection? = nil
+    ) -> Bool {
+        guard request.requestSource == "approval",
+              request.kind == "access" || request.kind == "credential-access",
+              let sessionId,
+              (request.kind == "credential-access") == (selection != nil)
+        else {
+            markAppsToolsPendingRequestActionFailed()
+            return false
+        }
+        return performAppsToolsPendingRequestAction(request) {
+            let decision = try service.allowAppsToolsPendingRequestOnce(
+                sessionId: sessionId,
+                requestId: request.requestId,
+                credentialId: selection?.credentialId,
+                secretFieldId: selection?.secretFieldId
+            )
+            guard decision.action == "allow-once", decision.status == "approved" else {
+                throw CoreBridgeError.unexpectedResponse
+            }
+            return decision
+        } != nil
+    }
+
+    @discardableResult
+    func configureAppsToolsLongTermAccess(
+        _ request: AppsToolsPendingRequest,
+        selection: AppsToolsCredentialSelection? = nil,
+        confirmationPolicy: AppsToolsConfirmationPolicy
+    ) -> Bool {
+        guard request.requestSource == "approval",
+              request.kind == "access" || request.kind == "credential-access",
+              let sessionId,
+              (request.kind == "credential-access") == (selection != nil)
+        else {
+            markAppsToolsPendingRequestActionFailed()
+            return false
+        }
+        return performAppsToolsPendingRequestAction(request) {
+            let decision = try service.configureAppsToolsLongTermAccess(
+                sessionId: sessionId,
+                requestId: request.requestId,
+                credentialId: selection?.credentialId,
+                secretFieldId: selection?.secretFieldId,
+                confirmationPolicy: confirmationPolicy
+            )
+            guard decision.action == "configure-long-term-access",
+                  decision.status == "approved",
+                  decision.accessRuleId != nil
+            else {
+                throw CoreBridgeError.unexpectedResponse
+            }
+            return decision
+        } != nil
+    }
+
+    func setAppsToolsPaused(_ paused: Bool) {
+        guard let sessionId,
+              appsToolsAuthorizationInventoryAvailable,
+              !isBusy,
+              appsToolsSnapshot.paused != paused
+        else {
+            return
+        }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            let snapshot = try service.setAppsToolsPaused(sessionId: sessionId, paused: paused)
+            applyAppsToolsSnapshot(snapshot, loadConsumerDetail: true)
+            statusMessage = paused
+                ? "Apps & Tools access paused"
+                : "Apps & Tools access resumed"
+        } catch {
+            markAppsToolsManagementUnavailable(error)
+        }
+    }
+
+    private func performAppsToolsPendingRequestAction<Result>(
+        _ request: AppsToolsPendingRequest,
+        refreshAfterSuccess: Bool = true,
+        action: () throws -> Result
+    ) -> Result? {
+        guard appsToolsPendingRequestActionInFlightId == nil,
+              appsToolsPendingRequests.requests.contains(where: { $0.id == request.id })
+        else {
+            markAppsToolsPendingRequestActionFailed()
+            return nil
+        }
+
+        appsToolsPendingRequestActionFailed = false
+        appsToolsPendingRequestActionInFlightId = request.id
+        defer {
+            appsToolsPendingRequestActionInFlightId = nil
+        }
+
+        do {
+            let result = try action()
+            if refreshAfterSuccess {
+                refreshAppsToolsPendingRequests()
+            }
+            return result
+        } catch {
+            appsToolsPendingRequestActionFailed = true
+            return nil
+        }
+    }
+
+    private func markAppsToolsPendingRequestActionFailed() {
+        appsToolsPendingRequestActionFailed = true
+    }
+
+    func revokeAppsToolsField(_ grant: AppsToolsFieldGrant) {
+        guard let sessionId,
+              let consumerId = selectedAppsToolsConsumerId,
+              appsToolsAuthorizationInventoryAvailable,
+              !isBusy
+        else {
+            return
+        }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            let snapshot = try service.revokeAppsToolsField(
+                sessionId: sessionId,
+                consumerId: consumerId,
+                field: grant.field
+            )
+            applyAppsToolsSnapshot(snapshot, loadConsumerDetail: true)
+            statusMessage = "Apps & Tools field access revoked"
+        } catch {
+            markAppsToolsManagementUnavailable(error)
+        }
+    }
+
+    @discardableResult
+    func createAppsToolsUsageProfile(_ draft: AppsToolsUsageProfileDraft) -> Bool {
+        guard let sessionId,
+              let consumerId = selectedAppsToolsConsumerId,
+              let detail = selectedAppsToolsConsumerDetail,
+              detail.consumer.consumerId == consumerId,
+              let setup = appsToolsUsageProfileSetup,
+              setup.consumerId == consumerId,
+              setup.template(draft.templateId) != nil,
+              !draft.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              appsToolsAuthorizationInventoryAvailable,
+              !isBusy
+        else {
+            appsToolsUsageProfileActionFailed = true
+            return false
+        }
+
+        appsToolsUsageProfileActionFailed = false
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            let profile = try service.createAppsToolsUsageProfile(
+                sessionId: sessionId,
+                consumerId: consumerId,
+                draft: draft
+            )
+            guard !detail.usageProfiles.contains(where: {
+                $0.usageProfileId == profile.usageProfileId
+            }) else {
+                appsToolsUsageProfileActionFailed = true
+                return false
+            }
+            replaceSelectedAppsToolsUsageProfiles(detail.usageProfiles + [profile])
+            return true
+        } catch {
+            appsToolsUsageProfileActionFailed = true
+            return false
+        }
+    }
+
+    @discardableResult
+    func removeAppsToolsUsageProfile(_ profile: AppsToolsUsageProfile) -> Bool {
+        guard let sessionId,
+              let consumerId = selectedAppsToolsConsumerId,
+              let detail = selectedAppsToolsConsumerDetail,
+              detail.consumer.consumerId == consumerId,
+              detail.usageProfiles.contains(where: {
+                  $0.usageProfileId == profile.usageProfileId
+              }),
+              appsToolsAuthorizationInventoryAvailable,
+              !isBusy
+        else {
+            appsToolsUsageProfileActionFailed = true
+            return false
+        }
+
+        appsToolsUsageProfileActionFailed = false
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            guard try service.removeAppsToolsUsageProfile(
+                sessionId: sessionId,
+                consumerId: consumerId,
+                usageProfileId: profile.usageProfileId
+            ) else {
+                appsToolsUsageProfileActionFailed = true
+                return false
+            }
+            replaceSelectedAppsToolsUsageProfiles(
+                detail.usageProfiles.filter {
+                    $0.usageProfileId != profile.usageProfileId
+                }
+            )
+            return true
+        } catch {
+            appsToolsUsageProfileActionFailed = true
+            return false
+        }
+    }
+
+    func revokeSelectedAppsToolsConsumer() {
+        guard let sessionId,
+              let consumerId = selectedAppsToolsConsumerId,
+              appsToolsAuthorizationInventoryAvailable,
+              !isBusy
+        else {
+            return
+        }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            let snapshot = try service.revokeAppsToolsConsumer(
+                sessionId: sessionId,
+                consumerId: consumerId
+            )
+            selectedAppsToolsConsumerId = nil
+            selectedAppsToolsConsumerDetail = nil
+            appsToolsUsageProfileSetup = nil
+            appsToolsUsageProfileActionFailed = false
+            applyAppsToolsSnapshot(snapshot, loadConsumerDetail: true)
+            statusMessage = "Apps & Tools Consumer revoked"
+        } catch {
+            markAppsToolsManagementUnavailable(error)
+        }
     }
 
     func navigationDestinationHidesSelectedItem(
@@ -727,6 +1470,14 @@ final class VaultStore: ObservableObject {
             return selectedItem.isArchived
         case .favorites:
             return selectedItem.isArchived || !selectedItem.favorite
+        case .appsAndTools:
+            return false
+        case let .smartView(smartView):
+            return selectedItem.isArchived
+                || !selectedItem.appears(
+                    in: smartView,
+                    authorizedCredentialIds: authorizedCredentialIds
+                )
         case .security:
             return false
         case .conflicts:
@@ -747,6 +1498,7 @@ final class VaultStore: ObservableObject {
         showArchivedOnly = false
         showFavoritesOnly = false
         showConflictsOnly = false
+        selectedSmartView = nil
         selectedItemTypeFilter = nil
         selectedTagFilter = nil
 
@@ -755,6 +1507,10 @@ final class VaultStore: ObservableObject {
             break
         case .favorites:
             showFavoritesOnly = true
+        case .appsAndTools:
+            break
+        case let .smartView(smartView):
+            selectedSmartView = smartView
         case .security:
             break
         case .conflicts:
@@ -924,6 +1680,90 @@ final class VaultStore: ObservableObject {
     }
 
     @discardableResult
+    func saveTemplateCredential(form: TemplateCredentialForm) -> EditorSaveOutcome {
+        guard let sessionId else { return .failed }
+        guard selectedItemId == nil else {
+            statusMessage = "Template credential editing is not available yet"
+            return .failed
+        }
+        guard form.isValidForSave else {
+            statusMessage = form.normalizedTitle.isEmpty ? "Title is required" : "Secret is required"
+            return .failed
+        }
+        return performSave(sessionId: sessionId, staleItemId: nil) {
+            let existingIds = Set(items.map(\.id))
+            let createdItems = try service.createCredentialFromTemplate(
+                sessionId: sessionId,
+                form: form
+            )
+            let newItem = createdItems.first(where: { !existingIds.contains($0.id) })
+            if applyMutationItems(createdItems, preferredSelection: newItem?.id),
+               let newItem,
+               selectedItemId == newItem.id
+            {
+                clearSelectedDetails()
+                selectedCredentialDetail = try service.getCredential(
+                    sessionId: sessionId,
+                    credentialId: newItem.id
+                )
+            }
+            recordVaultContentChange()
+            statusMessage = "Saved"
+        }
+    }
+
+    @discardableResult
+    func saveCredential(form: CredentialEditorForm) -> EditorSaveOutcome {
+        guard let sessionId, let selectedItemId else { return .failed }
+        guard selectedItem?.isTemplateCredential == true else {
+            statusMessage = "Unsupported item type"
+            return .failed
+        }
+        guard form.isValidForSave else {
+            if form.normalizedTitle.isEmpty {
+                statusMessage = "Title is required"
+            } else if form.fields.contains(where: { $0.normalizedRole.isEmpty }) {
+                statusMessage = "Field role is required"
+            } else {
+                statusMessage = "New secret value is required"
+            }
+            return .failed
+        }
+        guard canSaveCurrentEditor else {
+            statusMessage = "Resolve conflict before editing"
+            return .failed
+        }
+        var guardedForm = form
+        guardedForm.revision = guardedForm.revision ?? selectedCredentialDetail?.revision
+        return performSave(
+            sessionId: sessionId,
+            staleItemId: selectedItemId,
+            staleReviewBuilder: { [guardedForm] in
+                self.selectedCredentialDetail.map {
+                    Self.staleCredentialReview(current: $0, draft: guardedForm)
+                }
+            }
+        ) {
+            let updatedItems = try service.updateCredential(
+                sessionId: sessionId,
+                credentialId: selectedItemId,
+                form: guardedForm
+            )
+            if applyMutationItems(updatedItems, preferredSelection: selectedItemId),
+               self.selectedItemId == selectedItemId
+            {
+                clearSelectedDetails()
+                selectedCredentialDetail = try service.getCredential(
+                    sessionId: sessionId,
+                    credentialId: selectedItemId
+                )
+            }
+            recordVaultContentChange()
+            statusMessage = "Saved"
+        }
+    }
+
+    @discardableResult
     func saveSecureNote(form: SecureNoteForm) -> EditorSaveOutcome {
         guard let sessionId else { return .failed }
         guard form.isValidForSave else {
@@ -1085,7 +1925,15 @@ final class VaultStore: ObservableObject {
             let existingIds = Set(
                 try service.search(sessionId: sessionId, text: "", includeArchived: true).map(\.id)
             )
-            if selectedItem.isLogin {
+            if selectedItem.isTemplateCredential {
+                let duplicatedItems = try service.duplicateCredential(
+                    sessionId: sessionId,
+                    credentialId: selectedItem.id,
+                    expectedRevision: selectedItem.revision,
+                    title: Self.duplicateTitle(selectedItem.title)
+                )
+                applyMutationItems(duplicatedItems)
+            } else if selectedItem.isLogin {
                 guard let selectedDetail else {
                     throw CoreBridgeError.commandFailed("Unsupported item type")
                 }
@@ -1463,6 +2311,31 @@ final class VaultStore: ObservableObject {
         copySoftwareLicenseField("license_key", label: "License key copied", emptyLabel: "software license has no license key")
     }
 
+    func copyCredentialSecret(secretFieldId: String) {
+        guard canUseSelectedCredentialSecret,
+              selectedCredentialDetail?.secretFields.contains(where: {
+                  $0.secretFieldId == secretFieldId && $0.hasValue
+              }) == true,
+              let sessionId,
+              let selectedItemId
+        else {
+            return
+        }
+        perform {
+            let value = try service.getCredentialSecretField(
+                sessionId: sessionId,
+                credentialId: selectedItemId,
+                secretFieldId: secretFieldId
+            )
+            guard !value.isEmpty else {
+                statusMessage = "credential field has no secret"
+                return
+            }
+            clipboard.copy(value, clearAfter: clipboardTimeout)
+            statusMessage = "Secret copied"
+        }
+    }
+
     func revealSelectedLoginPassword() -> String? {
         revealLoginField("password", emptyLabel: "login item has no password")
     }
@@ -1491,6 +2364,32 @@ final class VaultStore: ObservableObject {
 
     func revealSelectedLicenseKey() -> String? {
         revealSoftwareLicenseField("license_key", emptyLabel: "software license has no license key")
+    }
+
+    func revealSelectedCredentialSecret(secretFieldId: String) -> String? {
+        guard canUseSelectedCredentialSecret,
+              selectedCredentialDetail?.secretFields.contains(where: {
+                  $0.secretFieldId == secretFieldId && $0.hasValue
+              }) == true,
+              let sessionId,
+              let selectedItemId
+        else {
+            return nil
+        }
+        var revealedValue: String?
+        perform {
+            let value = try service.getCredentialSecretField(
+                sessionId: sessionId,
+                credentialId: selectedItemId,
+                secretFieldId: secretFieldId
+            )
+            guard !value.isEmpty else {
+                statusMessage = "credential field has no secret"
+                return
+            }
+            revealedValue = value
+        }
+        return revealedValue
     }
 
     func previewImport(url: URL) {
@@ -1539,10 +2438,18 @@ final class VaultStore: ObservableObject {
     }
 
     @discardableResult
-    func exportItems(destinationURL: URL) -> Bool {
+    func exportItems(
+        destinationURL: URL,
+        currentMasterPassword: String,
+        exportFormat: String = "keptnear-json"
+    ) -> Bool {
         guard let sessionId else { return false }
         guard !editorHasUnsavedChanges else {
             statusMessage = "Save or discard edits before exporting"
+            return false
+        }
+        guard !currentMasterPassword.isEmpty else {
+            statusMessage = "Current master password is required"
             return false
         }
         var exported = false
@@ -1550,7 +2457,8 @@ final class VaultStore: ObservableObject {
             let result = try service.exportItems(
                 sessionId: sessionId,
                 destinationPath: destinationURL.path,
-                exportFormat: "bitwarden-json"
+                exportFormat: exportFormat,
+                currentPassword: currentMasterPassword
             )
             exportResult = result
             plaintextExportURL = destinationURL
@@ -1862,10 +2770,17 @@ final class VaultStore: ObservableObject {
 
     private func applyUnlocked(_ unlocked: UnlockedPayload) {
         sessionId = unlocked.sessionId
+        appsToolsVaultPathConflict = unlocked.appsToolsVaultPathConflict
+        lockedRecoveryStatus = nil
+        lockedRecoveryStatusCheckFailed = false
+        recoveryKit = nil
+        recoveryKitHasExternalCopy = false
+        recoveryStatus = try? service.recoveryStatus(sessionId: unlocked.sessionId)
         includeArchived = false
         showArchivedOnly = false
         showFavoritesOnly = false
         showConflictsOnly = false
+        selectedSmartView = nil
         selectedItemTypeFilter = nil
         availableItemTypes = Self.availableItemTypes(from: unlocked.items)
         selectedTagFilter = nil
@@ -1971,6 +2886,7 @@ final class VaultStore: ObservableObject {
             || showArchivedOnly
             || showFavoritesOnly
             || showConflictsOnly
+            || selectedSmartView != nil
             || selectedItemTypeFilter != nil
             || selectedTagFilter != nil
             || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1987,6 +2903,12 @@ final class VaultStore: ObservableObject {
             (!showArchivedOnly || item.isArchived)
                 && (!showFavoritesOnly || item.favorite)
                 && (!showConflictsOnly || item.isConflicted)
+                && (selectedSmartView.map {
+                    item.appears(
+                        in: $0,
+                        authorizedCredentialIds: authorizedCredentialIds
+                    )
+                } ?? true)
                 && (normalizedSelectedItemType == nil || Self.normalizedItemType(item.itemType) == normalizedSelectedItemType)
                 && (normalizedSelectedTag == nil || item.tags.contains { Self.normalizedTag($0) == normalizedSelectedTag })
         }
@@ -2222,6 +3144,48 @@ final class VaultStore: ObservableObject {
         return StaleSaveReview(itemId: current.id, itemTitle: current.title, itemType: "software license", rows: rows)
     }
 
+    private static func staleCredentialReview(
+        current: CredentialDetail,
+        draft: CredentialEditorForm
+    ) -> StaleSaveReview {
+        var rows = [
+            staleTextRow("title", current: current.title, draft: draft.title),
+            staleTagsRow(current: current.tags, draft: draft.tags),
+            staleBooleanRow("favorite", current: current.favorite, draft: draft.favorite)
+        ].compactMap { $0 }
+        if !credentialFieldsMatch(current: current.fields, draft: draft.fields) {
+            rows.append(staleRedactedRow("fields"))
+        }
+        return StaleSaveReview(
+            itemId: current.id,
+            itemTitle: current.title,
+            itemType: current.templateId ?? "custom",
+            rows: rows
+        )
+    }
+
+    private static func credentialFieldsMatch(
+        current: [CredentialDetailField],
+        draft: [CredentialEditorField]
+    ) -> Bool {
+        guard current.count == draft.count else { return false }
+        return zip(current, draft).allSatisfy { currentField, draftField in
+            switch currentField {
+            case let .text(field):
+                return draftField.fieldType == .text
+                    && draftField.normalizedRole == field.role
+                    && draftField.normalizedLabel == field.label
+                    && draftField.text == field.text
+            case let .secret(field):
+                return draftField.fieldType == .existingSecret
+                    && draftField.normalizedRole == field.role
+                    && draftField.normalizedLabel == field.label
+                    && draftField.secretFieldId == field.secretFieldId
+                    && draftField.secretInput.isEmpty
+            }
+        }
+    }
+
     private static func staleTextRow(_ fieldLabel: String, current: String?, draft: String?) -> StaleSaveReviewRow? {
         let currentValue = normalizedStaleValue(current)
         let draftValue = normalizedStaleValue(draft)
@@ -2332,8 +3296,17 @@ final class VaultStore: ObservableObject {
     private func refreshNavigationInventory() {
         guard let sessionId else {
             navigationItems = []
+            authorizedCredentialIds = []
+            appsToolsAuthorizationInventoryAvailable = true
+            appsToolsVaultPathConflict = false
+            appsToolsSnapshot = .empty
+            selectedAppsToolsConsumerId = nil
+            selectedAppsToolsConsumerDetail = nil
+            appsToolsUsageProfileSetup = nil
+            appsToolsUsageProfileActionFailed = false
             return
         }
+        refreshAuthorizationInventory()
         do {
             navigationItems = try service.search(
                 sessionId: sessionId,
@@ -2345,6 +3318,140 @@ final class VaultStore: ObservableObject {
                 navigationItems = items
             }
         }
+    }
+
+    private func refreshAuthorizationInventory(loadConsumerDetail: Bool = false) {
+        guard let sessionId else {
+            authorizedCredentialIds = []
+            appsToolsAuthorizationInventoryAvailable = true
+            appsToolsSnapshot = .empty
+            selectedAppsToolsConsumerId = nil
+            selectedAppsToolsConsumerDetail = nil
+            appsToolsUsageProfileSetup = nil
+            appsToolsUsageProfileActionFailed = false
+            return
+        }
+        guard !appsToolsVaultPathConflict else {
+            markAppsToolsVaultPathConflictUnavailable()
+            return
+        }
+        do {
+            let snapshot = try service.appsToolsSnapshot(sessionId: sessionId)
+            applyAppsToolsSnapshot(snapshot, loadConsumerDetail: loadConsumerDetail)
+        } catch {
+            markAppsToolsManagementUnavailable(error)
+        }
+    }
+
+    private func markAppsToolsVaultPathConflictUnavailable() {
+        authorizedCredentialIds = []
+        appsToolsAuthorizationInventoryAvailable = false
+        appsToolsSnapshot = .empty
+        selectedAppsToolsConsumerId = nil
+        selectedAppsToolsConsumerDetail = nil
+        appsToolsUsageProfileSetup = nil
+        appsToolsUsageProfileActionFailed = false
+    }
+
+    private func applyAppsToolsSnapshot(
+        _ snapshot: AppsToolsSnapshot,
+        loadConsumerDetail: Bool
+    ) {
+        appsToolsSnapshot = snapshot
+        authorizedCredentialIds = Set(snapshot.authorizedCredentialIds)
+        appsToolsAuthorizationInventoryAvailable = true
+        if let selectedAppsToolsConsumerId,
+           !snapshot.consumers.contains(where: {
+               $0.consumerId == selectedAppsToolsConsumerId
+           })
+        {
+            self.selectedAppsToolsConsumerId = nil
+            selectedAppsToolsConsumerDetail = nil
+            appsToolsUsageProfileSetup = nil
+            appsToolsUsageProfileActionFailed = false
+        }
+        if loadConsumerDetail {
+            if selectedAppsToolsConsumerId == nil {
+                selectedAppsToolsConsumerId = snapshot.consumers.first?.consumerId
+            }
+            loadSelectedAppsToolsConsumerDetail()
+        }
+    }
+
+    private func loadSelectedAppsToolsConsumerDetail() {
+        guard let sessionId,
+              let consumerId = selectedAppsToolsConsumerId,
+              appsToolsAuthorizationInventoryAvailable
+        else {
+            selectedAppsToolsConsumerDetail = nil
+            appsToolsUsageProfileSetup = nil
+            return
+        }
+        do {
+            selectedAppsToolsConsumerDetail = try service.appsToolsConsumerDetail(
+                sessionId: sessionId,
+                consumerId: consumerId
+            )
+        } catch {
+            selectedAppsToolsConsumerDetail = nil
+            appsToolsUsageProfileSetup = nil
+            statusMessage = "Apps & Tools Consumer detail unavailable"
+            return
+        }
+        do {
+            let setup = try service.appsToolsUsageProfileSetup(
+                sessionId: sessionId,
+                consumerId: consumerId
+            )
+            guard setup.consumerId == consumerId else {
+                throw CoreBridgeError.unexpectedResponse
+            }
+            appsToolsUsageProfileSetup = setup
+            appsToolsUsageProfileActionFailed = false
+        } catch {
+            appsToolsUsageProfileSetup = nil
+            appsToolsUsageProfileActionFailed = true
+        }
+    }
+
+    private func replaceSelectedAppsToolsUsageProfiles(
+        _ usageProfiles: [AppsToolsUsageProfile]
+    ) {
+        guard let detail = selectedAppsToolsConsumerDetail else { return }
+        let summary = AppsToolsConsumerSummary(
+            consumerId: detail.consumer.consumerId,
+            label: detail.consumer.label,
+            identity: detail.consumer.identity,
+            accessRuleCount: detail.consumer.accessRuleCount,
+            usageProfileCount: usageProfiles.count,
+            createdAtMilliseconds: detail.consumer.createdAtMilliseconds
+        )
+        selectedAppsToolsConsumerDetail = AppsToolsConsumerDetail(
+            consumer: summary,
+            fieldGrants: detail.fieldGrants,
+            usageProfiles: usageProfiles,
+            recentAuditEvents: detail.recentAuditEvents
+        )
+        appsToolsSnapshot = AppsToolsSnapshot(
+            paused: appsToolsSnapshot.paused,
+            authorizedCredentialIds: appsToolsSnapshot.authorizedCredentialIds,
+            consumers: appsToolsSnapshot.consumers.map {
+                $0.consumerId == summary.consumerId ? summary : $0
+            }
+        )
+    }
+
+    private func markAppsToolsManagementUnavailable(_ error: Error) {
+        authorizedCredentialIds = []
+        appsToolsAuthorizationInventoryAvailable = false
+        appsToolsSnapshot = .empty
+        selectedAppsToolsConsumerId = nil
+        selectedAppsToolsConsumerDetail = nil
+        appsToolsUsageProfileSetup = nil
+        appsToolsUsageProfileActionFailed = false
+        statusMessage = error.localizedDescription.isEmpty
+            ? "Apps & Tools management unavailable"
+            : "Apps & Tools management unavailable: \(error.localizedDescription)"
     }
 
     private func clearPasswordHealth() {
@@ -2368,12 +3475,21 @@ final class VaultStore: ObservableObject {
         showArchivedOnly = false
         showFavoritesOnly = false
         showConflictsOnly = false
+        selectedSmartView = nil
         selectedItemTypeFilter = nil
         availableItemTypes = []
         selectedTagFilter = nil
         availableTags = []
         navigationDestination = .allItems
         navigationItems = []
+        authorizedCredentialIds = []
+        appsToolsAuthorizationInventoryAvailable = true
+        appsToolsVaultPathConflict = false
+        appsToolsSnapshot = .empty
+        selectedAppsToolsConsumerId = nil
+        selectedAppsToolsConsumerDetail = nil
+        appsToolsUsageProfileSetup = nil
+        appsToolsUsageProfileActionFailed = false
         importSourceURL = nil
         importSourceFormat = Self.bitwardenJsonImportFormat
         importPreview = nil
@@ -2383,6 +3499,11 @@ final class VaultStore: ObservableObject {
         restoreBackupResult = nil
         copyVaultToSyncResult = nil
         plaintextExportURL = nil
+        recoveryStatus = nil
+        recoveryKit = nil
+        recoveryKitHasExternalCopy = false
+        lockedRecoveryStatus = nil
+        lockedRecoveryStatusCheckFailed = false
         backupDestinationURL = nil
         restoredBackupURL = nil
         copiedSyncVaultURL = nil
@@ -2398,6 +3519,7 @@ final class VaultStore: ObservableObject {
         selectedSecureNoteDetail = nil
         selectedCreditCardDetail = nil
         selectedSoftwareLicenseDetail = nil
+        selectedCredentialDetail = nil
     }
 
     private func loadSelectedDetailIfAvailable() {
@@ -2419,6 +3541,11 @@ final class VaultStore: ObservableObject {
             selectedCreditCardDetail = try service.getCreditCard(sessionId: sessionId, itemId: itemId)
         } else if item.isSoftwareLicense {
             selectedSoftwareLicenseDetail = try service.getSoftwareLicense(sessionId: sessionId, itemId: itemId)
+        } else if item.isTemplateCredential {
+            selectedCredentialDetail = try service.getCredential(
+                sessionId: sessionId,
+                credentialId: itemId
+            )
         } else {
             statusMessage = "Unsupported item type"
         }

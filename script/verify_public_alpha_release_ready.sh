@@ -13,6 +13,7 @@ usage() {
 usage: script/verify_public_alpha_release_ready.sh [--allow-missing]
 
 Strict mode verifies the full public-alpha release gate:
+  - signed-experimental profile only
   - local alpha readiness
   - security review handoff package generation and checksum verification
   - Developer ID / notarization environment preflight
@@ -86,6 +87,7 @@ Public alpha release readiness report mode.
 
 This mode does not generate signed artifacts, contact Apple notarization
 services, approve public alpha, or recommend production use.
+Profile: signed-experimental.
 REPORT
 
   report_step "Distribution environment report" "$ROOT_DIR/script/verify_macos_distribution_environment.sh" --allow-missing
@@ -125,7 +127,7 @@ STRICT
 run_step "Distribution environment preflight" "$ROOT_DIR/script/verify_macos_distribution_environment.sh"
 run_step "Local alpha readiness" "$ROOT_DIR/script/verify_local_alpha_readiness.sh"
 run_step "Security review materials package" "$ROOT_DIR/script/package_security_review_materials.sh"
-run_step "Security decision evidence verification" "$ROOT_DIR/script/verify_security_review_evidence.sh"
+run_step "Security decision evidence verification" "$ROOT_DIR/script/verify_security_review_evidence.sh" --profile signed
 run_step "Signed and notarized Apple Silicon DMG" env VERSION="$VERSION" RELEASE_MODE=experimental-pre-release NOTARIZE=1 "$ROOT_DIR/script/package_macos_alpha.sh"
 run_step "Signed install verification" "$ROOT_DIR/script/verify_macos_signed_install.sh" "$ARCHIVE_PATH"
 cat <<'SUMMARY'

@@ -276,7 +276,7 @@ struct VaultItemListPane<ContextMenuContent: View>: View {
         switch destination {
         case .allItems, .itemType, .tag:
             return true
-        case .favorites, .security, .conflicts, .archive:
+        case .favorites, .appsAndTools, .smartView, .security, .conflicts, .archive:
             return false
         }
     }

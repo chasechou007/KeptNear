@@ -24,6 +24,9 @@ fi
 ARCHIVE_STEM="${ARCHIVE_BASENAME%.dmg}"
 CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
 MANIFEST_PATH="$ARCHIVE_DIR/$ARCHIVE_STEM-manifest.txt"
+PROTOCOL_MANIFEST_PATH="$ARCHIVE_DIR/$ARCHIVE_STEM-protocol-manifest.json"
+PROTOCOL_MANIFEST_FILENAME="$APP_NAME-Protocol-Manifest.json"
+PACKAGE_MANIFEST_TOOL="$ROOT_DIR/target/release/keptnear-package-manifest"
 
 require_file() {
   local path="$1"
@@ -39,6 +42,16 @@ require_directory() {
   local description="$2"
   if [[ ! -d "$path" || -L "$path" ]]; then
     echo "missing real $description: $path" >&2
+    exit 1
+  fi
+}
+
+require_executable_file() {
+  local path="$1"
+  local description="$2"
+  require_file "$path" "$description"
+  if [[ ! -x "$path" ]]; then
+    echo "$description is not executable: $path" >&2
     exit 1
   fi
 }
@@ -131,7 +144,10 @@ assert_plist_value() {
 require_file "$ARCHIVE_PATH" "disk image"
 require_file "$CHECKSUM_PATH" "checksum"
 require_file "$MANIFEST_PATH" "manifest"
+require_file "$PROTOCOL_MANIFEST_PATH" "protocol manifest"
 require_command codesign
+require_command cmp
+require_command cargo
 require_command hdiutil
 require_command lipo
 require_command xcrun
@@ -149,6 +165,13 @@ ACTUAL_SIZE_BYTES="$(wc -c <"$ARCHIVE_PATH" | tr -d ' ')"
 MANIFEST_SIZE_BYTES="$(require_manifest_field "Size bytes")"
 assert_equals "manifest size" "$MANIFEST_SIZE_BYTES" "$ACTUAL_SIZE_BYTES"
 
+ACTUAL_PROTOCOL_MANIFEST_SHA256="$(shasum -a 256 "$PROTOCOL_MANIFEST_PATH" | awk '{print $1}')"
+MANIFEST_PROTOCOL_MANIFEST_SHA256="$(require_manifest_field "Protocol manifest SHA-256")"
+assert_equals \
+  "protocol manifest SHA-256" \
+  "$MANIFEST_PROTOCOL_MANIFEST_SHA256" \
+  "$ACTUAL_PROTOCOL_MANIFEST_SHA256"
+
 assert_manifest_value "Channel" "manual"
 assert_manifest_value "Automatic updates" "false"
 assert_manifest_value "Architecture" "$ARCHITECTURE"
@@ -162,6 +185,16 @@ case "$RELEASE_MODE" in
   local-test)
     assert_manifest_value "Security decision" "not requested for local-test artifact"
     assert_manifest_value "Distribution ready" "false"
+    ;;
+  unsigned-experimental)
+    assert_manifest_value "Security decision" "unaudited; AR-002 accepted-risk path verified"
+    assert_manifest_value "Distribution ready" "true"
+    assert_equals "unsigned release app signing status" "$(manifest_section_field "Signing" "Status")" "unsigned"
+    assert_equals "unsigned release DMG signing status" "$(manifest_section_field "Signing" "Disk image signature")" "unsigned"
+    assert_equals "unsigned release hardened runtime status" "$(manifest_section_field "Signing" "Hardened runtime")" "not requested"
+    assert_equals "unsigned release notarization request" "$(manifest_section_field "Notarization" "Requested")" "0"
+    assert_equals "unsigned release notarization status" "$(manifest_section_field "Notarization" "Status")" "skipped"
+    assert_equals "unsigned release staple status" "$(manifest_section_field "Notarization" "Staple status")" "skipped"
     ;;
   experimental-pre-release)
     assert_manifest_value "Security decision" "external-review or maintainer accepted-risk path verified"
@@ -187,8 +220,8 @@ case "$SOURCE_WORKTREE_STATUS" in
     exit 1
     ;;
 esac
-if [[ "$RELEASE_MODE" == "experimental-pre-release" && "$SOURCE_WORKTREE_STATUS" != "clean" ]]; then
-  echo "experimental pre-release must come from a clean source worktree" >&2
+if [[ "$RELEASE_MODE" != "local-test" && "$SOURCE_WORKTREE_STATUS" != "clean" ]]; then
+  echo "$RELEASE_MODE must come from a clean source worktree" >&2
   exit 1
 fi
 
@@ -196,7 +229,9 @@ hdiutil verify "$ARCHIVE_PATH" >/dev/null
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/psw-alpha-verify.XXXXXX")"
 MOUNT_DIR="$TMP_DIR/mount"
-COPIED_APP="$TMP_DIR/$APP_NAME.app"
+COPIED_ROOT="$TMP_DIR/package-root"
+COPIED_APP="$COPIED_ROOT/$APP_NAME.app"
+COPIED_PROTOCOL_MANIFEST="$TMP_DIR/$PROTOCOL_MANIFEST_FILENAME"
 MOUNTED=0
 
 cleanup() {
@@ -207,11 +242,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$MOUNT_DIR"
+mkdir -p "$MOUNT_DIR" "$COPIED_ROOT"
 hdiutil attach -nobrowse -readonly -mountpoint "$MOUNT_DIR" "$ARCHIVE_PATH" >/dev/null
 MOUNTED=1
 
 require_directory "$MOUNT_DIR/$APP_NAME.app" "app bundle in disk image"
+require_file "$MOUNT_DIR/$PROTOCOL_MANIFEST_FILENAME" "protocol manifest in disk image"
 if [[ ! -L "$MOUNT_DIR/Applications" ]]; then
   echo "disk image is missing Applications link" >&2
   exit 1
@@ -219,26 +255,59 @@ fi
 assert_equals "Applications link" "$(readlink "$MOUNT_DIR/Applications")" "/Applications"
 
 /usr/bin/ditto "$MOUNT_DIR/$APP_NAME.app" "$COPIED_APP"
+cp "$MOUNT_DIR/$PROTOCOL_MANIFEST_FILENAME" "$COPIED_PROTOCOL_MANIFEST"
 hdiutil detach "$MOUNT_DIR" >/dev/null
 MOUNTED=0
+
+if ! cmp -s "$PROTOCOL_MANIFEST_PATH" "$COPIED_PROTOCOL_MANIFEST"; then
+  echo "disk image protocol manifest does not match the adjacent artifact" >&2
+  exit 1
+fi
 
 APP_BUNDLE="$COPIED_APP"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 INFO_PLIST="$APP_BUNDLE/Contents/Info.plist"
 FFI_DYLIB="$APP_BUNDLE/Contents/Frameworks/libpsw_ffi.dylib"
 APP_ICON="$APP_BUNDLE/Contents/Resources/KeptNear.icns"
+APP_COMPONENT_METADATA="$APP_BUNDLE/Contents/Resources/KeptNear-App-Component.json"
+BROKER_BINARY="$APP_BUNDLE/Contents/Helpers/keptnear-broker"
+MCP_BINARY="$APP_BUNDLE/Contents/Helpers/keptnear-mcp"
+CLI_BINARY="$APP_BUNDLE/Contents/Helpers/keptnear"
 
-require_file "$APP_BINARY" "app executable"
+require_executable_file "$APP_BINARY" "app executable"
 require_file "$INFO_PLIST" "Info.plist"
 require_file "$FFI_DYLIB" "Rust FFI dylib"
 require_file "$APP_ICON" "app icon"
+require_file "$APP_COMPONENT_METADATA" "App component metadata"
+require_executable_file "$BROKER_BINARY" "Broker executable"
+require_executable_file "$MCP_BINARY" "MCP adapter executable"
+require_executable_file "$CLI_BINARY" "CLI executable"
 require_arm64_binary "$APP_BINARY" "app executable"
 require_arm64_binary "$FFI_DYLIB" "Rust FFI dylib"
+require_arm64_binary "$BROKER_BINARY" "Broker executable"
+require_arm64_binary "$MCP_BINARY" "MCP adapter executable"
+require_arm64_binary "$CLI_BINARY" "CLI executable"
 
-if [[ ! -x "$APP_BINARY" ]]; then
-  echo "app executable is not executable: $APP_BINARY" >&2
-  exit 1
+if [[ ! -x "$PACKAGE_MANIFEST_TOOL" ]]; then
+  cargo build \
+    --release \
+    -p psw-ffi \
+    --bin keptnear-package-manifest >/dev/null
 fi
+require_executable_file "$PACKAGE_MANIFEST_TOOL" "protocol manifest verifier"
+PACKAGE_VERSION="$(require_manifest_field "Version")"
+PROTOCOL_DECLARATION="$(
+  "$PACKAGE_MANIFEST_TOOL" \
+    verify \
+    --manifest "$PROTOCOL_MANIFEST_PATH" \
+    --root "$COPIED_ROOT" \
+    --product-version "$PACKAGE_VERSION" \
+    --architecture "$ARCHITECTURE"
+)"
+assert_equals \
+  "manifest Broker protocol" \
+  "$(manifest_section_field "Component compatibility" "Broker protocol")" \
+  "$PROTOCOL_DECLARATION"
 
 assert_plist_value ":CFBundleDisplayName" "KeptNear"
 assert_plist_value ":CFBundleIconFile" "KeptNear"
@@ -282,3 +351,4 @@ echo "Architecture: $ARCHITECTURE"
 echo "Source worktree: $SOURCE_WORKTREE_STATUS"
 echo "Release mode: $RELEASE_MODE"
 echo "Update channel: manual"
+echo "Broker protocol: $PROTOCOL_DECLARATION"

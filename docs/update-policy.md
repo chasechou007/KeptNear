@@ -4,6 +4,9 @@ KeptNear uses manual updates for the public alpha. The app does not
 contact an update server and does not include an automatic updater in this
 phase.
 
+The App does not piggyback update checks on diagnostics, file sync, Usage
+Profile templates, or Broker activity. Built-in templates remain offline.
+
 ## Rationale
 
 Manual updates keep the alpha local-first while security review and release
@@ -21,9 +24,13 @@ Each alpha release should provide:
 - signing and notarization status in the manifest
 - update channel recorded as `manual`
 
-For public alpha distribution, both the app and DMG should be built with
-Developer ID signing and notarization credentials. Unsigned DMGs remain local
-testing artifacts.
+Signed public distribution requires Developer ID signing and notarization for
+the app and DMG. A separate unsigned experimental profile may be published
+without Apple credentials only when its dedicated release mode and verifier are
+implemented and pass, and when checksum, manifest, Gatekeeper installation
+guidance, and adjacent unsigned/unaudited/experimental warnings are present.
+The current `local-test` unsigned output remains a local testing artifact until
+that profile exists.
 
 ## Tester Update Workflow
 
@@ -48,4 +55,5 @@ bundle must not require moving or rewriting the vault.
 Automatic updates are deferred until after alpha trust boundaries are reviewed.
 A future updater decision must document update feed signing, network behavior,
 rollback behavior, user controls, and secret-exclusion rules before it is
-enabled.
+enabled. It must remain a separately disclosed and configurable network flow,
+not an implicit consequence of launching the App.

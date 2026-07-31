@@ -13,15 +13,23 @@ struct ContentView: View {
     @State private var displayName = "Personal"
     @State private var createVaultDiscardConfirmed = false
     @State private var form = LoginForm()
+    @State private var templateCredentialForm = TemplateCredentialForm()
+    @State private var credentialEditorForm = CredentialEditorForm()
     @State private var secureNoteForm = SecureNoteForm()
     @State private var creditCardForm = CreditCardForm()
     @State private var softwareLicenseForm = SoftwareLicenseForm()
+    @State private var showingTemplateCredentialSecret = false
     @State private var showingCreateSheet = false
     @State private var showingForgottenPasswordRecovery = false
     @State private var showingForgottenVaultTrashConfirmation = false
     @State private var createVaultAfterForgottenPasswordRecovery = false
     @State private var forgottenPasswordRecoveryFeedback = ""
     @State private var forgottenPasswordRecoveryHandoffFeedback = ""
+    @State private var forgottenRecoveryCode = ""
+    @State private var forgottenRecoveryNewPassword = ""
+    @State private var forgottenRecoveryPasswordConfirmation = ""
+    @State private var showingForgottenRecoveryCode = false
+    @State private var showingForgottenRecoveryPasswords = false
     @State private var rememberUnlockInKeychain = false
     @State private var rememberCreatedVaultInKeychain = false
     @State private var showingPasswordGenerator = false
@@ -29,18 +37,21 @@ struct ContentView: View {
     @State private var showingImportSheet = false
     @State private var keepImportDuplicates = false
     @State private var pendingExportURL: URL?
+    @State private var exportMasterPassword = ""
     @State private var showingExportConfirmation = false
     @State private var showingExportResult = false
     @State private var showingBackupResult = false
     @State private var showingRestoreBackupResult = false
     @State private var showingCopyVaultToSyncResult = false
     @State private var baselineForm = LoginForm()
+    @State private var baselineTemplateCredentialForm = TemplateCredentialForm()
+    @State private var baselineCredentialEditorForm = CredentialEditorForm()
     @State private var baselineSecureNoteForm = SecureNoteForm()
     @State private var baselineCreditCardForm = CreditCardForm()
     @State private var baselineSoftwareLicenseForm = SoftwareLicenseForm()
     @State private var isCreatingItem = false
     @State private var isEditingSelectedItem = false
-    @State private var newItemKind = NewItemKind.login
+    @State private var newItemKind = CredentialTemplateKind.login
     @State private var pendingEditorAction: EditorAction?
     @State private var showingDiscardChangesAlert = false
     @State private var pendingDestructiveAction: DestructiveAction?
@@ -49,6 +60,7 @@ struct ContentView: View {
     @State private var conflictMergeFieldRevisions: [String: String] = [:]
     @State private var revealedSecrets = SavedSecretRevealCache()
     @State private var showingVaultStatus = false
+    @State private var showingPendingRequests = false
     @FocusState private var searchFocused: Bool
 
     private static let safeConflictMergeFieldLabels: Set<String> = [
@@ -75,7 +87,7 @@ struct ContentView: View {
         case showPasswordHealthIssue(PasswordHealthIssue)
         case itemListAction(String, ItemListRowAction)
         case itemListDestructiveAction(String, DestructiveAction)
-        case newItem(NewItemKind)
+        case newItem(CredentialTemplateKind)
         case cancelEditing
         case lockVault
         case closeVault
@@ -119,43 +131,15 @@ struct ContentView: View {
         }
     }
 
-    private enum NewItemKind: String, CaseIterable, Identifiable {
-        case login
-        case secureNote
-        case creditCard
-        case softwareLicense
-
-        var id: String { rawValue }
-
-        var editorKind: ItemEditorKind {
-            switch self {
-            case .login:
-                return .login
-            case .secureNote:
-                return .secureNote
-            case .creditCard:
-                return .creditCard
-            case .softwareLicense:
-                return .softwareLicense
-            }
-        }
-
-        var systemImage: String {
-            switch self {
-            case .login:
-                return "key"
-            case .secureNote:
-                return "note.text"
-            case .creditCard:
-                return "creditcard"
-            case .softwareLicense:
-                return "shippingbox"
-            }
-        }
-    }
-
     private var text: AppText {
         AppText(languageRaw)
+    }
+
+    private var recoveryKitBinding: Binding<RecoveryKitPayload?> {
+        Binding(
+            get: { store.recoveryKit },
+            set: { _ in }
+        )
     }
 
     private var presentationState: AppPresentationState {
@@ -237,6 +221,10 @@ struct ContentView: View {
         EditorDraftState(
             login: form,
             baselineLogin: baselineForm,
+            templateCredential: templateCredentialForm,
+            baselineTemplateCredential: baselineTemplateCredentialForm,
+            credential: credentialEditorForm,
+            baselineCredential: baselineCredentialEditorForm,
             secureNote: secureNoteForm,
             baselineSecureNote: baselineSecureNoteForm,
             creditCard: creditCardForm,
@@ -247,6 +235,9 @@ struct ContentView: View {
     }
 
     private var activeEditorKind: ItemEditorKind {
+        if store.selectedItem?.isTemplateCredential == true {
+            return .credential
+        }
         if store.selectedItem?.isCreditCard == true {
             return .creditCard
         }
@@ -403,6 +394,16 @@ struct ContentView: View {
 
     @ToolbarContentBuilder
     private var appToolbar: some ToolbarContent {
+        ToolbarItem(placement: .automatic) {
+            if store.appsToolsPendingRequests.pendingCount > 0 {
+                PendingRequestsToolbarButton(
+                    text: text,
+                    pendingCount: store.appsToolsPendingRequests.pendingCount,
+                    action: { showingPendingRequests = true }
+                )
+            }
+        }
+
         switch presentationState {
         case .welcome:
             ToolbarItem(placement: .primaryAction) {
@@ -467,11 +468,22 @@ struct ContentView: View {
 
     private var newItemMenu: some View {
         Menu {
-            ForEach(NewItemKind.allCases) { kind in
-                Button {
-                    requestNewItem(kind)
-                } label: {
-                    Label(newItemKindTitle(kind), systemImage: kind.systemImage)
+            Section(text.credentialTemplates) {
+                ForEach(CredentialTemplateKind.credentialTemplates) { kind in
+                    Button {
+                        requestNewItem(kind)
+                    } label: {
+                        Label(newItemKindTitle(kind), systemImage: kind.systemImage)
+                    }
+                }
+            }
+            Section(text.personalRecordTemplates) {
+                ForEach(CredentialTemplateKind.personalRecordTemplates) { kind in
+                    Button {
+                        requestNewItem(kind)
+                    } label: {
+                        Label(newItemKindTitle(kind), systemImage: kind.systemImage)
+                    }
                 }
             }
         } label: {
@@ -547,17 +559,8 @@ struct ContentView: View {
         .help(text.more)
     }
 
-    private func newItemKindTitle(_ kind: NewItemKind) -> String {
-        switch kind {
-        case .login:
-            return text.login
-        case .secureNote:
-            return text.secureNote
-        case .creditCard:
-            return text.creditCard
-        case .softwareLicense:
-            return text.softwareLicense
-        }
+    private func newItemKindTitle(_ kind: CredentialTemplateKind) -> String {
+        text.credentialTemplateName(kind)
     }
 
     var body: some View {
@@ -577,6 +580,9 @@ struct ContentView: View {
         .sheet(isPresented: $showingImportSheet) {
             importSheet
         }
+        .sheet(item: recoveryKitBinding) { kit in
+            RecoveryKitView(kit: kit)
+        }
         .sheet(isPresented: $showingExportResult) {
             exportResultSheet
         }
@@ -589,14 +595,29 @@ struct ContentView: View {
         .sheet(isPresented: $showingCopyVaultToSyncResult) {
             copyVaultToSyncResultSheet
         }
+        .sheet(isPresented: $showingPendingRequests) {
+            AppsToolsPendingRequestsView(
+                text: text,
+                store: store
+            )
+        }
         .alert(text.plaintextExportTitle, isPresented: $showingExportConfirmation) {
+            SecureField(text.currentMasterPassword, text: $exportMasterPassword)
             Button(text.exportNow, role: .destructive) {
-                if let pendingExportURL, store.exportItems(destinationURL: pendingExportURL) {
+                let currentMasterPassword = exportMasterPassword
+                exportMasterPassword = ""
+                if let pendingExportURL,
+                   store.exportItems(
+                       destinationURL: pendingExportURL,
+                       currentMasterPassword: currentMasterPassword
+                   ) {
                     showingExportResult = true
                 }
                 self.pendingExportURL = nil
             }
+            .disabled(exportMasterPassword.isEmpty || pendingExportURL == nil)
             Button(text.cancel, role: .cancel) {
+                exportMasterPassword = ""
                 pendingExportURL = nil
             }
         } message: {
@@ -645,6 +666,17 @@ struct ContentView: View {
                 setSoftwareLicenseEditorForm(SoftwareLicenseForm(detail: detail))
             }
         }
+        .onChange(of: store.selectedCredentialDetail) { detail in
+            revealedSecrets.clearAll()
+            if let detail {
+                setCredentialEditorForm(CredentialEditorForm(detail: detail))
+            }
+        }
+        .onChange(of: newItemKind) { kind in
+            if kind.usesTemplateCredentialForm {
+                templateCredentialForm.template = kind
+            }
+        }
         .onChange(of: store.isUnlocked) { isUnlocked in
             if !isUnlocked {
                 clearLockSensitiveViewState()
@@ -665,6 +697,7 @@ struct ContentView: View {
         }
         .onAppear {
             updateEditorDirtyState()
+            store.startApprovalMonitoring()
         }
         .focusedSceneValue(\.pswMacCommandHandler, macCommandHandler)
     }
@@ -677,6 +710,7 @@ struct ContentView: View {
                 text: text,
                 counts: store.navigationCounts,
                 hasPasswordHealthResult: store.passwordHealth != nil,
+                pendingRequestCount: store.appsToolsPendingRequests.pendingCount,
                 selection: navigationSelection
             )
 
@@ -861,6 +895,25 @@ struct ContentView: View {
     private var contentList: some View {
         if store.navigationDestination == .security {
             securityContent
+        } else if store.navigationDestination == .appsAndTools {
+            AppsToolsNavigationPane(
+                text: text,
+                snapshot: store.appsToolsSnapshot,
+                selectedConsumerId: store.selectedAppsToolsConsumerId,
+                inventoryAvailable: store.appsToolsAuthorizationInventoryAvailable,
+                pendingRequestCount: store.appsToolsPendingRequests.pendingCount,
+                pendingRequestsAvailable: store.appsToolsPendingRequestsAvailable,
+                isBusy: store.isBusy,
+                refresh: {
+                    store.refreshAppsToolsPendingRequests()
+                    requestNavigationDestination(.appsAndTools)
+                },
+                showPendingRequests: { showingPendingRequests = true },
+                showAuthorizedItems: {
+                    requestNavigationDestination(.smartView(.appsToolsAuthorized))
+                },
+                selectConsumer: store.selectAppsToolsConsumer
+            )
         } else {
             VaultItemListPane(
                 text: text,
@@ -1258,32 +1311,55 @@ struct ContentView: View {
 
     @ViewBuilder
     private var detail: some View {
-        switch VaultDetailMode(
-            hasSelection: store.selectedItemId != nil,
-            isEditing: isEditingSelectedItem,
-            isCreating: isCreatingItem
-        ) {
-        case .creating, .editing:
-            editor
-        case .readOnly:
-            if let selectedDetailModel {
-                VaultItemDetailView(
-                    text: text,
-                    model: selectedDetailModel,
-                    capabilities: selectedDetailCapabilities,
-                    actions: selectedDetailActions
-                )
-            } else {
-                VStack(spacing: 10) {
-                    ProgressView()
-                    Text(text.loadingItem)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        if store.navigationDestination == .appsAndTools {
+            AppsToolsDetailView(
+                text: text,
+                snapshot: store.appsToolsSnapshot,
+                detail: store.selectedAppsToolsConsumerDetail,
+                usageProfileSetup: store.appsToolsUsageProfileSetup,
+                usageProfileActionFailed: store.appsToolsUsageProfileActionFailed,
+                inventoryAvailable: store.appsToolsAuthorizationInventoryAvailable,
+                isBusy: store.isBusy,
+                refresh: {
+                    store.refreshAppsToolsPendingRequests()
+                    requestNavigationDestination(.appsAndTools)
+                },
+                setPaused: store.setAppsToolsPaused,
+                revokeField: store.revokeAppsToolsField,
+                createUsageProfile: store.createAppsToolsUsageProfile,
+                removeUsageProfile: { profile in
+                    store.removeAppsToolsUsageProfile(profile)
+                },
+                revokeConsumer: store.revokeSelectedAppsToolsConsumer
+            )
+        } else {
+            switch VaultDetailMode(
+                hasSelection: store.selectedItemId != nil,
+                isEditing: isEditingSelectedItem,
+                isCreating: isCreatingItem
+            ) {
+            case .creating, .editing:
+                editor
+            case .readOnly:
+                if let selectedDetailModel {
+                    VaultItemDetailView(
+                        text: text,
+                        model: selectedDetailModel,
+                        capabilities: selectedDetailCapabilities,
+                        actions: selectedDetailActions
+                    )
+                } else {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text(text.loadingItem)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .empty:
+                noItemSelectedPanel
             }
-        case .empty:
-            noItemSelectedPanel
         }
     }
 
@@ -1292,6 +1368,7 @@ struct ContentView: View {
         return VaultItemDetailModel(
             item: item,
             login: store.selectedDetail,
+            credential: store.selectedCredentialDetail,
             secureNote: store.selectedSecureNoteDetail,
             creditCard: store.selectedCreditCardDetail,
             softwareLicense: store.selectedSoftwareLicenseDetail
@@ -1300,20 +1377,25 @@ struct ContentView: View {
 
     private var selectedDetailCapabilities: VaultItemDetailCapabilities {
         let selectedItem = store.selectedItem
+        let isTemplateCredential = selectedItem?.isTemplateCredential == true
         return VaultItemDetailCapabilities(
-            canEdit: store.canSaveCurrentEditor && selectedItem?.isArchived != true,
+            canEdit: store.canSaveCurrentEditor
+                && selectedItem?.isArchived != true,
             canCopyLoginFields: store.canCopyLoginFields,
             canCopyTotp: store.canCopyTotpCode,
             canOpenURL: store.canOpenSelectedLoginURL,
             canCopySecureNoteBody: store.canCopySecureNoteBody,
             canCopyCreditCardFields: store.canCopyCreditCardFields,
             canCopySoftwareLicenseFields: store.canCopySoftwareLicenseFields,
-            canRevealSecrets: store.canMutateSelectedItem,
+            canCopyCredentialFields: store.canUseSelectedCredentialSecret,
+            canRevealSecrets: store.canMutateSelectedItem
+                || store.canUseSelectedCredentialSecret,
             canToggleFavorite: store.canMutateSelectedItem,
             canDuplicate: store.canDuplicateSelectedItem,
-            canResolveConflict: store.canResolveSelectedConflict,
+            canResolveConflict: !isTemplateCredential && store.canResolveSelectedConflict,
             canRestoreArchive: store.canRestoreSelectedArchive,
-            canArchive: store.canMutateSelectedItem && selectedItem?.isArchived != true,
+            canArchive: store.canMutateSelectedItem
+                && selectedItem?.isArchived != true,
             canDelete: store.canMutateSelectedItem
         )
     }
@@ -1356,6 +1438,8 @@ struct ContentView: View {
             store.copyCardVerificationCode()
         case .licenseKey:
             store.copyLicenseKey()
+        case let .credentialSecret(secretFieldId):
+            store.copyCredentialSecret(secretFieldId: secretFieldId)
         }
     }
 
@@ -1395,6 +1479,8 @@ struct ContentView: View {
             value = store.revealSelectedCardVerificationCode()
         case .softwareLicenseKey:
             value = store.revealSelectedLicenseKey()
+        case let .credential(secretFieldId):
+            value = store.revealSelectedCredentialSecret(secretFieldId: secretFieldId)
         }
         if let value {
             revealedSecrets.reveal(
@@ -1667,6 +1753,72 @@ struct ContentView: View {
         .formStyle(.grouped)
         .padding(16)
         .onChange(of: form) { _ in store.touch() }
+    }
+
+    private var templateCredentialEditor: some View {
+        Form {
+            Section {
+                itemKindPicker
+                TextField(text.title, text: $templateCredentialForm.title)
+                RevealablePasswordField(
+                    title: text.templateSecretName(templateCredentialForm.template),
+                    text: $templateCredentialForm.secret,
+                    isRevealed: $showingTemplateCredentialSecret,
+                    appText: text
+                )
+                if templateCredentialForm.template.supportsExpiry {
+                    TextField(text.expiryDate, text: $templateCredentialForm.expiry)
+                }
+                TextField(text.tags, text: $templateCredentialForm.tagsText)
+                TextField(text.notes, text: $templateCredentialForm.notes, axis: .vertical)
+                    .lineLimit(4...8)
+                Toggle(text.favorite, isOn: $templateCredentialForm.favorite)
+                    .toggleStyle(.checkbox)
+            }
+            Section {
+                HStack {
+                    Button {
+                        saveCurrentTemplateCredential()
+                    } label: {
+                        Label(text.create, systemImage: "checkmark")
+                    }
+                    .disabled(
+                        !store.canSaveCurrentEditor
+                            || !templateCredentialForm.isValidForSave
+                    )
+                    Button {
+                        requestEditorAction(.cancelEditing)
+                    } label: {
+                        Label(text.cancel, systemImage: "xmark")
+                    }
+                    .keyboardShortcut(.cancelAction)
+                    Button {
+                        requestNewItem()
+                    } label: {
+                        Label(text.newItem, systemImage: "plus")
+                    }
+                    Spacer()
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding(16)
+        .onChange(of: templateCredentialForm) { _ in store.touch() }
+    }
+
+    private var credentialFieldEditor: some View {
+        CredentialFieldEditorView(
+            form: $credentialEditorForm,
+            text: text,
+            canSave: store.canSaveCurrentEditor,
+            save: saveCurrentCredential,
+            cancel: { requestEditorAction(.cancelEditing) },
+            createNew: { requestNewItem() }
+        )
+        .onChange(of: credentialEditorForm) { _ in
+            store.touch()
+            updateEditorDirtyState()
+        }
     }
 
     private var secureNoteEditor: some View {
@@ -1996,6 +2148,10 @@ struct ContentView: View {
             switch activeEditorKind {
             case .login:
                 loginEditor
+            case .templateCredential:
+                templateCredentialEditor
+            case .credential:
+                credentialFieldEditor
             case .secureNote:
                 secureNoteEditor
             case .creditCard:
@@ -2008,12 +2164,15 @@ struct ContentView: View {
 
     private var itemKindPicker: some View {
         Picker(text.itemType, selection: $newItemKind) {
-            Label(text.login, systemImage: "key").tag(NewItemKind.login)
-            Label(text.secureNote, systemImage: "note.text").tag(NewItemKind.secureNote)
-            Label(text.creditCard, systemImage: "creditcard").tag(NewItemKind.creditCard)
-            Label(text.softwareLicense, systemImage: "seal").tag(NewItemKind.softwareLicense)
+            ForEach(CredentialTemplateKind.allCases) { kind in
+                Label(
+                    text.credentialTemplateName(kind),
+                    systemImage: kind.systemImage
+                )
+                .tag(kind)
+            }
         }
-        .pickerStyle(.segmented)
+        .pickerStyle(.menu)
     }
 
     @ViewBuilder
@@ -2085,7 +2244,7 @@ struct ContentView: View {
             }
             .disabled(!store.canResolveSelectedConflict)
 
-            if !store.conflictCandidates.isEmpty {
+            if canMergeConflictFields {
                 VStack(alignment: .leading, spacing: 8) {
                     Picker(text.mergeBase, selection: conflictMergeBaseBinding) {
                         ForEach(store.conflictCandidates) { candidate in
@@ -2120,10 +2279,19 @@ struct ContentView: View {
                                 .foregroundStyle(.secondary)
                         }
                         Spacer()
+                        Label(
+                            text.itemStatus(candidate.status),
+                            systemImage: conflictCandidateStatusIcon(candidate.status)
+                        )
+                        .font(.caption)
+                        .foregroundStyle(candidate.status == "deleted" ? Color.red : Color.secondary)
                         Button {
                             requestEditorAction(.resolveConflictCandidate(candidate.revision))
                         } label: {
-                            Label(text.keepVersion, systemImage: "checkmark.seal")
+                            Label(
+                                candidate.status == "deleted" ? text.keepDeletedVersion : text.keepVersion,
+                                systemImage: candidate.status == "deleted" ? "trash" : "checkmark.seal"
+                            )
                         }
                     }
                     if let preview = candidate.preview, !preview.isEmpty {
@@ -2131,6 +2299,18 @@ struct ContentView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
+                    }
+                    if candidate.fieldShapeChanged {
+                        Label(text.conflictFieldLayoutChanged, systemImage: "arrow.up.arrow.down")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+                    if !candidate.credentialFields.isEmpty {
+                        VStack(alignment: .leading, spacing: 5) {
+                            ForEach(candidate.credentialFields) { field in
+                                conflictCandidateCredentialFieldRow(field)
+                            }
+                        }
                     }
                     if !candidate.comparisonFields.isEmpty {
                         VStack(alignment: .leading, spacing: 3) {
@@ -2149,7 +2329,9 @@ struct ContentView: View {
                         }
                     }
                     if !candidate.changedFields.isEmpty {
-                        Text("\(text.changedFields): \(candidate.changedFields.joined(separator: ", "))")
+                        Text(
+                            "\(text.changedFields): \(candidate.changedFields.map(localizedConflictFieldLabel).joined(separator: ", "))"
+                        )
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -2188,8 +2370,81 @@ struct ContentView: View {
         return "-"
     }
 
+    @ViewBuilder
+    private func conflictCandidateCredentialFieldRow(
+        _ field: ConflictCandidateCredentialField
+    ) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            switch field {
+            case let .text(textField):
+                Image(systemName: "text.alignleft")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(conflictCredentialFieldName(role: textField.role, label: textField.label))
+                        .font(.caption)
+                    Text(textField.text.isEmpty ? "-" : textField.text)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
+            case let .secret(secretField):
+                Image(systemName: "key")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(conflictCredentialFieldName(role: secretField.role, label: secretField.label))
+                        .font(.caption)
+                    Text(
+                        "\(text.credentialSecretKindName(secretField.secretKind)) · \(secretField.hasValue ? text.redactedValue : "-")"
+                    )
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    Text("\(text.secretFieldIdentity): \(String(secretField.secretFieldId.prefix(24)))")
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .textSelection(.enabled)
+                }
+            }
+            Spacer(minLength: 8)
+            if field.changed {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: 7))
+                    .foregroundStyle(Color.accentColor)
+                    .help(text.changedFields)
+            }
+        }
+    }
+
+    private func conflictCredentialFieldName(role: String, label: String?) -> String {
+        if let label = label?.nilIfEmpty {
+            return label
+        }
+        if let role = role.nilIfEmpty {
+            return role
+        }
+        return text.credentialFields
+    }
+
+    private func conflictCandidateStatusIcon(_ status: String) -> String {
+        switch status {
+        case "deleted":
+            return "trash"
+        case "archived":
+            return "archivebox"
+        default:
+            return "doc"
+        }
+    }
+
+    private var canMergeConflictFields: Bool {
+        store.conflictCandidates.count > 1
+            && store.conflictCandidates.allSatisfy(\.supportsSafeFieldMerge)
+    }
+
     private var mergeableConflictFieldLabels: [String] {
-        guard store.conflictCandidates.count > 1 else { return [] }
+        guard canMergeConflictFields else { return [] }
         let changedLabels = Set(store.conflictCandidates.flatMap(\.changedFields))
         var labels: [String] = []
         for candidate in store.conflictCandidates {
@@ -2250,6 +2505,10 @@ struct ContentView: View {
             return text.favorite
         case "tags":
             return text.tags
+        case "template":
+            return text.itemType
+        case "fields":
+            return text.credentialFields
         case "username":
             return text.username
         case "URLs":
@@ -2403,84 +2662,155 @@ struct ContentView: View {
     }
 
     private var forgottenPasswordRecoverySheet: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Label(text.forgottenPasswordRecoveryTitle, systemImage: "key.slash")
-                .font(.title3)
-                .fontWeight(.semibold)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Label(text.forgottenPasswordRecoveryTitle, systemImage: "key.viewfinder")
+                    .font(.title3)
+                    .fontWeight(.semibold)
 
-            if let vaultURL = store.vaultURL {
-                LabeledContent(text.selectedVault) {
-                    Text(vaultURL.lastPathComponent)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-
-            Text(text.forgottenPasswordNoRecoveryMessage)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Label(
-                text.forgottenPasswordLocalCopiesWarning,
-                systemImage: "exclamationmark.triangle"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
-
-            Divider()
-
-            VStack(alignment: .leading, spacing: 10) {
-                Button {
-                    store.revealVaultInFinder()
-                } label: {
-                    Label(text.revealInFinder, systemImage: "folder")
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                if let vaultURL = store.vaultURL {
+                    LabeledContent(text.selectedVault) {
+                        Text(vaultURL.lastPathComponent)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
 
-                Button {
-                    closeForgottenVault(createReplacement: false)
-                } label: {
-                    Label(text.closeVault, systemImage: "xmark.circle")
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                Text(text.forgottenPasswordRecoveryBoundary)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if store.lockedRecoveryStatus?.hasRecoveryEnvelope == true {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Label(text.recoverWithRecoveryKit, systemImage: "checkmark.shield")
+                            .font(.headline)
+                            .foregroundStyle(KeptNearBrand.primary)
+
+                        Text(text.forgottenPasswordRecoveryAvailableMessage)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        RevealablePasswordField(
+                            title: text.recoveryCode,
+                            text: $forgottenRecoveryCode,
+                            isRevealed: $showingForgottenRecoveryCode,
+                            appText: text
+                        )
+
+                        Text(text.setNewMasterPassword)
+                            .font(.headline)
+
+                        RevealablePasswordField(
+                            title: text.newMasterPassword,
+                            text: $forgottenRecoveryNewPassword,
+                            isRevealed: $showingForgottenRecoveryPasswords,
+                            appText: text
+                        )
+                        MasterPasswordStrengthView(
+                            password: forgottenRecoveryNewPassword,
+                            text: text
+                        )
+                        RevealablePasswordField(
+                            title: text.confirmNewMasterPassword,
+                            text: $forgottenRecoveryPasswordConfirmation,
+                            isRevealed: $showingForgottenRecoveryPasswords,
+                            appText: text
+                        )
+
+                        Button {
+                            recoverForgottenVault()
+                        } label: {
+                            Label(text.recoverWithRecoveryKit, systemImage: "lock.open")
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(
+                            forgottenRecoveryCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                || forgottenRecoveryNewPassword.isEmpty
+                                || forgottenRecoveryPasswordConfirmation.isEmpty
+                                || store.isBusy
+                        )
+                    }
+                } else if store.lockedRecoveryStatusCheckFailed {
+                    Label(
+                        text.forgottenPasswordRecoveryStatusUnavailable,
+                        systemImage: "exclamationmark.triangle"
+                    )
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    Text(text.forgottenPasswordNoRecoveryMessage)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
 
-                Button {
-                    closeForgottenVault(createReplacement: true)
-                } label: {
-                    Label(text.closeAndCreateNewVault, systemImage: "plus")
-                        .frame(maxWidth: .infinity)
+                if !forgottenPasswordRecoveryFeedback.isEmpty {
+                    Label(
+                        text.statusMessage(forgottenPasswordRecoveryFeedback),
+                        systemImage: "exclamationmark.circle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .buttonStyle(.borderedProminent)
 
                 Divider()
 
-                Button(role: .destructive) {
-                    showingForgottenVaultTrashConfirmation = true
-                } label: {
-                    Label(text.moveVaultToTrashAndCreateNew, systemImage: "trash")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
+                Text(text.replacementOptions)
+                    .font(.headline)
 
-            if !forgottenPasswordRecoveryFeedback.isEmpty {
                 Label(
-                    text.statusMessage(forgottenPasswordRecoveryFeedback),
-                    systemImage: "exclamationmark.circle.fill"
+                    text.forgottenPasswordLocalCopiesWarning,
+                    systemImage: "exclamationmark.triangle"
                 )
                 .font(.caption)
-                .foregroundStyle(.red)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            }
 
-            HStack {
-                Spacer()
-                Button(text.cancel) {
-                    showingForgottenPasswordRecovery = false
+                VStack(alignment: .leading, spacing: 10) {
+                    Button {
+                        store.revealVaultInFinder()
+                    } label: {
+                        Label(text.revealInFinder, systemImage: "folder")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    Button {
+                        closeForgottenVault(createReplacement: false)
+                    } label: {
+                        Label(text.closeVault, systemImage: "xmark.circle")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    Button {
+                        closeForgottenVault(createReplacement: true)
+                    } label: {
+                        Label(text.closeAndCreateNewVault, systemImage: "plus")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Divider()
+
+                    Button(role: .destructive) {
+                        showingForgottenVaultTrashConfirmation = true
+                    } label: {
+                        Label(text.moveVaultToTrashAndCreateNew, systemImage: "trash")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+
+                HStack {
+                    Spacer()
+                    Button(text.cancel) {
+                        showingForgottenPasswordRecovery = false
+                    }
                 }
             }
+            .padding(24)
         }
-        .padding(24)
-        .frame(width: 500)
+        .frame(width: 540)
+        .frame(minHeight: 430, maxHeight: 720)
         .alert(
             text.moveForgottenVaultToTrashTitle(
                 store.vaultURL?.lastPathComponent ?? KeptNearBrand.name
@@ -2619,6 +2949,23 @@ struct ContentView: View {
                             Text(warning)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                if !result.omissions.isEmpty {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(result.omissions, id: \.reason) { omission in
+                            Label(
+                                text.exportOmission(
+                                    reason: omission.reason,
+                                    count: omission.count
+                                ),
+                                systemImage: "exclamationmark.triangle"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                         }
                     }
                 }
@@ -2775,12 +3122,13 @@ struct ContentView: View {
         }
     }
 
-    private func requestNewItem(_ kind: NewItemKind = .login) {
+    private func requestNewItem(_ kind: CredentialTemplateKind = .login) {
         requestEditorAction(.newItem(kind))
     }
 
     private func requestNavigationDestination(_ destination: VaultNavigationDestination) {
         let wouldDiscardDraft = isCreatingItem
+            || (!destination.isItemDestination && isEditingSelectedItem)
             || store.navigationDestinationHidesSelectedItem(destination)
         if wouldDiscardDraft && shouldConfirmDiscard(before: .editorNavigation) {
             pendingEditorAction = .navigate(destination)
@@ -2791,11 +3139,28 @@ struct ContentView: View {
     }
 
     private func presentForgottenPasswordRecovery() {
+        resetForgottenPasswordRecoveryForm()
         forgottenPasswordRecoveryFeedback = ""
         forgottenPasswordRecoveryHandoffFeedback = ""
         showingForgottenVaultTrashConfirmation = false
         createVaultAfterForgottenPasswordRecovery = false
+        store.refreshLockedRecoveryStatus()
         showingForgottenPasswordRecovery = true
+    }
+
+    private func recoverForgottenVault() {
+        guard store.recoverVault(
+            recoveryCode: forgottenRecoveryCode,
+            newPassword: forgottenRecoveryNewPassword,
+            confirmation: forgottenRecoveryPasswordConfirmation
+        ) else {
+            forgottenPasswordRecoveryFeedback = store.statusMessage
+            return
+        }
+        unlockPassword = ""
+        rememberUnlockInKeychain = false
+        clearLockSensitiveViewState()
+        showingForgottenPasswordRecovery = false
     }
 
     private func closeForgottenVault(createReplacement: Bool) {
@@ -2827,6 +3192,7 @@ struct ContentView: View {
     private func presentReplacementVaultAfterForgottenPasswordRecovery() {
         showingForgottenVaultTrashConfirmation = false
         forgottenPasswordRecoveryFeedback = ""
+        resetForgottenPasswordRecoveryForm()
         guard createVaultAfterForgottenPasswordRecovery else { return }
         let handoffFeedback = forgottenPasswordRecoveryHandoffFeedback
         createVaultAfterForgottenPasswordRecovery = false
@@ -2835,6 +3201,14 @@ struct ContentView: View {
             performEditorAction(.createVault)
             createVaultFeedback = handoffFeedback
         }
+    }
+
+    private func resetForgottenPasswordRecoveryForm() {
+        forgottenRecoveryCode = ""
+        forgottenRecoveryNewPassword = ""
+        forgottenRecoveryPasswordConfirmation = ""
+        showingForgottenRecoveryCode = false
+        showingForgottenRecoveryPasswords = false
     }
 
     private func requestDestructiveAction(_ action: DestructiveAction) {
@@ -2902,10 +3276,15 @@ struct ContentView: View {
             store.selectedSecureNoteDetail = nil
             store.selectedCreditCardDetail = nil
             store.selectedSoftwareLicenseDetail = nil
+            store.selectedCredentialDetail = nil
             newItemKind = kind
             isCreatingItem = true
             isEditingSelectedItem = false
             resetEditorForms()
+            if kind.usesTemplateCredentialForm {
+                let nextForm = TemplateCredentialForm(template: kind)
+                setTemplateCredentialEditorForm(nextForm)
+            }
         case .cancelEditing:
             isCreatingItem = false
             isEditingSelectedItem = false
@@ -3093,6 +3472,45 @@ struct ContentView: View {
         revealedSecrets.clearAll()
         form = nextForm
         baselineForm = nextForm
+        templateCredentialForm = TemplateCredentialForm()
+        baselineTemplateCredentialForm = TemplateCredentialForm()
+        credentialEditorForm = CredentialEditorForm()
+        baselineCredentialEditorForm = CredentialEditorForm()
+        showingTemplateCredentialSecret = false
+        secureNoteForm = SecureNoteForm()
+        baselineSecureNoteForm = SecureNoteForm()
+        creditCardForm = CreditCardForm()
+        baselineCreditCardForm = CreditCardForm()
+        softwareLicenseForm = SoftwareLicenseForm()
+        baselineSoftwareLicenseForm = SoftwareLicenseForm()
+    }
+
+    private func setTemplateCredentialEditorForm(_ nextForm: TemplateCredentialForm) {
+        revealedSecrets.clearAll()
+        templateCredentialForm = nextForm
+        baselineTemplateCredentialForm = nextForm
+        credentialEditorForm = CredentialEditorForm()
+        baselineCredentialEditorForm = CredentialEditorForm()
+        showingTemplateCredentialSecret = false
+        form = LoginForm()
+        baselineForm = LoginForm()
+        secureNoteForm = SecureNoteForm()
+        baselineSecureNoteForm = SecureNoteForm()
+        creditCardForm = CreditCardForm()
+        baselineCreditCardForm = CreditCardForm()
+        softwareLicenseForm = SoftwareLicenseForm()
+        baselineSoftwareLicenseForm = SoftwareLicenseForm()
+    }
+
+    private func setCredentialEditorForm(_ nextForm: CredentialEditorForm) {
+        revealedSecrets.clearAll()
+        credentialEditorForm = nextForm
+        baselineCredentialEditorForm = nextForm
+        form = LoginForm()
+        baselineForm = LoginForm()
+        templateCredentialForm = TemplateCredentialForm()
+        baselineTemplateCredentialForm = TemplateCredentialForm()
+        showingTemplateCredentialSecret = false
         secureNoteForm = SecureNoteForm()
         baselineSecureNoteForm = SecureNoteForm()
         creditCardForm = CreditCardForm()
@@ -3107,6 +3525,11 @@ struct ContentView: View {
         baselineSecureNoteForm = nextForm
         form = LoginForm()
         baselineForm = LoginForm()
+        templateCredentialForm = TemplateCredentialForm()
+        baselineTemplateCredentialForm = TemplateCredentialForm()
+        credentialEditorForm = CredentialEditorForm()
+        baselineCredentialEditorForm = CredentialEditorForm()
+        showingTemplateCredentialSecret = false
         creditCardForm = CreditCardForm()
         baselineCreditCardForm = CreditCardForm()
         softwareLicenseForm = SoftwareLicenseForm()
@@ -3119,6 +3542,11 @@ struct ContentView: View {
         baselineCreditCardForm = nextForm
         form = LoginForm()
         baselineForm = LoginForm()
+        templateCredentialForm = TemplateCredentialForm()
+        baselineTemplateCredentialForm = TemplateCredentialForm()
+        credentialEditorForm = CredentialEditorForm()
+        baselineCredentialEditorForm = CredentialEditorForm()
+        showingTemplateCredentialSecret = false
         secureNoteForm = SecureNoteForm()
         baselineSecureNoteForm = SecureNoteForm()
         softwareLicenseForm = SoftwareLicenseForm()
@@ -3131,6 +3559,11 @@ struct ContentView: View {
         baselineSoftwareLicenseForm = nextForm
         form = LoginForm()
         baselineForm = LoginForm()
+        templateCredentialForm = TemplateCredentialForm()
+        baselineTemplateCredentialForm = TemplateCredentialForm()
+        credentialEditorForm = CredentialEditorForm()
+        baselineCredentialEditorForm = CredentialEditorForm()
+        showingTemplateCredentialSecret = false
         secureNoteForm = SecureNoteForm()
         baselineSecureNoteForm = SecureNoteForm()
         creditCardForm = CreditCardForm()
@@ -3145,6 +3578,11 @@ struct ContentView: View {
         baselineCreditCardForm = CreditCardForm()
         softwareLicenseForm = SoftwareLicenseForm()
         baselineSoftwareLicenseForm = SoftwareLicenseForm()
+        templateCredentialForm = TemplateCredentialForm()
+        baselineTemplateCredentialForm = TemplateCredentialForm()
+        credentialEditorForm = CredentialEditorForm()
+        baselineCredentialEditorForm = CredentialEditorForm()
+        showingTemplateCredentialSecret = false
     }
 
     private func clearLockSensitiveViewState() {
@@ -3158,6 +3596,7 @@ struct ContentView: View {
         showingImportSheet = false
         keepImportDuplicates = false
         pendingExportURL = nil
+        exportMasterPassword = ""
         showingExportConfirmation = false
         showingExportResult = false
         pendingEditorAction = nil
@@ -3178,6 +3617,8 @@ struct ContentView: View {
             setCreditCardEditorForm(CreditCardForm(detail: detail))
         } else if let detail = store.selectedSoftwareLicenseDetail {
             setSoftwareLicenseEditorForm(SoftwareLicenseForm(detail: detail))
+        } else if let detail = store.selectedCredentialDetail {
+            setCredentialEditorForm(CredentialEditorForm(detail: detail))
         }
     }
 
@@ -3247,6 +3688,7 @@ struct ContentView: View {
     }
 
     private func chooseExportDestination() {
+        exportMasterPassword = ""
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [.json]
@@ -3324,12 +3766,45 @@ struct ContentView: View {
         switch activeEditorKind {
         case .login:
             saveCurrentLogin()
+        case .templateCredential:
+            saveCurrentTemplateCredential()
+        case .credential:
+            saveCurrentCredential()
         case .secureNote:
             saveCurrentSecureNote()
         case .creditCard:
             saveCurrentCreditCard()
         case .softwareLicense:
             saveCurrentSoftwareLicense()
+        }
+    }
+
+    private func saveCurrentTemplateCredential() {
+        let submittedForm = templateCredentialForm
+        guard store.saveTemplateCredential(form: submittedForm) == .saved else {
+            return
+        }
+        isCreatingItem = false
+        isEditingSelectedItem = false
+        setTemplateCredentialEditorForm(
+            TemplateCredentialForm(template: submittedForm.template)
+        )
+    }
+
+    private func saveCurrentCredential() {
+        let submittedForm = credentialEditorForm
+        switch store.saveCredential(form: submittedForm) {
+        case .saved:
+            break
+        case .staleDraftPreserved:
+            return
+        case .failed:
+            return
+        }
+        isCreatingItem = false
+        isEditingSelectedItem = false
+        if let detail = store.selectedCredentialDetail {
+            setCredentialEditorForm(CredentialEditorForm(detail: detail))
         }
     }
 

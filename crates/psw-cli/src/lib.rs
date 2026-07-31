@@ -1,16 +1,31 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-//! Command-line support library for PSW local vault tooling.
+//! KeptNear command support plus the legacy PSW vault diagnostic workflow.
 
-use std::fs;
+mod command;
+mod machine;
+
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::Path;
 
-use psw_core::VaultMetadata;
+#[cfg(unix)]
+use std::fs::OpenOptions;
+
+use psw_core::{VaultMetadata, CURRENT_RECORD_FORMAT_VERSION, CURRENT_VAULT_FORMAT_VERSION};
 use serde::{Deserialize, Serialize};
 
-const CURRENT_VAULT_FORMAT_VERSION: u32 = 1;
-const CURRENT_RECORD_FORMAT_VERSION: u32 = 1;
+pub use command::{
+    parse_keptnear_arguments, CliAccessRequest, CliApprovalWaitMode, CliHttpRequest,
+    CliPairingProfileId, CliPairingProfileIdError, CliVaultDoctorInvocation, CliVaultDoctorOutput,
+    KeptNearCliAction, KeptNearCliParseError, KeptNearCommand, KeptNearInvocation, KEPTNEAR_HELP,
+};
+pub use machine::{execute_keptnear_invocation, KeptNearExecutionError, KeptNearExecutionOutcome};
+
+const VAULT_FORMAT_NAME: &str = "psw-local-vault";
+const SUPPORTED_FORMAT_PAIRS: &[(u32, u32)] = &[(1, 1), (2, 2)];
+const MAX_VAULT_METADATA_BYTES: u64 = 64 * 1024;
 
 /// Overall vault doctor status.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -92,14 +107,18 @@ impl VaultDoctorReport {
 /// Inspects a local vault directory without unlocking or decrypting records.
 #[must_use]
 pub fn doctor_vault(path: &Path) -> VaultDoctorReport {
-    let path_exists = path.exists();
-    let is_directory = path.is_dir();
+    let root_metadata = fs::symlink_metadata(path).ok();
+    let path_exists = root_metadata.is_some();
+    let is_directory = root_metadata
+        .as_ref()
+        .map(|metadata| !metadata.file_type().is_symlink() && metadata.is_dir())
+        .unwrap_or(false);
     let required_paths = required_path_reports(path);
     let required_structure_complete = is_directory
         && required_paths
             .iter()
             .all(|report| report.exists && report.valid_kind);
-    let local_unlock_envelope_present = path.join("local_unlock.enc").is_file();
+    let local_unlock_envelope_present = is_regular_entry(&path.join("local_unlock.enc"));
 
     if !path_exists {
         return report(
@@ -167,6 +186,30 @@ pub fn doctor_vault(path: &Path) -> VaultDoctorReport {
             local_unlock_envelope_present,
         );
     }
+    let format_pair = (
+        metadata.vault_format_version,
+        metadata.record_format_version,
+    );
+    let metadata_identity_is_valid = match format_pair {
+        (1, 1) => metadata.vault_id.is_none(),
+        (2, 2) => metadata.vault_id.is_some(),
+        _ => false,
+    };
+    if metadata.format_name != VAULT_FORMAT_NAME
+        || !SUPPORTED_FORMAT_PAIRS.contains(&format_pair)
+        || !metadata_identity_is_valid
+    {
+        return report(
+            DoctorStatus::Unusable,
+            path_exists,
+            is_directory,
+            required_paths,
+            Some(metadata),
+            Some("vault format metadata is unsupported or inconsistent".to_owned()),
+            count_vault_files(path),
+            local_unlock_envelope_present,
+        );
+    }
 
     report(
         DoctorStatus::Usable,
@@ -183,8 +226,19 @@ pub fn doctor_vault(path: &Path) -> VaultDoctorReport {
 /// Renders a non-secret human-readable doctor report.
 #[must_use]
 pub fn render_text_report(report: &VaultDoctorReport) -> String {
+    render_text_report_with_title(report, "PSW vault doctor")
+}
+
+/// Renders a branded non-secret human-readable doctor report.
+#[must_use]
+pub fn render_keptnear_text_report(report: &VaultDoctorReport) -> String {
+    render_text_report_with_title(report, "KeptNear vault doctor")
+}
+
+fn render_text_report_with_title(report: &VaultDoctorReport, title: &str) -> String {
     let mut output = String::new();
-    output.push_str("PSW vault doctor\n");
+    output.push_str(title);
+    output.push('\n');
     output.push_str(&format!("Status: {}\n", status_label(&report.status)));
     output.push_str(&format!(
         "Required structure: {}\n",
@@ -277,10 +331,16 @@ fn required_path_reports(path: &Path) -> Vec<RequiredPathReport> {
     .into_iter()
     .map(|(label, expected_kind)| {
         let full_path = path.join(label.trim_end_matches('/'));
-        let exists = full_path.exists();
-        let valid_kind = match expected_kind {
-            RequiredPathKind::File => full_path.is_file(),
-            RequiredPathKind::Directory => full_path.is_dir(),
+        let metadata = fs::symlink_metadata(full_path).ok();
+        let exists = metadata.is_some();
+        let valid_kind = match (metadata.as_ref(), &expected_kind) {
+            (Some(metadata), RequiredPathKind::File) => {
+                !metadata.file_type().is_symlink() && metadata.is_file()
+            }
+            (Some(metadata), RequiredPathKind::Directory) => {
+                !metadata.file_type().is_symlink() && metadata.is_dir()
+            }
+            (None, _) => false,
         };
         RequiredPathReport {
             label: label.to_owned(),
@@ -302,9 +362,52 @@ fn invalid_required_labels(report: &VaultDoctorReport) -> Vec<String> {
 }
 
 fn read_metadata(path: &Path) -> Result<VaultMetadata, String> {
-    let bytes =
-        fs::read(path.join("vault.json")).map_err(|_| "vault metadata is unreadable".to_owned())?;
+    let metadata_path = path.join("vault.json");
+    let metadata = fs::symlink_metadata(&metadata_path)
+        .map_err(|_| "vault metadata is unreadable".to_owned())?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_VAULT_METADATA_BYTES
+    {
+        return Err("vault metadata is unreadable".to_owned());
+    }
+    let file = open_metadata_file(&metadata_path)
+        .map_err(|_| "vault metadata is unreadable".to_owned())?;
+    let opened_metadata = file
+        .metadata()
+        .map_err(|_| "vault metadata is unreadable".to_owned())?;
+    if !opened_metadata.is_file() || opened_metadata.len() > MAX_VAULT_METADATA_BYTES {
+        return Err("vault metadata is unreadable".to_owned());
+    }
+    let mut bytes = Vec::with_capacity(opened_metadata.len() as usize);
+    file.take(MAX_VAULT_METADATA_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| "vault metadata is unreadable".to_owned())?;
+    if bytes.len() as u64 > MAX_VAULT_METADATA_BYTES {
+        return Err("vault metadata is unreadable".to_owned());
+    }
     serde_json::from_slice(&bytes).map_err(|_| "vault metadata is malformed".to_owned())
+}
+
+fn is_regular_entry(path: &Path) -> bool {
+    fs::symlink_metadata(path)
+        .map(|metadata| !metadata.file_type().is_symlink() && metadata.is_file())
+        .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn open_metadata_file(path: &Path) -> std::io::Result<File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_metadata_file(path: &Path) -> std::io::Result<File> {
+    File::open(path)
 }
 
 fn count_vault_files(path: &Path) -> VaultDoctorCounts {
@@ -393,15 +496,30 @@ mod tests {
                 .as_ref()
                 .expect("metadata")
                 .vault_format_version,
-            1
+            2
         );
+        assert!(report
+            .metadata
+            .as_ref()
+            .expect("metadata")
+            .vault_id
+            .is_some());
         assert_eq!(report.counts.item_record_files, 1);
         assert_eq!(report.counts.attachment_files, 1);
         assert_eq!(report.counts.tombstone_record_files, 0);
         assert!(report.local_unlock_envelope_present);
         let text = render_text_report(&report);
+        let keptnear_text = render_keptnear_text_report(&report);
+        assert!(text.starts_with("PSW vault doctor\n"));
+        assert!(keptnear_text.starts_with("KeptNear vault doctor\n"));
+        assert_eq!(
+            text.lines().skip(1).collect::<Vec<_>>(),
+            keptnear_text.lines().skip(1).collect::<Vec<_>>()
+        );
         assert!(text.contains("Status: usable"));
+        assert!(keptnear_text.contains("Status: usable"));
         assert!(!text.contains("secret-password"));
+        assert!(!keptnear_text.contains("secret-password"));
 
         fs::remove_dir_all(temp_dir).expect("remove temp dir");
     }
@@ -432,12 +550,64 @@ mod tests {
         fs::remove_dir_all(temp_dir).expect("remove temp dir");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn doctor_rejects_symbolic_link_roots_and_required_entries() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = unique_temp_dir("doctor_symlinks");
+        let vault_path = temp_dir.join("Real.pswvault");
+        let linked_vault_path = temp_dir.join("Linked.pswvault");
+        create_sample_vault(&vault_path);
+        symlink(&vault_path, &linked_vault_path).expect("create root symlink");
+
+        let root_report = doctor_vault(&linked_vault_path);
+
+        assert_eq!(root_report.status, DoctorStatus::Unusable);
+        assert!(!root_report.is_directory);
+
+        let metadata_path = vault_path.join("vault.json");
+        let metadata_copy = temp_dir.join("metadata.json");
+        fs::rename(&metadata_path, &metadata_copy).expect("move metadata");
+        symlink(&metadata_copy, &metadata_path).expect("create metadata symlink");
+
+        let entry_report = doctor_vault(&vault_path);
+
+        assert_eq!(entry_report.status, DoctorStatus::Unusable);
+        assert_eq!(
+            invalid_required_labels(&entry_report),
+            vec!["vault.json".to_owned()]
+        );
+        fs::remove_dir_all(temp_dir).expect("remove temp dir");
+    }
+
+    #[test]
+    fn doctor_rejects_oversized_vault_metadata() {
+        let temp_dir = unique_temp_dir("doctor_oversized_metadata");
+        let vault_path = temp_dir.join("Oversized.pswvault");
+        create_sample_vault(&vault_path);
+        fs::write(
+            vault_path.join("vault.json"),
+            vec![b' '; MAX_VAULT_METADATA_BYTES as usize + 1],
+        )
+        .expect("write oversized metadata");
+
+        let report = doctor_vault(&vault_path);
+
+        assert_eq!(report.status, DoctorStatus::Unusable);
+        assert_eq!(
+            report.problem.as_deref(),
+            Some("vault metadata is unreadable")
+        );
+        fs::remove_dir_all(temp_dir).expect("remove temp dir");
+    }
+
     #[test]
     fn doctor_reports_unsupported_future_format() {
         let temp_dir = unique_temp_dir("doctor_future");
         let vault_path = temp_dir.join("Future.pswvault");
         create_sample_vault(&vault_path);
-        let mut metadata = VaultMetadata::experimental(Some("Future".to_owned()));
+        let mut metadata = VaultMetadata::current(Some("Future".to_owned()));
         metadata.vault_format_version = CURRENT_VAULT_FORMAT_VERSION + 1;
         fs::write(
             vault_path.join("vault.json"),

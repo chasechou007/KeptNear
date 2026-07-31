@@ -4,6 +4,7 @@ struct VaultNavigationList: View {
     let text: AppText
     let counts: VaultNavigationCounts
     let hasPasswordHealthResult: Bool
+    let pendingRequestCount: Int
     @Binding var selection: VaultNavigationDestination?
 
     var body: some View {
@@ -20,6 +21,37 @@ struct VaultNavigationList: View {
                     systemImage: "star",
                     count: counts.favorites,
                     destination: .favorites
+                )
+            }
+
+            Section {
+                navigationRow(
+                    text.appsAndTools,
+                    systemImage: "cpu",
+                    count: pendingRequestCount > 0 ? nil : counts.appsToolsAuthorized,
+                    destination: .appsAndTools,
+                    attentionCount: pendingRequestCount
+                )
+            }
+
+            Section(text.smartViews) {
+                navigationRow(
+                    text.loginsSmartView,
+                    systemImage: "person.badge.key",
+                    count: counts.logins,
+                    destination: .smartView(.logins)
+                )
+                navigationRow(
+                    text.developerCredentialsSmartView,
+                    systemImage: "chevron.left.forwardslash.chevron.right",
+                    count: counts.developerCredentials,
+                    destination: .smartView(.developerCredentials)
+                )
+                navigationRow(
+                    text.keysAndCertificatesSmartView,
+                    systemImage: "key.horizontal",
+                    count: counts.keysAndCertificates,
+                    destination: .smartView(.keysAndCertificates)
                 )
             }
 
@@ -80,7 +112,8 @@ struct VaultNavigationList: View {
         systemImage: String,
         count: Int?,
         destination: VaultNavigationDestination,
-        emphasized: Bool = false
+        emphasized: Bool = false,
+        attentionCount: Int = 0
     ) -> some View {
         HStack(spacing: 9) {
             Image(systemName: systemImage)
@@ -95,15 +128,42 @@ struct VaultNavigationList: View {
                     .monospacedDigit()
                     .foregroundStyle(emphasized ? Color.orange : Color.secondary)
             }
+            if attentionCount > 0 {
+                Text(attentionCount > 99 ? "99+" : "\(attentionCount)")
+                    .font(.caption2)
+                    .fontWeight(.semibold)
+                    .monospacedDigit()
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.red, in: Capsule())
+            }
         }
         .contentShape(Rectangle())
         .tag(destination)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(title)
+        .accessibilityValue(
+            attentionCount > 0
+                ? text.pendingRequestCount(attentionCount)
+                : count.map { text.itemCount($0) } ?? ""
+        )
     }
 
     static func itemTypeIcon(_ itemType: String) -> String {
         switch itemType.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
         case "login":
             return "person.crop.circle"
+        case "api token":
+            return "ticket"
+        case "api key":
+            return "key.horizontal"
+        case "ssh key":
+            return "terminal"
+        case "certificate":
+            return "checkmark.seal"
+        case "custom":
+            return "slider.horizontal.3"
         case "secure note":
             return "note.text"
         case "credit card":

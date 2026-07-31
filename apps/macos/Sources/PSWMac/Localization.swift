@@ -32,6 +32,17 @@ struct AppText {
         selectedLanguage = AppLanguage.resolve(rawLanguage)
     }
 
+    var locale: Locale {
+        switch selectedLanguage {
+        case .english:
+            return Locale(identifier: "en_US")
+        case .simplifiedChinese:
+            return Locale(identifier: "zh_Hans_CN")
+        case .japanese:
+            return Locale(identifier: "ja_JP")
+        }
+    }
+
     var newVault: String { choose("New Vault", "新建密码库", "新規保管庫") }
     var openVault: String { choose("Open Vault", "打开密码库", "保管庫を開く") }
     var openRecentVault: String { choose("Open Recent", "打开最近", "最近使った保管庫を開く") }
@@ -150,6 +161,7 @@ struct AppText {
     var lock: String { choose("Lock", "锁定", "ロック") }
     var lockVault: String { choose("Lock Vault", "锁定密码库", "保管庫をロック") }
     var closeVault: String { choose("Close Vault", "关闭密码库", "保管庫を閉じる") }
+    var close: String { choose("Close", "关闭", "閉じる") }
     var forgotMasterPassword: String {
         choose("Forgot master password?", "忘记主密码？", "マスターパスワードを忘れた場合")
     }
@@ -158,10 +170,40 @@ struct AppText {
     }
     var forgottenPasswordNoRecoveryMessage: String {
         choose(
-            "KeptNear cannot recover, reset, or bypass this vault's master password. If Keychain unlock is available, try it before replacing the vault.",
-            "KeptNear 无法找回、重置或绕过此密码库的主密码。如果钥匙串解锁可用，请先尝试使用它。",
-            "KeptNearでは、この保管庫のマスターパスワードを復旧、リセット、回避できません。キーチェーン解除が利用できる場合は、保管庫を置き換える前にお試しください。"
+            "No supported recovery envelope is available. KeptNear cannot recover, reset, or bypass the master password without a valid user-held recovery kit or working Keychain unlock.",
+            "没有可用的受支持恢复信封。如果没有用户持有的有效恢复套件或可用的钥匙串解锁，KeptNear 无法找回、重置或绕过主密码。",
+            "対応する復旧エンベロープがありません。ユーザーが保持する有効な復旧キット、または利用可能なキーチェーン解除がなければ、KeptNearはマスターパスワードを復旧、リセット、回避できません。"
         )
+    }
+    var forgottenPasswordRecoveryAvailableMessage: String {
+        choose(
+            "This vault has an offline recovery envelope. Enter the complete code from your recovery kit and choose a new master password.",
+            "此密码库具有离线恢复信封。请输入恢复套件中的完整恢复码，并设置新的主密码。",
+            "この保管庫にはオフライン復旧エンベロープがあります。復旧キットの完全なコードを入力し、新しいマスターパスワードを設定してください。"
+        )
+    }
+    var forgottenPasswordRecoveryBoundary: String {
+        choose(
+            "KeptNear has no hosted copy of your master password or recovery code. Invalid recovery material cannot unlock or change this vault.",
+            "KeptNear 不托管你的主密码或恢复码副本。无效的恢复材料无法解锁或更改此密码库。",
+            "KeptNearはマスターパスワードや復旧コードをホストしません。無効な復旧情報では、この保管庫を解除または変更できません。"
+        )
+    }
+    var forgottenPasswordRecoveryStatusUnavailable: String {
+        choose(
+            "KeptNear could not verify recovery availability for this vault. The vault remains unchanged.",
+            "KeptNear 无法确认此密码库是否可恢复，密码库保持不变。",
+            "この保管庫で復旧を利用できるか確認できませんでした。保管庫は変更されていません。"
+        )
+    }
+    var recoverWithRecoveryKit: String {
+        choose("Recover with Recovery Kit", "使用恢复套件恢复", "復旧キットで復旧")
+    }
+    var setNewMasterPassword: String {
+        choose("Set New Master Password", "设置新主密码", "新しいマスターパスワードを設定")
+    }
+    var replacementOptions: String {
+        choose("Other Options", "其他选项", "その他のオプション")
     }
     var forgottenPasswordLocalCopiesWarning: String {
         choose(
@@ -210,10 +252,601 @@ struct AppText {
     var copyTotp: String { choose("Copy TOTP", "复制动态验证码", "TOTPをコピー") }
     var search: String { choose("Search", "搜索", "検索") }
     var localPasswordManager: String {
-        choose("Local Password Manager", "本地密码管理器", "ローカルパスワードマネージャー")
+        choose(
+            "Local Password & Token Manager",
+            "本地密码与令牌管理器",
+            "ローカルパスワード・トークンマネージャー"
+        )
     }
     var allItems: String { choose("All Items", "所有项目", "すべての項目") }
     var browse: String { choose("Browse", "浏览", "ブラウズ") }
+    var appsAndTools: String { choose("Apps & Tools", "应用与工具", "Appとツール") }
+    var appsToolsOverview: String { choose("Access Overview", "访问概览", "アクセス概要") }
+    var pendingRequests: String { choose("Pending Requests", "待处理请求", "保留中のリクエスト") }
+    var noPendingRequests: String {
+        choose("No requests need your attention", "暂无需要处理的请求", "確認が必要なリクエストはありません")
+    }
+    var pendingRequestsUnavailable: String {
+        choose("Pending requests are unavailable", "待处理请求不可用", "保留中のリクエストを利用できません")
+    }
+    var reviewPendingRequests: String {
+        choose("Review Pending Requests", "查看待处理请求", "保留中のリクエストを確認")
+    }
+    var deny: String { choose("Deny", "拒绝", "拒否") }
+    var allowOnce: String { choose("Allow Once", "仅允许一次", "今回のみ許可") }
+    var configureLongTermAccess: String {
+        choose("Configure Long-Term Access", "配置长期访问", "長期アクセスを設定")
+    }
+    var pairConsumer: String {
+        choose("Pair Consumer", "配对使用方", "コンシューマーをペアリング")
+    }
+    var consumerName: String { choose("Consumer Name", "使用方名称", "コンシューマー名") }
+    var approveUnlock: String {
+        choose("Approve Unlock", "批准解锁", "ロック解除を承認")
+    }
+    var unlockToRespond: String {
+        choose(
+            "Unlock this Vault to approve access.",
+            "解锁此密码库后才能批准访问。",
+            "アクセスを承認するには、この保管庫のロックを解除してください。"
+        )
+    }
+    var chooseCredential: String {
+        choose("Choose Credential", "选择凭据", "認証情報を選択")
+    }
+    var chooseSecretField: String {
+        choose("Choose Secret Field", "选择秘密字段", "シークレットフィールドを選択")
+    }
+    var noMatchingCredentials: String {
+        choose("No matching credentials", "没有匹配的凭据", "一致する認証情報がありません")
+    }
+    var matchingResultsTruncated: String {
+        choose(
+            "Only the first matching credentials are shown.",
+            "仅显示前几项匹配凭据。",
+            "一致した認証情報の先頭のみを表示しています。"
+        )
+    }
+    var requestActionFailed: String {
+        choose(
+            "The request could not be updated. Refresh and try again.",
+            "无法更新请求，请刷新后重试。",
+            "リクエストを更新できませんでした。更新して再試行してください。"
+        )
+    }
+    var confirmationPolicyTitle: String {
+        choose("Confirmation Policy", "确认策略", "確認ポリシー")
+    }
+    var saveAccess: String { choose("Save Access", "保存访问权限", "アクセスを保存") }
+    var everyUsePolicyDetail: String {
+        choose(
+            "Ask before every credential use.",
+            "每次使用凭据前都需要确认。",
+            "認証情報を使用するたびに確認します。"
+        )
+    }
+    var oncePerUnlockPolicyDetail: String {
+        choose(
+            "Ask once after each Vault unlock.",
+            "每次解锁密码库后确认一次。",
+            "保管庫をロック解除するたびに1回確認します。"
+        )
+    }
+    var automaticWhileUnlockedPolicyDetail: String {
+        choose(
+            "Allow automatically only while this Vault remains unlocked.",
+            "仅在此密码库保持解锁期间自动允许。",
+            "この保管庫がロック解除されている間のみ自動で許可します。"
+        )
+    }
+    var approvalNotificationTitle: String {
+        choose("KeptNear approval needed", "KeptNear 需要你的确认", "KeptNearの確認が必要です")
+    }
+    var approvalNotificationBody: String {
+        choose(
+            "A local app or tool is waiting for your decision.",
+            "一个本地应用或工具正在等待你的决定。",
+            "ローカルのAppまたはツールが判断を待っています。"
+        )
+    }
+    var requestSource: String { choose("Source", "来源", "ソース") }
+    var requestDescription: String { choose("Request", "请求说明", "リクエスト") }
+    var comparisonCode: String { choose("Comparison Code", "比对码", "比較コード") }
+    var pairingKeyFingerprint: String {
+        choose("Pairing Key Fingerprint", "配对密钥短指纹", "ペアリング鍵のフィンガープリント")
+    }
+    var requestedCapability: String { choose("Capability", "请求能力", "ケイパビリティ") }
+    var expires: String { choose("Expires", "过期时间", "有効期限") }
+    var localRequestSource: String {
+        choose("Local app or tool", "本地应用或工具", "ローカルのAppまたはツール")
+    }
+    var authorizedItems: String { choose("Authorized Items", "已授权项目", "許可済み項目") }
+    var authorizationData: String { choose("Authorization Data", "授权数据", "許可データ") }
+    var authorizationDataAvailable: String { choose("Available", "可用", "利用可能") }
+    var authorizationDataUnavailable: String { choose("Unavailable", "不可用", "利用不可") }
+    var noAuthorizedItems: String {
+        choose("No items are authorized", "暂无已授权项目", "許可済みの項目はありません")
+    }
+    var viewAuthorizedItems: String {
+        choose("View Authorized Items", "查看已授权项目", "許可済み項目を表示")
+    }
+    var refreshAppsToolsAccess: String {
+        choose("Refresh access data", "刷新访问数据", "アクセスデータを更新")
+    }
+    var machineAccess: String { choose("Machine Access", "机器访问", "マシンアクセス") }
+    var machineAccessActive: String {
+        choose("Machine access is active", "机器访问已启用", "マシンアクセスは有効です")
+    }
+    var machineAccessPaused: String {
+        choose("Machine access is paused", "机器访问已暂停", "マシンアクセスは一時停止中です")
+    }
+    var active: String { choose("Active", "已启用", "有効") }
+    var inactive: String { choose("Inactive", "未启用", "無効") }
+    var paused: String { choose("Paused", "已暂停", "一時停止中") }
+    var selected: String { choose("Selected", "已选择", "選択済み") }
+    var notSelected: String { choose("Not selected", "未选择", "未選択") }
+    var pauseAppsToolsAccess: String {
+        choose("Pause Machine Access", "暂停机器访问", "マシンアクセスを一時停止")
+    }
+    var consumers: String { choose("Consumers", "使用方", "コンシューマー") }
+    var noPairedConsumers: String {
+        choose("No paired Consumers", "暂无已配对使用方", "ペアリング済みコンシューマーはありません")
+    }
+    var identityEvidence: String { choose("Identity Evidence", "身份凭据", "識別情報") }
+    var executable: String { choose("Executable", "可执行文件", "実行ファイル") }
+    var bundleIdentifier: String { choose("Bundle Identifier", "Bundle 标识符", "Bundle ID") }
+    var teamIdentifier: String { choose("Team Identifier", "团队标识符", "Team ID") }
+    var codeSigning: String { choose("Code Signing", "代码签名", "コード署名") }
+    var signatureFingerprint: String {
+        choose("Signature Fingerprint", "签名短指纹", "署名フィンガープリント")
+    }
+    var pairedAt: String { choose("Paired", "配对时间", "ペアリング日時") }
+    var notAvailable: String { choose("Not available", "不可用", "利用不可") }
+    var fieldAccess: String { choose("Field Access", "字段访问", "フィールドアクセス") }
+    var noFieldAccess: String {
+        choose("No credential fields are authorized", "暂无已授权凭据字段", "許可された認証情報フィールドはありません")
+    }
+    var usageProfiles: String { choose("Usage Profiles", "使用配置", "使用プロファイル") }
+    var noUsageProfiles: String {
+        choose("No Usage Profiles", "暂无使用配置", "使用プロファイルはありません")
+    }
+    var addUsageProfile: String {
+        choose("Add Usage Profile", "添加使用配置", "使用プロファイルを追加")
+    }
+    var usageProfileSetupTitle: String {
+        choose("Credential Use", "凭据使用方式", "認証情報の使用方法")
+    }
+    var usageProfileName: String {
+        choose("Profile Name", "配置名称", "プロファイル名")
+    }
+    var usageDestination: String {
+        choose("Use With", "使用场景", "使用先")
+    }
+    var commandLineTool: String {
+        choose("Command-Line Tool", "命令行工具", "コマンドラインツール")
+    }
+    var webApi: String { choose("Web API", "Web API", "Web API") }
+    var webApiAuthentication: String {
+        choose("API Authentication", "API 认证方式", "API認証")
+    }
+    var bearerToken: String {
+        choose("Bearer Token", "Bearer 令牌", "Bearerトークン")
+    }
+    var apiKeyHeader: String {
+        choose("API Key Header", "API Key 请求头", "APIキーヘッダー")
+    }
+    var automaticRecommendation: String {
+        choose("Recommended", "推荐配置", "おすすめ")
+    }
+    var useRecommendation: String {
+        choose("Use Recommendation", "使用推荐配置", "おすすめを使用")
+    }
+    var advancedSettings: String {
+        choose("Advanced Settings", "高级设置", "詳細設定")
+    }
+    var environmentVariableName: String {
+        choose("Environment Variable", "环境变量名称", "環境変数名")
+    }
+    var httpHeaderName: String {
+        choose("HTTP Header", "HTTP 请求头名称", "HTTPヘッダー名")
+    }
+    var saveUsageProfile: String {
+        choose("Save Profile", "保存配置", "プロファイルを保存")
+    }
+    var removeUsageProfile: String {
+        choose("Remove Usage Profile", "删除使用配置", "使用プロファイルを削除")
+    }
+    var usageProfileActionFailed: String {
+        choose(
+            "The Usage Profile could not be updated. Try again.",
+            "无法更新使用配置，请重试。",
+            "使用プロファイルを更新できませんでした。再試行してください。"
+        )
+    }
+    var usageProfileSetupUnavailable: String {
+        choose(
+            "New Usage Profiles are unavailable for this tool.",
+            "暂时无法为此工具添加使用配置。",
+            "このツールには新しい使用プロファイルを追加できません。"
+        )
+    }
+    var usageProfileNoSecretNotice: String {
+        choose(
+            "This saves only how an approved credential is delivered. No secret value is shown or stored in this profile.",
+            "这里只保存已批准凭据的交付方式，不会显示或在此配置中存储秘密值。",
+            "承認済み認証情報の渡し方だけを保存します。シークレット値は表示されず、このプロファイルにも保存されません。"
+        )
+    }
+    var processCompatibilityTitle: String {
+        choose("Compatibility Delivery", "兼容性交付", "互換性のための受け渡し")
+    }
+    var processCompatibilityDisclosure: String {
+        choose(
+            "The launched process and its descendants can read, retain, transform, or send this credential. Revoking access or unpairing stops future KeptNear delivery only. Rotate the credential with its provider to invalidate any delivered copy.",
+            "启动的进程及其子进程可以读取、保留、转换或发送此凭据。撤销访问或解除配对只会阻止 KeptNear 后续交付。若要使已交付的副本失效，请在凭据提供方轮换此凭据。",
+            "起動したプロセスとその子孫プロセスは、この認証情報を読み取り、保持、変換、送信できます。アクセスの取り消しやペアリング解除で止められるのは、KeptNearからの今後の受け渡しだけです。渡したコピーを無効にするには、提供元で認証情報をローテーションしてください。"
+        )
+    }
+    var technicalNameRequired: String {
+        choose(
+            "Open Advanced Settings and enter the name expected by the tool.",
+            "请打开高级设置，填写此工具要求的名称。",
+            "詳細設定を開き、ツールが要求する名前を入力してください。"
+        )
+    }
+    var recentActivity: String { choose("Recent Activity", "近期活动", "最近のアクティビティ") }
+    var noRecentActivity: String {
+        choose("No recent activity", "暂无近期活动", "最近のアクティビティはありません")
+    }
+    var revokeFieldAccess: String {
+        choose("Revoke Field Access", "撤销字段访问", "フィールドアクセスを取り消す")
+    }
+    var revoke: String { choose("Revoke", "撤销", "取り消す") }
+    var unpair: String { choose("Unpair", "解除配对", "ペアリング解除") }
+    var unpairConsumer: String {
+        choose("Unpair Consumer", "解除使用方配对", "コンシューマーのペアリングを解除")
+    }
+    var revocationDeliveryLimit: String {
+        choose(
+            "Revocation or unpairing stops future KeptNear delivery. It cannot erase a credential already delivered to a process or service; rotate that credential with its provider to invalidate delivered copies.",
+            "撤销访问或解除配对会阻止 KeptNear 后续交付，但无法抹除已经交付给进程或服务的凭据；若要使已交付的副本失效，请在凭据提供方轮换此凭据。",
+            "アクセスの取り消しやペアリング解除で止められるのは、KeptNearからの今後の受け渡しだけです。プロセスやサービスへ既に渡した認証情報は消去できないため、提供元でローテーションしてコピーを無効にしてください。"
+        )
+    }
+    var unknownCredential: String {
+        choose("Unknown Credential", "未知凭据", "不明な認証情報")
+    }
+    var unknownSecretField: String {
+        choose("Unknown Secret Field", "未知秘密字段", "不明なシークレットフィールド")
+    }
+    var otherVault: String {
+        choose("Stored in another local Vault", "存储在另一个本地密码库", "別のローカル保管庫に保存")
+    }
+    var tryAgain: String { choose("Try Again", "重试", "再試行") }
+
+    func authorizedItemsCount(_ count: Int) -> String {
+        choose(
+            "\(count) authorized items",
+            "\(count) 个已授权项目",
+            "許可済み項目 \(count) 件"
+        )
+    }
+
+    func pendingRequestCount(_ count: Int) -> String {
+        choose(
+            "\(count) pending",
+            "\(count) 个待处理",
+            "保留中 \(count) 件"
+        )
+    }
+
+    func pendingRequestExpiresIn(_ minutes: Int) -> String {
+        choose(
+            "Expires in \(minutes) min",
+            "\(minutes) 分钟后过期",
+            "あと\(minutes)分で期限切れ"
+        )
+    }
+
+    func pendingRequestKind(_ kind: String) -> String {
+        switch kind {
+        case "pairing":
+            return choose("Pair New Consumer", "配对新使用方", "新しいコンシューマーをペアリング")
+        case "unlock":
+            return choose("Unlock Vault", "解锁密码库", "保管庫をロック解除")
+        case "access":
+            return choose("Field Access", "字段访问", "フィールドアクセス")
+        case "credential-access":
+            return choose("Find Credential", "匹配凭据", "認証情報を選択")
+        default:
+            return choose("Approval Request", "确认请求", "承認リクエスト")
+        }
+    }
+
+    func pendingRequestConsumer(_ request: AppsToolsPendingRequest) -> String {
+        request.consumerLabel
+            ?? request.identity?.executableName
+            ?? request.identity?.bundleIdentifier
+            ?? localRequestSource
+    }
+
+    func consumerIdentitySummary(_ identity: AppsToolsConsumerIdentity) -> String {
+        identity.executableName
+            ?? identity.bundleIdentifier
+            ?? choose("Identity evidence unavailable", "身份凭据不可用", "識別情報を利用できません")
+    }
+
+    func codeSigningEvidence(_ value: String) -> String {
+        switch value {
+        case "verified-with-team-identifier":
+            return choose("Verified with Team ID", "已验证，包含团队标识", "Team ID付きで検証済み")
+        case "verified-without-team-identifier":
+            return choose("Verified without Team ID", "已验证，无团队标识", "Team IDなしで検証済み")
+        default:
+            return choose("No verified signature", "无已验证签名", "検証済み署名なし")
+        }
+    }
+
+    func capabilityLabel(_ capability: String, version: UInt16) -> String {
+        "\(capability) v\(version)"
+    }
+
+    func confirmationPolicy(_ policy: String) -> String {
+        switch policy {
+        case "every-use":
+            return choose("Confirm every use", "每次使用时确认", "使用ごとに確認")
+        case "once-per-unlock-session":
+            return choose("Once per unlock", "每次解锁后确认一次", "ロック解除ごとに1回")
+        case "automatic-while-unlocked":
+            return choose("Automatic while unlocked", "解锁期间自动允许", "ロック解除中は自動")
+        default:
+            return policy
+        }
+    }
+
+    func confirmationPolicyDetail(_ policy: AppsToolsConfirmationPolicy) -> String {
+        switch policy {
+        case .everyUse:
+            return everyUsePolicyDetail
+        case .oncePerUnlockSession:
+            return oncePerUnlockPolicyDetail
+        case .automaticWhileUnlocked:
+            return automaticWhileUnlockedPolicyDetail
+        }
+    }
+
+    func ruleLifetime(_ grant: AppsToolsFieldGrant) -> String {
+        guard grant.lifetime == "until", let expiresAt = grant.expiresAtMilliseconds else {
+            return choose("Until revoked", "直到手动撤销", "取り消すまで")
+        }
+        let formattedExpiry = formattedDateTime(expiresAt)
+        return choose(
+            "Until \(formattedExpiry)",
+            "截止 \(formattedExpiry)",
+            "\(formattedExpiry)まで"
+        )
+    }
+
+    func formattedDateTime(_ milliseconds: Int64) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = locale
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        let date = Date(timeIntervalSince1970: TimeInterval(milliseconds) / 1_000)
+        return formatter.string(from: date)
+    }
+
+    func usagePlacement(_ placement: AppsToolsUsagePlacement) -> String {
+        switch placement.kind {
+        case "process-environment":
+            let variable = placement.variableName ?? notAvailable
+            return choose(
+                "Child environment · \(variable)",
+                "子进程环境变量 · \(variable)",
+                "子プロセス環境変数 · \(variable)"
+            )
+        case "process-stdin":
+            return placement.appendNewline == true
+                ? choose("Child standard input · newline", "子进程标准输入 · 追加换行", "子プロセス標準入力 · 改行あり")
+                : choose("Child standard input", "子进程标准输入", "子プロセス標準入力")
+        case "process-file-descriptor":
+            let reference = placement.referenceVariableName ?? notAvailable
+            return choose(
+                "Inherited file descriptor · \(reference)",
+                "继承文件描述符 · \(reference)",
+                "継承ファイルディスクリプタ · \(reference)"
+            )
+        case "http-bearer-authorization":
+            return choose(
+                "HTTP Bearer authorization",
+                "HTTP Bearer 授权头",
+                "HTTP Bearer認証"
+            )
+        case "http-header":
+            let header = placement.headerName ?? notAvailable
+            return choose(
+                "HTTP header · \(header)",
+                "HTTP 请求头 · \(header)",
+                "HTTPヘッダー · \(header)"
+            )
+        default:
+            return placement.kind
+        }
+    }
+
+    func usageProfileRecommendation(_ recommendationId: String, toolName: String) -> String {
+        switch recommendationId {
+        case "github-cli":
+            return choose(
+                "Use an approved token with GitHub CLI.",
+                "将已批准的令牌用于 GitHub CLI。",
+                "承認済みトークンをGitHub CLIで使用します。"
+            )
+        case "gitlab-cli":
+            return choose(
+                "Use an approved token with GitLab CLI.",
+                "将已批准的令牌用于 GitLab CLI。",
+                "承認済みトークンをGitLab CLIで使用します。"
+            )
+        default:
+            return choose(
+                "Use an approved credential with \(toolName).",
+                "将已批准的凭据用于 \(toolName)。",
+                "承認済み認証情報を\(toolName)で使用します。"
+            )
+        }
+    }
+
+    func usageProfileRecommendationName(
+        _ recommendationId: String,
+        fallback: String
+    ) -> String {
+        switch recommendationId {
+        case "github-cli":
+            return choose("GitHub CLI Token", "GitHub CLI 令牌", "GitHub CLIトークン")
+        case "gitlab-cli":
+            return choose("GitLab CLI Token", "GitLab CLI 令牌", "GitLab CLIトークン")
+        default:
+            return fallback
+        }
+    }
+
+    func removeUsageProfileMessage(_ label: String) -> String {
+        choose(
+            "Remove \(label)? This does not revoke credential access.",
+            "删除 \(label)？此操作不会撤销凭据访问权限。",
+            "\(label)を削除しますか？認証情報へのアクセス権は取り消されません。"
+        )
+    }
+
+    func auditEvent(_ kind: String, decision: String) -> String {
+        let event: String
+        switch kind {
+        case "pairing":
+            event = choose("Pairing", "配对", "ペアリング")
+        case "authorization":
+            event = choose("Authorization", "授权", "許可")
+        case "grant":
+            event = choose("Grant", "使用授权", "グラント")
+        case "credential-use":
+            event = choose("Credential Use", "凭据使用", "認証情報の使用")
+        case "pause":
+            event = choose("Access Pause", "访问暂停", "アクセス一時停止")
+        case "revocation":
+            event = choose("Revocation", "撤销", "取り消し")
+        default:
+            event = kind
+        }
+        return "\(event) · \(auditDecision(decision))"
+    }
+
+    func auditDecision(_ decision: String) -> String {
+        switch decision {
+        case "allowed":
+            return choose("Allowed", "已允许", "許可")
+        case "denied":
+            return choose("Denied", "已拒绝", "拒否")
+        case "pending":
+            return choose("Pending", "等待确认", "保留中")
+        case "revoked":
+            return choose("Revoked", "已撤销", "取り消し済み")
+        case "paused":
+            return choose("Paused", "已暂停", "一時停止")
+        case "resumed":
+            return choose("Resumed", "已恢复", "再開")
+        case "failed":
+            return choose("Failed", "失败", "失敗")
+        default:
+            return decision
+        }
+    }
+
+    func confirmationMethod(_ method: String) -> String {
+        switch method {
+        case "user-approval":
+            return choose("User approval", "用户确认", "ユーザー承認")
+        case "master-password":
+            return choose("Master password", "主密码", "マスターパスワード")
+        case "local-authentication":
+            return choose("Local authentication", "本机认证", "ローカル認証")
+        case "persistent-rule":
+            return choose("Access Rule", "访问规则", "アクセスルール")
+        case "none":
+            return choose("No confirmation", "无需确认", "確認なし")
+        default:
+            return method
+        }
+    }
+
+    func revokeFieldAccessMessage(
+        _ field: AppsToolsFieldReference,
+        capability: String
+    ) -> String {
+        let credential = field.credentialTitle ?? unknownCredential
+        let fieldName = field.fieldLabel ?? unknownSecretField
+        let prompt = choose(
+            "Revoke all capabilities for \(credential) · \(fieldName)?",
+            "撤销 \(credential) · \(fieldName) 的全部访问能力？",
+            "\(credential) · \(fieldName) のすべてのアクセス権を取り消しますか？"
+        )
+        return capability == "process.run"
+            ? "\(prompt) \(revocationDeliveryLimit)"
+            : prompt
+    }
+
+    func unpairConsumerMessage(_ label: String) -> String {
+        let prompt = choose(
+            "Unpair \(label) and revoke all of its rules, grants, Usage Profiles, and pending approvals?",
+            "解除 \(label) 的配对，并撤销其全部规则、授权、使用配置和待处理确认？",
+            "\(label) のペアリングを解除し、すべてのルール、グラント、使用プロファイル、保留中の承認を取り消しますか？"
+        )
+        return "\(prompt) \(revocationDeliveryLimit)"
+    }
+
+    func accessRuleCount(_ count: Int) -> String {
+        switch selectedLanguage {
+        case .english:
+            return count == 1 ? "1 access rule" : "\(count) access rules"
+        case .simplifiedChinese:
+            return "\(count) 条访问规则"
+        case .japanese:
+            return "アクセスルール \(count) 件"
+        }
+    }
+
+    func consumerAccessibilityValue(_ consumer: AppsToolsConsumerSummary) -> String {
+        let identity = consumerIdentitySummary(consumer.identity)
+        let rules = accessRuleCount(consumer.accessRuleCount)
+        return choose(
+            "\(identity), \(rules)",
+            "\(identity)，\(rules)",
+            "\(identity)、\(rules)"
+        )
+    }
+
+    func credentialSelectionAccessibilityLabel(
+        credentialTitle: String,
+        fieldName: String,
+        secretKind: String
+    ) -> String {
+        choose(
+            "\(credentialTitle), \(fieldName), \(secretKind)",
+            "\(credentialTitle)，\(fieldName)，\(secretKind)",
+            "\(credentialTitle)、\(fieldName)、\(secretKind)"
+        )
+    }
+
+    var smartViews: String { choose("Smart Views", "智能视图", "スマートビュー") }
+    var loginsSmartView: String { choose("Logins", "登录信息", "ログイン") }
+    var developerCredentialsSmartView: String {
+        choose("Developer Credentials", "开发者凭据", "開発者向け認証情報")
+    }
+    var keysAndCertificatesSmartView: String {
+        choose("Keys & Certificates", "密钥与证书", "鍵と証明書")
+    }
+    var appsToolsAuthorizedSmartView: String {
+        choose("Apps & Tools Access", "应用与工具授权", "App・ツール許可済み")
+    }
     var itemTypes: String { choose("Types", "类型", "種類") }
     var securityAndMaintenance: String {
         choose("Security & Maintenance", "安全与维护", "セキュリティと管理")
@@ -275,6 +908,19 @@ struct AppText {
             return allItems
         case .favorites:
             return favoritesFilter
+        case .appsAndTools:
+            return appsAndTools
+        case let .smartView(smartView):
+            switch smartView {
+            case .logins:
+                return loginsSmartView
+            case .developerCredentials:
+                return developerCredentialsSmartView
+            case .keysAndCertificates:
+                return keysAndCertificatesSmartView
+            case .appsToolsAuthorized:
+                return appsToolsAuthorizedSmartView
+            }
         case .security:
             return security
         case .conflicts:
@@ -454,6 +1100,88 @@ struct AppText {
             "この保管庫を解除するパスワードを変更します。変更に成功すると、ローカルキーチェーン解除は無効になります。"
         )
     }
+    var recoverySettingsTitle: String {
+        choose("Offline Recovery", "离线恢复", "オフライン復旧")
+    }
+    var recoverySettingsHint: String {
+        choose(
+            "Keep the recovery kit outside KeptNear. It can set a new master password if the current one is lost.",
+            "请将恢复套件保存在 KeptNear 之外。主密码丢失时，它可用于设置新的主密码。",
+            "復旧キットはKeptNearの外部に保管してください。現在のマスターパスワードを失った場合に、新しいパスワードを設定できます。"
+        )
+    }
+    var recoveryEnvelopePresent: String {
+        choose(
+            "A recovery envelope is present. KeptNear cannot verify that you still hold its recovery kit.",
+            "密码库中已有恢复信封。KeptNear 无法确认你是否仍持有对应的恢复套件。",
+            "復旧エンベロープがあります。対応する復旧キットを現在も保持しているか、KeptNearでは確認できません。"
+        )
+    }
+    var recoveryNotConfigured: String {
+        choose(
+            "No recovery envelope is present for this vault.",
+            "此密码库尚无恢复信封。",
+            "この保管庫には復旧エンベロープがありません。"
+        )
+    }
+    var setUpRecovery: String {
+        choose("Set Up Recovery", "设置恢复", "復旧を設定")
+    }
+    var rotateRecoveryKey: String {
+        choose("Rotate Recovery Key", "轮换恢复密钥", "復旧キーをローテーション")
+    }
+    var recoveryKitTitle: String {
+        choose("KeptNear Recovery Kit", "KeptNear 恢复套件", "KeptNear 復旧キット")
+    }
+    var recoveryKitAuthorityWarningTitle: String {
+        choose("Recovery authority", "恢复权限", "復旧権限")
+    }
+    var recoveryKitAuthorityWarning: String {
+        choose(
+            "Anyone with this kit can set a new master password for this vault. Store it offline and separately from the vault.",
+            "任何持有此套件的人都可以为此密码库设置新的主密码。请离线保存，并与密码库分开存放。",
+            "このキットを持つ人は、この保管庫に新しいマスターパスワードを設定できます。保管庫とは別に、オフラインで保管してください。"
+        )
+    }
+    var recoveryKitOfflineStorageMessage: String {
+        choose(
+            "KeptNear does not keep a plaintext copy. If both the master password and this recovery code are lost, the vault cannot be recovered.",
+            "KeptNear 不会保留明文副本。如果主密码和此恢复码都丢失，密码库将无法恢复。",
+            "KeptNearは平文のコピーを保持しません。マスターパスワードとこの復旧コードの両方を失うと、保管庫は復旧できません。"
+        )
+    }
+    var recoveryCode: String { choose("Recovery Code", "恢复码", "復旧コード") }
+    var recoveryKitQRCode: String { choose("Recovery code QR", "恢复码二维码", "復旧コードQR") }
+    var vaultIdentifier: String { choose("Vault ID", "密码库 ID", "保管庫ID") }
+    var recoveryKeyIdentifier: String { choose("Recovery Key ID", "恢复密钥 ID", "復旧キーID") }
+    var generatedAt: String { choose("Generated", "生成时间", "生成日時") }
+    var saveRecoveryKit: String {
+        choose("Save PDF", "保存 PDF", "PDFを保存")
+    }
+    var printRecoveryKit: String {
+        choose("Print", "打印", "プリント")
+    }
+    var verifyRecoveryKitTitle: String {
+        choose("Verify the saved copy", "验证已保存的副本", "保存したコピーを確認")
+    }
+    var verifyRecoveryKitMessage: String {
+        choose(
+            "The in-app source is hidden. Enter or scan the complete recovery code from the PDF or printed copy.",
+            "应用内原文已隐藏。请从 PDF 或打印副本中输入或扫描完整恢复码。",
+            "アプリ内の元コードは非表示です。PDFまたは印刷したコピーから、完全な復旧コードを入力またはスキャンしてください。"
+        )
+    }
+    var recoveryKitSourceHidden: String {
+        choose(
+            "The code is not copied to the clipboard or stored in KeptNear device data.",
+            "恢复码不会自动复制到剪贴板，也不会存入 KeptNear 设备数据。",
+            "復旧コードはクリップボードへ自動コピーされず、KeptNearのデバイスデータにも保存されません。"
+        )
+    }
+    var confirmRecoveryKit: String {
+        choose("Confirm Recovery Kit", "确认恢复套件", "復旧キットを確認")
+    }
+    var doLater: String { choose("Do Later", "稍后处理", "後で行う") }
     var masterPasswordStrength: String { choose("Strength", "强度", "強度") }
     func masterPasswordStrengthLabel(_ strength: MasterPasswordStrength) -> String {
         let level: String
@@ -564,22 +1292,187 @@ struct AppText {
     var editItem: String { choose("Edit", "编辑", "編集") }
     var title: String { choose("Title", "标题", "タイトル") }
     var itemType: String { choose("Item Type", "项目类型", "アイテムの種類") }
+    var credentialTemplates: String { choose("Credentials", "凭据", "認証情報") }
+    var personalRecordTemplates: String { choose("Personal Records", "个人记录", "個人記録") }
     var login: String { choose("Login", "登录项", "ログイン") }
+    var apiToken: String { choose("API Token", "API 令牌", "APIトークン") }
+    var apiKey: String { choose("API Key", "API 密钥", "APIキー") }
+    var sshKey: String { choose("SSH Key", "SSH 密钥", "SSHキー") }
+    var certificate: String { choose("Certificate", "证书", "証明書") }
     var secureNote: String { choose("Secure Note", "安全笔记", "セキュアノート") }
+    var customItem: String { choose("Custom", "自定义", "カスタム") }
     var creditCard: String { choose("Credit Card", "信用卡", "クレジットカード") }
     var softwareLicense: String { choose("Software License", "软件许可证", "ソフトウェアライセンス") }
+    func credentialTemplateName(_ template: CredentialTemplateKind) -> String {
+        switch template {
+        case .login:
+            return login
+        case .apiToken:
+            return apiToken
+        case .apiKey:
+            return apiKey
+        case .sshKey:
+            return sshKey
+        case .certificate:
+            return certificate
+        case .secureNote:
+            return secureNote
+        case .custom:
+            return customItem
+        case .creditCard:
+            return creditCard
+        case .softwareLicense:
+            return softwareLicense
+        }
+    }
     func itemTypeName(_ itemType: String) -> String {
         switch itemType {
         case "login":
             return login
+        case "api token":
+            return apiToken
+        case "api key":
+            return apiKey
+        case "ssh key":
+            return sshKey
+        case "certificate":
+            return certificate
         case "secure note":
             return secureNote
+        case "custom":
+            return customItem
         case "credit card":
             return creditCard
         case "software license":
             return softwareLicense
         default:
             return itemType
+        }
+    }
+    var secretValue: String { choose("Secret", "秘密值", "シークレット") }
+    var privateKey: String { choose("Private Key", "私钥", "秘密鍵") }
+    var expiryDate: String { choose("Expiration", "有效期", "有効期限") }
+    var copySecret: String { choose("Copy Secret", "复制秘密值", "シークレットをコピー") }
+    func templateSecretName(_ template: CredentialTemplateKind) -> String {
+        switch template {
+        case .apiToken:
+            return apiToken
+        case .apiKey:
+            return apiKey
+        case .sshKey:
+            return privateKey
+        case .certificate:
+            return certificate
+        case .custom:
+            return secretValue
+        case .login:
+            return password
+        case .secureNote:
+            return body
+        case .creditCard:
+            return cardNumber
+        case .softwareLicense:
+            return licenseKey
+        }
+    }
+    func credentialFieldName(role: String, label: String?) -> String {
+        if let label, !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return label
+        }
+        switch role {
+        case "token":
+            return apiToken
+        case "api-key":
+            return apiKey
+        case "private-key":
+            return privateKey
+        case "certificate":
+            return certificate
+        case "secret":
+            return secretValue
+        case "expiry":
+            return expiryDate
+        case "notes":
+            return notes
+        default:
+            return role
+        }
+    }
+    var credentialFields: String { choose("Fields", "字段", "フィールド") }
+    var noCredentialFields: String {
+        choose(
+            "No fields. Add text or a protected secret field.",
+            "暂无字段。请添加文本字段或受保护的秘密字段。",
+            "フィールドがありません。テキストまたは保護されたシークレットを追加してください。"
+        )
+    }
+    var addField: String { choose("Add Field", "添加字段", "フィールドを追加") }
+    var addTextField: String { choose("Add Text Field", "添加文本字段", "テキスト項目を追加") }
+    var addSecretField: String {
+        choose("Add Secret Field", "添加秘密字段", "シークレット項目を追加")
+    }
+    var fieldRole: String { choose("Role", "字段角色", "役割") }
+    var fieldLabel: String { choose("Label (optional)", "标签（可选）", "ラベル（任意）") }
+    var fieldValue: String { choose("Value", "值", "値") }
+    var secretKind: String { choose("Secret Kind", "秘密类型", "シークレットの種類") }
+    var replacementSecret: String {
+        choose("New Secret Value", "新秘密值", "新しいシークレット値")
+    }
+    var savedSecretUnchanged: String {
+        choose(
+            "The saved secret remains unchanged. Enter a new value only to replace it.",
+            "已保存的秘密保持不变。仅在需要替换时输入新值。",
+            "保存済みのシークレットは変更されません。置き換える場合のみ新しい値を入力してください。"
+        )
+    }
+    var moveFieldUp: String { choose("Move Field Up", "上移字段", "フィールドを上へ移動") }
+    var moveFieldDown: String { choose("Move Field Down", "下移字段", "フィールドを下へ移動") }
+    var removeField: String { choose("Remove Field", "移除字段", "フィールドを削除") }
+
+    func credentialFieldAccessibilityName(
+        role: String,
+        label: String?,
+        secretKind: String
+    ) -> String {
+        if let label, !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return label
+        }
+        let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !normalizedRole.isEmpty {
+            return credentialFieldName(role: normalizedRole, label: nil)
+        }
+        let kindName = credentialSecretKindName(secretKind)
+        return kindName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? credentialFields
+            : kindName
+    }
+
+    func credentialFieldAction(_ action: String, fieldName: String) -> String {
+        choose(
+            "\(action): \(fieldName)",
+            "\(action)：\(fieldName)",
+            "\(action)：\(fieldName)"
+        )
+    }
+
+    func credentialSecretKindName(_ kind: String) -> String {
+        switch kind {
+        case CredentialSecretKind.password.rawValue:
+            return password
+        case CredentialSecretKind.apiToken.rawValue:
+            return apiToken
+        case CredentialSecretKind.apiKey.rawValue:
+            return apiKey
+        case CredentialSecretKind.totpSeed.rawValue:
+            return totpSecret
+        case CredentialSecretKind.privateKey.rawValue:
+            return privateKey
+        case CredentialSecretKind.certificate.rawValue:
+            return certificate
+        case CredentialSecretKind.genericSecret.rawValue:
+            return secretValue
+        default:
+            return kind
         }
     }
     var username: String { choose("Username", "用户名", "ユーザー名") }
@@ -745,8 +1638,17 @@ struct AppText {
     var mergeBase: String { choose("Merge Base", "合并基底", "マージ基準") }
     var mergeConflict: String { choose("Merge Conflict", "合并冲突", "マージ競合") }
     var keepVersion: String { choose("Keep", "保留", "保持") }
+    var keepDeletedVersion: String {
+        choose("Keep Deletion", "保留删除状态", "削除状態を保持")
+    }
     var revision: String { choose("Revision", "修订", "リビジョン") }
     var redactedValue: String { choose("Hidden", "已隐藏", "非表示") }
+    var conflictFieldLayoutChanged: String {
+        choose("Field layout changed", "字段结构已变化", "フィールド構成が変更されました")
+    }
+    var secretFieldIdentity: String {
+        choose("Field ID", "字段 ID", "フィールド ID")
+    }
     var conflictResolved: String { choose("Conflict resolved", "冲突已解决", "競合を解決しました") }
     var conflictMerged: String { choose("Conflict merged", "冲突已合并", "競合をマージしました") }
     var noSelectedConflict: String {
@@ -864,10 +1766,51 @@ struct AppText {
 
     func plaintextExportMessage(_ fileName: String) -> String {
         choose(
-            "Write plaintext vault data to \(fileName)? Anyone with this file can read the exported secrets.",
-            "要将密码库数据以明文写入 \(fileName) 吗？任何拥有此文件的人都可以读取导出的秘密。",
-            "\(fileName) に保管庫データを平文で書き込みますか？このファイルを入手した人は誰でも、エクスポートした秘密情報を読み取れます。"
+            "Enter your current master password to write plaintext vault data to \(fileName). Anyone with this file can read the exported secrets.",
+            "请输入当前主密码，将密码库数据以明文写入 \(fileName)。任何拥有此文件的人都可以读取导出的秘密。",
+            "現在のマスターパスワードを入力して、\(fileName) に保管庫データを平文で書き込みます。このファイルを入手した人は誰でも、エクスポートした秘密情報を読み取れます。"
         )
+    }
+
+    func exportOmission(reason: String, count: Int) -> String {
+        switch reason {
+        case "conflicted-credential":
+            return choose(
+                "\(count) conflicted credential(s) omitted",
+                "已省略 \(count) 个存在冲突的凭据",
+                "競合している認証情報 \(count) 件を省略しました"
+            )
+        case "rejected-record":
+            return choose(
+                "\(count) rejected encrypted record(s) omitted",
+                "已省略 \(count) 条被拒绝的加密记录",
+                "拒否された暗号化レコード \(count) 件を省略しました"
+            )
+        case "unsupported-template":
+            return choose(
+                "\(count) unsupported template credential(s) omitted",
+                "已省略 \(count) 个模板不受支持的凭据",
+                "未対応テンプレートの認証情報 \(count) 件を省略しました"
+            )
+        case "unsupported-field":
+            return choose(
+                "\(count) credential(s) with unsupported fields omitted",
+                "已省略 \(count) 个包含不受支持字段的凭据",
+                "未対応フィールドを含む認証情報 \(count) 件を省略しました"
+            )
+        case "additional-tags":
+            return choose(
+                "\(count) credential(s) omitted additional tags",
+                "\(count) 个凭据省略了额外标签",
+                "認証情報 \(count) 件で追加タグを省略しました"
+            )
+        default:
+            return choose(
+                "\(count) export omission(s)",
+                "\(count) 项导出内容被省略",
+                "エクスポートで \(count) 件を省略しました"
+            )
+        }
     }
 
     func itemStatus(_ status: String) -> String {
@@ -899,6 +1842,12 @@ struct AppText {
             return choose("Rust core library not loaded", "Rust 核心库未加载", "Rustコアライブラリが読み込まれていません")
         case "Vault created":
             return choose("Vault created", "密码库已创建", "保管庫を作成しました")
+        case "Vault created without recovery setup":
+            return choose(
+                "Vault created, but recovery setup could not start",
+                "密码库已创建，但无法启动恢复设置",
+                "保管庫を作成しましたが、復旧設定を開始できませんでした"
+            )
         case "Vault creation canceled":
             return choose("Vault creation canceled", "已取消创建密码库", "保管庫の作成をキャンセルしました")
         case "Vault creation failed":
@@ -913,12 +1862,114 @@ struct AppText {
             return choose("Vault unlocked", "密码库已解锁", "保管庫のロックを解除しました")
         case "Vault unlocked with Keychain":
             return choose("Vault unlocked with Keychain", "已使用钥匙串解锁", "キーチェーンで保管庫のロックを解除しました")
+        case VaultStore.appsToolsVaultPathConflictStatus:
+            return choose(
+                VaultStore.appsToolsVaultPathConflictStatus,
+                "检测到密码库副本冲突；“应用与工具”访问已停用",
+                "保管庫のコピー競合を検出しました。アプリとツールからのアクセスは利用できません。"
+            )
         case "Keychain unlock disabled":
             return choose("Keychain unlock disabled", "钥匙串解锁已停用", "キーチェーン解除を無効にしました")
         case "Vault locked":
             return choose("Vault locked", "密码库已锁定", "保管庫をロックしました")
         case "Unlock a vault first":
             return unlockVaultFirst
+        case "No recovery kit is pending":
+            return choose("No recovery kit is pending", "当前没有待处理的恢复套件", "保留中の復旧キットはありません")
+        case "Finish or defer the pending recovery kit first":
+            return choose(
+                "Finish or defer the pending recovery kit first",
+                "请先完成或暂缓当前恢复套件",
+                "先に保留中の復旧キットを完了するか、後回しにしてください"
+            )
+        case "Save or print the recovery kit":
+            return choose(
+                "Save or print the recovery kit",
+                "请保存或打印恢复套件",
+                "復旧キットを保存または印刷してください"
+            )
+        case "Recovery kit saved":
+            return choose("Recovery kit saved", "恢复套件已保存", "復旧キットを保存しました")
+        case "Recovery kit could not be saved":
+            return choose("Recovery kit could not be saved", "无法保存恢复套件", "復旧キットを保存できませんでした")
+        case "Recovery kit sent to print":
+            return choose("Recovery kit sent to print", "恢复套件已发送打印", "復旧キットをプリントへ送信しました")
+        case "Recovery kit was not printed":
+            return choose("Recovery kit was not printed", "恢复套件未打印", "復旧キットは印刷されませんでした")
+        case "Save or print the recovery kit first":
+            return choose(
+                "Save or print the recovery kit first",
+                "请先保存或打印恢复套件",
+                "先に復旧キットを保存または印刷してください"
+            )
+        case "Enter the saved recovery code":
+            return choose("Enter the saved recovery code", "请输入已保存的恢复码", "保存した復旧コードを入力してください")
+        case "Recovery setup confirmed":
+            return choose("Recovery setup confirmed", "恢复设置已确认", "復旧設定を確認しました")
+        case "Recovery key rotated":
+            return choose("Recovery key rotated", "恢复密钥已轮换", "復旧キーをローテーションしました")
+        case "Recovery setup remains unconfirmed":
+            return choose(
+                "Recovery remains unconfirmed. Rotate the key later if the copy was not saved.",
+                "恢复仍未确认。如果未保存副本，请稍后轮换密钥。",
+                "復旧は未確認のままです。コピーを保存していない場合は、後でキーをローテーションしてください。"
+            )
+        case "Recovery rotation cancelled; the existing recovery key remains active":
+            return choose(
+                "Recovery rotation cancelled. The existing recovery key remains active.",
+                "恢复密钥轮换已取消，现有恢复密钥仍然有效。",
+                "復旧キーのローテーションをキャンセルしました。既存の復旧キーは引き続き有効です。"
+            )
+        case "Recovery rotation failed; start again":
+            return choose(
+                "Recovery rotation failed. The existing key remains active; start the rotation again.",
+                "恢复密钥轮换失败，现有密钥仍然有效；请重新开始轮换。",
+                "復旧キーのローテーションに失敗しました。既存のキーは有効なままです。もう一度開始してください。"
+            )
+        case "Select a locked vault first":
+            return choose(
+                "Select a locked vault first",
+                "请先选择一个已锁定的密码库",
+                "先にロックされた保管庫を選択してください"
+            )
+        case "Offline recovery is not available for this vault":
+            return choose(
+                "Offline recovery is not available for this vault",
+                "此密码库无法使用离线恢复",
+                "この保管庫ではオフライン復旧を利用できません"
+            )
+        case "Recovery code is required":
+            return choose("Recovery code is required", "请输入恢复码", "復旧コードを入力してください")
+        case "Recovery code is invalid or does not match this vault":
+            return choose(
+                "The recovery code is invalid or does not match this vault",
+                "恢复码无效或与此密码库不匹配",
+                "復旧コードが無効か、この保管庫と一致しません"
+            )
+        case "Vault recovered":
+            return choose(
+                "Vault recovered with a new master password",
+                "密码库已使用新主密码恢复",
+                "新しいマスターパスワードで保管庫を復旧しました"
+            )
+        case "Vault recovered, but Keychain cleanup failed":
+            return choose(
+                "Vault recovered, but Keychain cleanup failed. Remove the old KeptNear entry from Keychain Access.",
+                "密码库已恢复，但钥匙串清理失败。请在“钥匙串访问”中移除旧的 KeptNear 条目。",
+                "保管庫は復旧しましたが、キーチェーンの消去に失敗しました。キーチェーンアクセスで古いKeptNear項目を削除してください。"
+            )
+        case let message where message.contains("recovery confirmation did not match"):
+            return choose(
+                "The recovery code does not match the saved kit",
+                "恢复码与已保存的套件不匹配",
+                "復旧コードが保存したキットと一致しません"
+            )
+        case let message where message.contains("offline recovery is already initialized"):
+            return choose(
+                "Recovery already exists. Rotate the recovery key instead.",
+                "恢复功能已存在，请改为轮换恢复密钥。",
+                "復旧はすでに設定されています。代わりに復旧キーをローテーションしてください。"
+            )
         case "Open a vault first":
             return openVaultFirst
         case "Unsupported vault file":
@@ -937,6 +1988,30 @@ struct AppText {
             return choose("Deleted", "已删除", "削除しました")
         case "Saved":
             return choose("Saved", "已保存", "保存しました")
+        case "Secret is required":
+            return choose("Secret is required", "请填写秘密值", "シークレットを入力してください")
+        case "Field role is required":
+            return choose("Field role is required", "请填写字段角色", "フィールドの役割を入力してください")
+        case "New secret value is required":
+            return choose(
+                "New secret value is required",
+                "请填写新秘密字段的值",
+                "新しいシークレット項目の値を入力してください"
+            )
+        case "Secret copied":
+            return choose("Secret copied", "秘密值已复制", "シークレットをコピーしました")
+        case "credential field has no secret":
+            return choose(
+                "credential field has no secret",
+                "此凭据字段没有秘密值",
+                "この認証情報フィールドにはシークレットがありません"
+            )
+        case "Template credential editing is not available yet":
+            return choose(
+                "Editing this credential type is not available yet",
+                "暂不支持编辑此凭据类型",
+                "この認証情報タイプの編集はまだ利用できません"
+            )
         case "Duplicated":
             return choose("Duplicated", "已复制", "複製しました")
         case "Username copied":
@@ -1007,6 +2082,48 @@ struct AppText {
             return choose("Password health refreshed", "密码健康已刷新", "パスワードの健全性を更新しました")
         case "Filters cleared":
             return choose("Filters cleared", "过滤已清除", "フィルターをクリアしました")
+        case "Apps & Tools authorization inventory unavailable":
+            return choose(
+                "Apps & Tools authorization data is unavailable",
+                "应用与工具授权数据不可用",
+                "App・ツールの許可データを利用できません"
+            )
+        case "Apps & Tools access paused":
+            return choose(
+                "Apps & Tools access paused",
+                "应用与工具访问已暂停",
+                "App・ツールのアクセスを一時停止しました"
+            )
+        case "Apps & Tools access resumed":
+            return choose(
+                "Apps & Tools access resumed",
+                "应用与工具访问已恢复",
+                "App・ツールのアクセスを再開しました"
+            )
+        case "Apps & Tools field access revoked":
+            return choose(
+                "Field access revoked",
+                "字段访问已撤销",
+                "フィールドアクセスを取り消しました"
+            )
+        case "Apps & Tools Consumer revoked":
+            return choose(
+                "Consumer unpaired",
+                "使用方配对已解除",
+                "コンシューマーのペアリングを解除しました"
+            )
+        case "Apps & Tools Consumer detail unavailable":
+            return choose(
+                "Consumer detail is unavailable",
+                "使用方详情不可用",
+                "コンシューマーの詳細を利用できません"
+            )
+        case let message where message.hasPrefix("Apps & Tools management unavailable"):
+            return choose(
+                "Apps & Tools management is unavailable",
+                "应用与工具管理不可用",
+                "App・ツール管理を利用できません"
+            )
         case "Sync refresh paused for unsaved edits":
             return choose(
                 "Sync refresh paused for unsaved edits",
@@ -1222,12 +2339,20 @@ struct AppText {
         if message.localizedCaseInsensitiveContains("invalid vault credentials") {
             return true
         }
+        if message.hasPrefix("Apps & Tools management unavailable") {
+            return true
+        }
+        if message == VaultStore.appsToolsVaultPathConflictStatus {
+            return true
+        }
         return [
             "No vault selected",
             "Lock the vault before moving it to Trash",
             "Only a local .pswvault directory can be moved to Trash",
             "Vault could not be moved to Trash",
-            "Vault moved to Trash, but Keychain cleanup failed"
+            "Vault moved to Trash, but Keychain cleanup failed",
+            "Apps & Tools authorization inventory unavailable",
+            "Apps & Tools Consumer detail unavailable"
         ].contains(message)
     }
 

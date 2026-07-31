@@ -1,0 +1,55 @@
+[package]
+name = "psw-broker"
+version = "0.1.0"
+description = "Local credential Broker foundations for KeptNear."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "keptnear-broker"
+path = "src/main.rs"
+
+[dependencies]
+base64 = "=0.22.1"
+ed25519-dalek = { version = "=2.1.1", default-features = false, features = ["std"] }
+hex = "=0.4.3"
+hkdf = "=0.12.3"
+# Keep URL's Unicode IDNA backend within the workspace Rust/Cargo 1.75 baseline.
+idna = { version = "=1.0.3", default-features = false, features = ["alloc", "compiled_data"] }
+idna_adapter = "=1.1.0"
+# ureq logs URLs and wire headers at debug level. KeptNear writes no Broker
+# runtime log, so compile third-party transport logging out of every build.
+log = { version = "=0.4.33", features = ["max_level_off", "release_max_level_off"] }
+psw-core = { path = "../psw-core" }
+rand_core = { version = "=0.6.4", features = ["getrandom"] }
+rusqlite = { version = "=0.31.0", default-features = false, features = ["bundled-sqlcipher"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+sha2 = "=0.10.9"
+ureq = { version = "=2.12.1", default-features = false, features = ["tls"] }
+url = "=2.5.4"
+zeroize = "=1.8.1"
+
+# rustls 0.23.43 and its patched webpki line retain an MSRV below the
+# workspace Rust 1.75 baseline.
+rustls = { version = "=0.23.43", default-features = false, features = ["ring", "logging", "std", "tls12"] }
+webpki-roots = "=0.26.7"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "=0.27.1", default-features = false, features = ["fs", "poll", "socket", "user"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "=0.9.4"
+security-framework-sys = { version = "=2.9.1", features = ["OSX_10_15"] }
+
+[lints.rust]
+# The crate remains deny-by-default. Audited platform adapters call SecItemAdd
+# and install a pre-exec descriptor mapping where safe wrappers are insufficient.
+unsafe_code = "allow"

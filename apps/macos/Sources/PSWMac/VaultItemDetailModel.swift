@@ -43,8 +43,14 @@ struct VaultItemDetailModel: Equatable {
         let notes: String?
     }
 
+    struct Credential: Equatable {
+        let textFields: [CredentialDetailField.TextField]
+        let secretFields: [CredentialDetailField.SecretField]
+    }
+
     enum Content: Equatable {
         case login(Login)
+        case credential(Credential)
         case secureNote(SecureNote)
         case creditCard(CreditCard)
         case softwareLicense(SoftwareLicense)
@@ -56,6 +62,7 @@ struct VaultItemDetailModel: Equatable {
     init?(
         item: VaultItemView,
         login: LoginDetail?,
+        credential: CredentialDetail?,
         secureNote: SecureNoteDetail?,
         creditCard: CreditCardDetail?,
         softwareLicense: SoftwareLicenseDetail?
@@ -66,6 +73,11 @@ struct VaultItemDetailModel: Equatable {
                 urls: login.urls,
                 notes: login.notes,
                 hasTotpSecret: Self.hasContent(login.totpSecret)
+            ))
+        } else if item.isTemplateCredential, let credential, credential.id == item.id {
+            content = .credential(Credential(
+                textFields: credential.textFields,
+                secretFields: credential.secretFields
             ))
         } else if item.isSecureNote, let secureNote, secureNote.id == item.id {
             content = .secureNote(SecureNote(body: secureNote.body))
@@ -110,6 +122,7 @@ enum VaultItemDetailCopyAction: Equatable {
     case cardNumber
     case cardVerificationCode
     case licenseKey
+    case credentialSecret(String)
 }
 
 enum VaultItemDetailMoreAction: Equatable {
@@ -129,6 +142,7 @@ struct VaultItemDetailCapabilities: Equatable {
     let canCopySecureNoteBody: Bool
     let canCopyCreditCardFields: Bool
     let canCopySoftwareLicenseFields: Bool
+    let canCopyCredentialFields: Bool
     let canRevealSecrets: Bool
     let canToggleFavorite: Bool
     let canDuplicate: Bool
@@ -149,6 +163,8 @@ struct VaultItemDetailCapabilities: Equatable {
             return canCopyCreditCardFields
         case .licenseKey:
             return canCopySoftwareLicenseFields
+        case .credentialSecret:
+            return canCopyCredentialFields
         }
     }
 }

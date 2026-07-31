@@ -3,8 +3,8 @@
 This project can create an Apple Silicon (`arm64`) DMG for local alpha testing.
 The generated app targets macOS 13 or newer. By default the DMG is unsigned. If
 Developer ID credentials are available, the same workflow can optionally sign
-the nested Rust library, app bundle, and disk image, then notarize and staple
-the DMG.
+the nested Rust library, Broker, MCP adapter, CLI, app bundle, and disk image,
+then notarize and staple the DMG.
 
 Intel Macs are not supported by this first binary distribution target.
 
@@ -26,10 +26,10 @@ packaging workflow, alpha artifact verifier, Launch Services vault-type smoke
 test. It generates the default unsigned alpha artifact under
 `dist/releases/`.
 
-Passing this command is local automated evidence only. Public alpha still
-requires separate security review handoff package generation, Developer ID
-signing/notarization decisions, clean signed/notarized install behavior checks,
-and either external review evidence or explicit maintainer accepted-risk
+Passing this command is local automated evidence only. The approved publication
+policy has separate profiles for source preview, an explicitly unsigned and
+unaudited experimental DMG, and optional signed distribution. Use the dedicated
+profile commands below; a default `local-test` artifact is not publication
 evidence.
 
 On managed workspaces or automation agents where Launch Services registration
@@ -44,7 +44,24 @@ Report mode exits after printing blocker status and always states that local
 alpha readiness is not approved. Strict mode is still required before sharing an
 alpha build with trusted testers.
 
-## Verify Public Alpha Release Readiness
+## Verify Publication Profiles
+
+Verify source-only readiness without creating a DMG:
+
+```sh
+script/verify_source_preview_ready.sh
+```
+
+Verify an explicitly unsigned and unaudited experimental Apple Silicon DMG:
+
+```sh
+script/verify_unsigned_alpha_release_ready.sh
+```
+
+The unsigned command requires a clean source revision, AR-002 policy evidence,
+all local quality and install checks, `RELEASE_MODE=unsigned-experimental`, and
+strict artifact verification. It does not require or claim Developer ID,
+notarization, Gatekeeper trust, or external review.
 
 For a release operator with Developer ID credentials, notarization credentials,
 signed-install verification, and completed external-review or maintainer
@@ -70,6 +87,9 @@ step, but it remains non-approving and does not complete external security
 review. Passing strict mode is public-alpha release evidence only;
 production-use recommendation remains a separate decision.
 
+This is the signed-distribution profile. Source publication does not require
+this command, and the unsigned profile must not reuse its result.
+
 ## Build The Alpha Package
 
 ```sh
@@ -79,16 +99,34 @@ script/package_macos_alpha.sh
 The script requires an Apple Silicon build host and builds:
 
 - Rust FFI dylib in release mode
+- local `keptnear-broker`, `keptnear-mcp`, and `keptnear` executables
 - SwiftPM macOS executable in release mode
 - `dist/alpha-staging/KeptNear.app` with `.pswvault` document/package metadata
 - `dist/releases/KeptNear-0.1.0-alpha-macos-arm64.dmg`
 - `dist/releases/KeptNear-0.1.0-alpha-macos-arm64.dmg.sha256`
 - `dist/releases/KeptNear-0.1.0-alpha-macos-arm64-manifest.txt`
+- `dist/releases/KeptNear-0.1.0-alpha-macos-arm64-protocol-manifest.json`
 
-The DMG contains `KeptNear.app` and an `Applications` link for drag-to-install.
-Packaging fails if the app executable or Rust FFI dylib is not arm64-only.
-The manifest records whether the source worktree was clean; signed packaging
-fails unless it is built from a clean Git worktree.
+The DMG contains `KeptNear.app`, `KeptNear-Protocol-Manifest.json`, and an
+`Applications` link for drag-to-install. The App bundle keeps the Broker, MCP
+adapter, and CLI under `Contents/Helpers`; the FFI remains under
+`Contents/Frameworks`. Packaging fails if any executable or the FFI is not
+arm64-only, if any component declares a different Broker protocol, or if a
+required component is absent.
+
+The protocol manifest records the exact App, Broker, MCP, CLI, and FFI paths
+and SHA-256 values, their component versions, the shared
+`keptnear.broker/1.0` declaration, and fixed paths below
+`/Applications/KeptNear.app`. It is generated only after nested code signing
+and remains outside the signed App bundle to avoid a self-referential
+signature/hash cycle. The text manifest records whether the source worktree
+was clean; signed packaging fails unless it is built from a clean Git
+worktree.
+
+Bundling the Broker executable does not by itself install or activate a
+long-running service. Until the App/Broker service lifecycle and human control
+path pass end-to-end acceptance, the machine adapters remain a developer
+preview rather than a complete end-user setup.
 
 Set `VERSION` to override the alpha version label:
 
@@ -192,14 +230,38 @@ script/verify_macos_alpha_artifact.sh dist/releases/KeptNear-0.1.0-alpha-macos-a
 ```
 
 The verifier checks the DMG checksum, image integrity, mounted app and
-Applications link, arm64-only app and FFI architectures, manifest SHA-256 and
-size metadata, app and DMG signing status, manual update channel, and release
-distribution boundary. It also checks that `Contents/Info.plist` advertises
-`.pswvault` as a package-style document type using the project-owned
-`app.psw.local.vault` type identifier. The manifest records the bundle
-identifier, minimum macOS version, architecture, checksum, signing status,
-notarization status, staple validation status, update channel, and validation
-command used for the artifact.
+Applications link, exact adjacent/in-DMG protocol-manifest equality,
+arm64-only App, Broker, MCP, CLI, and FFI architectures, component
+executability, runtime component declarations, every component hash, and the
+fixed local installation paths. It also verifies the text-manifest checksum,
+size, protocol-manifest hash, app and DMG signing status, manual update
+channel, release boundary, and `.pswvault` package document metadata.
+
+## Install An Unsigned Experimental DMG
+
+An unsigned package is suitable only for explicit experimental testing. Before
+opening it, obtain the DMG, adjacent `.sha256` file, text manifest, and protocol
+manifest from the same trusted source. From the directory containing those
+files, verify the checksum:
+
+```sh
+shasum -a 256 -c KeptNear-0.1.0-alpha-macos-arm64.dmg.sha256
+```
+
+Open the DMG, drag `KeptNear.app` to Applications, and launch that installed
+copy. Because the App has no Developer ID signature or notarization ticket,
+macOS may block the first launch. Review the artifact source and checksum first,
+then use Finder's explicit Open action or the Open Anyway control in System
+Settings > Privacy & Security if the current macOS version offers it. Do not
+disable Gatekeeper globally or remove quarantine metadata for unrelated files.
+
+The unsigned package is unaudited, experimental, and not suitable for
+production secrets. Installing the App does not activate the bundled Broker,
+MCP adapter, or CLI as services and does not add those helpers to the shell
+`PATH`. Their end-user lifecycle is not shipped. Uninstalling the App does not
+delete user-selected `.pswvault` directories, Keychain entries, or
+device-local `~/.keptnear` state; review and remove those separately only when
+their data is no longer needed.
 
 ## Verify Vault Doctor Readiness
 
@@ -210,7 +272,8 @@ CLI, vault format, or local sync troubleshooting paths:
 script/verify_vault_doctor_readiness.sh
 ```
 
-The verifier creates temporary vault cases, runs `psw doctor` in text and JSON
+The verifier creates temporary vault cases, runs the public
+`keptnear vault doctor` and legacy `psw doctor` entrypoints in text and JSON
 modes, checks non-zero failure behavior for incomplete and unsupported future
 formats, and verifies known item plaintext stays out of output. This is a local
 filesystem readiness check only; it does not inspect provider sync state.
@@ -267,13 +330,24 @@ The default `local-test` DMG is unsigned and records
 `Distribution ready: false`. It is suitable only for local testing and trusted
 testers who understand macOS Gatekeeper prompts.
 
+An `unsigned-experimental` DMG records `Distribution ready: true` only after a
+clean source revision, the AR-002 review-policy path, and all local packaging,
+integrity, disclosure, and installation gates pass. Its manifest remains
+explicitly `unsigned`, `unaudited`, and not suitable for production secrets.
+
 An `experimental-pre-release` DMG records `Distribution ready: true` only after
 the security decision path passes and signed, notarized packaging completes.
 Every alpha manifest records `Production ready: false`.
 
-Public distribution still requires:
+Signed public distribution still requires:
 
 - generated and checksum-verified security review handoff materials
 - external security review evidence or explicit accepted-risk records
 - Developer ID signing, hardened runtime, notarization, and signed-install
   verification; accepted risk does not bypass these controls
+
+The unsigned experimental profile requires local build and test gates,
+dependency-license and public-tree checks, artifact checksum and protocol
+manifest verification, explicit Gatekeeper installation instructions, and
+adjacent `unsigned`, `unaudited`, and `not for production secrets` warnings. It
+does not require Apple credentials or external review evidence.
