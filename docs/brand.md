@@ -14,6 +14,21 @@ and tested in source. Public copy must still distinguish source implementation,
 components bundled without service activation, and released end-user
 capabilities.
 
+## Public Documentation Language
+
+English is the default language for public repository entry points and
+authoritative product documentation. Simplified Chinese is supported through a
+complete README and product-overview mirror:
+
+- `README.md` and `docs/product-overview.md` are the default English entry points.
+- `README.zh-CN.md` and `docs/product-overview.zh-CN.md` are the Simplified
+  Chinese entry points.
+- Both languages must describe the same current release, capability labels,
+  product scope, roadmap maturity, and security non-claims.
+
+The macOS interface also supports Japanese. A Japanese public-documentation
+mirror is not part of the current documentation commitment.
+
 ## Mark
 
 The mark is built from two independent folded leaves held close together with a

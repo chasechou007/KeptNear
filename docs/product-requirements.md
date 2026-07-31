@@ -48,6 +48,10 @@ English descriptor:
 Local Password & Token Manager
 ```
 
+Public repository documentation defaults to English and provides a complete
+Simplified Chinese README and product-overview mirror. Translation must not
+promote a source-only or bundled capability into a released end-user claim.
+
 Public summary:
 
 > Keep passwords, tokens, and keys in a local encrypted vault, and decide which
@@ -948,6 +952,9 @@ The macOS first-version closure is accepted only when:
 ## Related Public Documents
 
 - `README.md`
+- `README.zh-CN.md`
+- `docs/product-overview.md`
+- `docs/product-overview.zh-CN.md`
 - `docs/architecture.md`
 - `docs/security-model.md`
 - `docs/vault-format.md`

@@ -39,6 +39,9 @@ IMPORT_EXPORT_PATH="$ROOT_DIR/docs/import-formats.md"
 RELEASE_PATH="$ROOT_DIR/docs/release-readiness.md"
 SQLCIPHER_EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
 README_PATH="$ROOT_DIR/README.md"
+README_ZH_PATH="$ROOT_DIR/README.zh-CN.md"
+PRODUCT_OVERVIEW_PATH="$ROOT_DIR/docs/product-overview.md"
+PRODUCT_OVERVIEW_ZH_PATH="$ROOT_DIR/docs/product-overview.zh-CN.md"
 
 for path in \
   "$BUILD_PATH" \
@@ -50,7 +53,10 @@ for path in \
   "$IMPORT_EXPORT_PATH" \
   "$RELEASE_PATH" \
   "$SQLCIPHER_EVIDENCE_PATH" \
-  "$README_PATH"; do
+  "$README_PATH" \
+  "$README_ZH_PATH" \
+  "$PRODUCT_OVERVIEW_PATH" \
+  "$PRODUCT_OVERVIEW_ZH_PATH"; do
   require_file "$path"
 done
 
@@ -88,6 +94,14 @@ require_literal "$IMPORT_EXPORT_PATH" "unavailable to MCP, CLI"
 require_literal "$RELEASE_PATH" "script/verify_sqlcipher_distribution_gate.sh"
 require_literal "$RELEASE_PATH" "docs/sqlcipher-distribution-evidence.json"
 require_literal "$README_PATH" "docs/sqlcipher-distribution-evidence.json"
+require_literal "$README_PATH" "README.zh-CN.md"
+require_literal "$README_PATH" "docs/product-overview.md"
+require_literal "$README_ZH_PATH" "README.md"
+require_literal "$README_ZH_PATH" "docs/product-overview.zh-CN.md"
+require_literal "$README_ZH_PATH" "v0.1.0-prealpha.2"
+require_literal "$README_ZH_PATH" "AR-002"
+require_literal "$PRODUCT_OVERVIEW_PATH" "product-overview.zh-CN.md"
+require_literal "$PRODUCT_OVERVIEW_ZH_PATH" "product-overview.md"
 
 for link in \
   "docs/build.md" \
