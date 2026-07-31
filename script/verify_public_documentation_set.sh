@@ -29,6 +29,40 @@ reject_literal() {
   fi
 }
 
+extract_release_tag() {
+  local path="$1"
+  local tags
+
+  tags="$(grep -Eo 'releases/tag/v[0-9]+\.[0-9]+\.[0-9]+[-A-Za-z0-9.]*' "$path" \
+    | sed 's#releases/tag/##' \
+    | sort -u \
+    || true)"
+
+  if [[ -z "$tags" || "$(printf '%s\n' "$tags" | wc -l | tr -d ' ')" -ne 1 ]]; then
+    echo "public documentation violation: ${path#$ROOT_DIR/} must reference exactly one current release tag" >&2
+    exit 1
+  fi
+
+  printf '%s' "$tags"
+}
+
+extract_sha256() {
+  local path="$1"
+  local checksums
+
+  checksums="$(grep -E '^[[:xdigit:]]{64}$' "$path" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sort -u \
+    || true)"
+
+  if [[ -z "$checksums" || "$(printf '%s\n' "$checksums" | wc -l | tr -d ' ')" -ne 1 ]]; then
+    echo "public documentation violation: ${path#$ROOT_DIR/} must contain exactly one release SHA-256" >&2
+    exit 1
+  fi
+
+  printf '%s' "$checksums"
+}
+
 BUILD_PATH="$ROOT_DIR/docs/build.md"
 INSTALL_PATH="$ROOT_DIR/docs/macos-alpha-packaging.md"
 RECOVERY_PATH="$ROOT_DIR/docs/backup.md"
@@ -39,6 +73,9 @@ IMPORT_EXPORT_PATH="$ROOT_DIR/docs/import-formats.md"
 RELEASE_PATH="$ROOT_DIR/docs/release-readiness.md"
 SQLCIPHER_EVIDENCE_PATH="$ROOT_DIR/docs/sqlcipher-distribution-evidence.json"
 README_PATH="$ROOT_DIR/README.md"
+README_ZH_PATH="$ROOT_DIR/README.zh-CN.md"
+PRODUCT_OVERVIEW_PATH="$ROOT_DIR/docs/product-overview.md"
+PRODUCT_OVERVIEW_ZH_PATH="$ROOT_DIR/docs/product-overview.zh-CN.md"
 
 for path in \
   "$BUILD_PATH" \
@@ -50,7 +87,10 @@ for path in \
   "$IMPORT_EXPORT_PATH" \
   "$RELEASE_PATH" \
   "$SQLCIPHER_EVIDENCE_PATH" \
-  "$README_PATH"; do
+  "$README_PATH" \
+  "$README_ZH_PATH" \
+  "$PRODUCT_OVERVIEW_PATH" \
+  "$PRODUCT_OVERVIEW_ZH_PATH"; do
   require_file "$path"
 done
 
@@ -88,6 +128,32 @@ require_literal "$IMPORT_EXPORT_PATH" "unavailable to MCP, CLI"
 require_literal "$RELEASE_PATH" "script/verify_sqlcipher_distribution_gate.sh"
 require_literal "$RELEASE_PATH" "docs/sqlcipher-distribution-evidence.json"
 require_literal "$README_PATH" "docs/sqlcipher-distribution-evidence.json"
+require_literal "$README_PATH" "README.zh-CN.md"
+require_literal "$README_PATH" "docs/product-overview.md"
+require_literal "$README_ZH_PATH" "README.md"
+require_literal "$README_ZH_PATH" "docs/product-overview.zh-CN.md"
+require_literal "$README_ZH_PATH" "AR-002"
+require_literal "$PRODUCT_OVERVIEW_PATH" "product-overview.zh-CN.md"
+require_literal "$PRODUCT_OVERVIEW_ZH_PATH" "product-overview.md"
+
+CURRENT_RELEASE="$(extract_release_tag "$README_PATH")"
+for path in \
+  "$README_ZH_PATH" \
+  "$PRODUCT_OVERVIEW_PATH" \
+  "$PRODUCT_OVERVIEW_ZH_PATH"; do
+  release="$(extract_release_tag "$path")"
+  if [[ "$release" != "$CURRENT_RELEASE" ]]; then
+    echo "public documentation violation: ${path#$ROOT_DIR/} references $release; expected $CURRENT_RELEASE" >&2
+    exit 1
+  fi
+done
+
+README_SHA256="$(extract_sha256 "$README_PATH")"
+README_ZH_SHA256="$(extract_sha256 "$README_ZH_PATH")"
+if [[ "$README_ZH_SHA256" != "$README_SHA256" ]]; then
+  echo "public documentation violation: README release SHA-256 values do not match" >&2
+  exit 1
+fi
 
 for link in \
   "docs/build.md" \
