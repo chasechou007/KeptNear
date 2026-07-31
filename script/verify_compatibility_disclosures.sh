@@ -47,9 +47,12 @@ require_literal docs/security-model.md \
   "Complete invalidation after delivery requires upstream rotation."
 require_literal docs/security-model.md \
   "Native terminal interruption closes that connection"
-require_literal \
-  openspec/changes/complete-local-password-token-manager/specs/credential-use-interfaces/spec.md \
-  "invalidating a delivered copy requires upstream credential rotation"
+require_literal docs/cli-usage.md \
+  "For complete invalidation after compatibility delivery, rotate the credential"
+require_literal docs/mcp-setup.md \
+  "invalidating an existing copy requires"
+require_literal docs/mcp-setup.md \
+  "upstream credential rotation."
 
 if [[ "$violations" -ne 0 ]]; then
   printf 'Compatibility disclosure verification failed with %d violation(s).\n' \
