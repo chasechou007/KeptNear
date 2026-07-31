@@ -9,6 +9,33 @@ REVIEW_GATE="$ROOT_DIR/script/verify_security_review_evidence.sh"
 SQLCIPHER_GATE="$ROOT_DIR/script/verify_sqlcipher_distribution_gate.sh"
 DISTRIBUTION_TOOLCHAIN="$ROOT_DIR/script/reviewed_distribution_toolchain.sh"
 DISTRIBUTION_CARGO_RUNNER="$ROOT_DIR/script/run_reviewed_distribution_cargo.sh"
+RUN_DISTRIBUTION_TOOLCHAIN_SMOKE=0
+
+usage() {
+  cat <<'USAGE'
+usage: script/verify_release_profile_contract.sh [--distribution-toolchain-smoke]
+
+Checks the cross-host release profile contract. The optional smoke check also
+requires this machine to match the source-bound Apple Silicon release toolchain.
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --distribution-toolchain-smoke)
+      RUN_DISTRIBUTION_TOOLCHAIN_SMOKE=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
 
 require_executable() {
   local path="$1"
@@ -188,7 +215,7 @@ for RUST_TOOLCHAIN_OVERRIDE in \
   fi
 done
 
-if [[ "$(uname -s)" == "Darwin" && "$(uname -m)" == "arm64" ]]; then
+if [[ "$RUN_DISTRIBUTION_TOOLCHAIN_SMOKE" == "1" ]]; then
   ISOLATED_CARGO_VERSION="$(
     env \
       RUSTC=/usr/bin/false \

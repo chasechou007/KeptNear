@@ -111,3 +111,10 @@ script/verify_release_profile_contract.sh
 script/verify_public_capability_claims.sh
 script/verify_public_documentation_set.sh
 ```
+
+On the reviewed Apple Silicon release host, also run the source-bound Rust and
+native toolchain smoke check:
+
+```sh
+script/verify_release_profile_contract.sh --distribution-toolchain-smoke
+```
