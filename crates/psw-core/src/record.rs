@@ -255,7 +255,7 @@ fn validate_target_record_header(record: &TargetEncryptedCredentialRecord) -> Va
         });
     }
     if record.ciphertext_hex.len() < AEAD_TAG_LEN * 2
-        || record.ciphertext_hex.len() % 2 != 0
+        || !record.ciphertext_hex.len().is_multiple_of(2)
         || !record
             .ciphertext_hex
             .bytes()

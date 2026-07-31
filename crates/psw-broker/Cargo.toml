@@ -21,7 +21,7 @@ base64 = "=0.22.1"
 ed25519-dalek = { version = "=2.1.1", default-features = false, features = ["std"] }
 hex = "=0.4.3"
 hkdf = "=0.12.3"
-# Keep URL's Unicode IDNA backend within the workspace Rust/Cargo 1.75 baseline.
+# Keep URL's Unicode IDNA backend pinned for deterministic request validation.
 idna = { version = "=1.0.3", default-features = false, features = ["alloc", "compiled_data"] }
 idna_adapter = "=1.1.0"
 # ureq logs URLs and wire headers at debug level. KeptNear writes no Broker
@@ -29,7 +29,7 @@ idna_adapter = "=1.1.0"
 log = { version = "=0.4.33", features = ["max_level_off", "release_max_level_off"] }
 psw-core = { path = "../psw-core" }
 rand_core = { version = "=0.6.4", features = ["getrandom"] }
-rusqlite = { version = "=0.31.0", default-features = false, features = ["bundled-sqlcipher"] }
+rusqlite = { version = "=0.39.0", default-features = false, features = ["bundled-sqlcipher"] }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
 sha2 = "=0.10.9"
@@ -37,8 +37,7 @@ ureq = { version = "=2.12.1", default-features = false, features = ["tls"] }
 url = "=2.5.4"
 zeroize = "=1.8.1"
 
-# rustls 0.23.43 and its patched webpki line retain an MSRV below the
-# workspace Rust 1.75 baseline.
+# Keep the reviewed rustls and webpki line pinned until the next transport audit.
 rustls = { version = "=0.23.43", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 webpki-roots = "=0.26.7"
 

@@ -43,14 +43,15 @@ or another external security-review service:
 - `cargo clippy --workspace --all-targets --all-features -- -D warnings`
   passed.
 - Strict OpenSpec validation passed 33 of 33 active items.
-- `script/verify_dependency_licenses.sh` reviewed 116 resolved registry
+- `script/verify_dependency_licenses.sh` reviewed 125 resolved registry
   packages, required every workspace crate to inherit `GPL-3.0-only`, rejected
   non-registry dependency sources, checked the MPL secondary-license
   compatibility condition, and verified the bundled SQLCipher notice.
 - The exact-expression allowlist contains only license choices reviewed for
   GPLv3 distribution. The current `MPL-2.0` dependency is
   `webpki-roots 0.26.7`, whose source does not opt out with an
-  `Incompatible With Secondary Licenses` notice.
+  `Incompatible With Secondary Licenses` notice. The SQLCipher refresh also
+  introduced `foldhash 0.2.0` under the GPL-compatible SPDX `Zlib` license.
 - `script/verify_public_source_tree.sh` checked 229 candidate files and found
   no private development context, real vaults, plaintext export artifacts,
   signing material, or build products.

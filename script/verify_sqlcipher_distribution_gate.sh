@@ -254,9 +254,9 @@ LIBSQLITE3_SYS_VERSION="$LIBSQLITE3_SYS_VERSIONS"
 # This reviewed mapping is intentionally code, not a mutable release conclusion.
 # A dependency refresh must add a reviewed mapping before any receipt can pass.
 case "$LIBSQLITE3_SYS_VERSION" in
-  0.28.0)
-    BUNDLED_SQLCIPHER_VERSION="4.5.3"
-    VERSION_POLICY="blocked"
+  0.37.0)
+    BUNDLED_SQLCIPHER_VERSION="4.10.0"
+    VERSION_POLICY="eligible"
     ;;
   *)
     echo "SQLCipher distribution gate failed: libsqlite3-sys $LIBSQLITE3_SYS_VERSION has no reviewed bundled SQLCipher mapping" >&2

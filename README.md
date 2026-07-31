@@ -16,27 +16,30 @@ Syncthing, or WebDAV.
 
 ## Project Status
 
-This project is a source-only pre-alpha preview. It is experimental and has not
-received an external security audit. Do not use it to store production
-credentials. No installable binary or GitHub Release is provided yet. The first
-binary target is macOS 13 or newer on Apple Silicon (`arm64`), distributed as a
-DMG. The maintainer has explicitly accepted the risk of an externally unaudited
+This project is an experimental pre-alpha.
+KeptNear has not received an external security audit.
+Do not use it to store production credentials.
+An unsigned Apple Silicon DMG is published as an experimental GitHub pre-release for macOS 13 or newer.
+It is not signed with Developer ID or notarized by Apple, so macOS
+will warn before first launch and Apple does not verify its publisher identity.
+The maintainer has explicitly accepted the risk of an externally unaudited
 experimental pre-release under `AR-001`; this does not recommend production
-use. A separate `AR-002` policy permits an unsigned and unaudited experimental
-DMG only after its dedicated readiness profile passes; it makes no Developer
-ID, notarization, external-audit, or production-suitability claim. See
+use. A separate `AR-002` policy permits this bounded unsigned and unaudited DMG
+only after its dedicated readiness profile passes; it makes no Developer ID,
+notarization, external-audit, or production-suitability claim. See
 `docs/release-readiness.md` and `docs/security-review-evidence.md` for the
 current release and review state.
 
-Both binary artifact decisions are currently `Not approved`. Independently,
+The unsigned experimental artifact decision is `Approved`; the signed artifact
+decision remains `Not approved`. Independently,
 `script/verify_sqlcipher_distribution_gate.sh` verifies the actual locked
 dependency, first-party source and release-script hashes, reviewed Rust/Cargo
 executables, fixed identity utilities running with a clean interpreter
 environment and fixed digest parser, configuration-isolated Apple Clang and
 native builds, and the machine-readable
-`docs/sqlcipher-distribution-evidence.json` receipt. Bundled SQLCipher 4.5.3 is
-hard-blocked in that executable mapping until it is upgraded and the encrypted
-device-state suite is revalidated. Editing a Markdown release conclusion alone
+`docs/sqlcipher-distribution-evidence.json` receipt. Bundled SQLCipher 4.10.0
+has passed the source-bound encrypted device-state revalidation on the reviewed
+Rust 1.93 and Apple toolchains. Editing a Markdown release conclusion alone
 cannot make either unsigned or signed distribution pass. Local-test DMGs remain
 development artifacts and cannot claim distribution readiness.
 
@@ -76,7 +79,7 @@ development artifacts and cannot claim distribution readiness.
 
 ### Not Shipped
 
-- No installable binary or GitHub Release is currently published.
+- No signed or notarized binary is currently published.
 - End-user MCP or CLI machine credential access is not a released product
   capability.
 - There is no hosted vault service, automatic provider sync client, signed and

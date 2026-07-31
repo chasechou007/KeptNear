@@ -362,7 +362,7 @@ fn process_run_cancellation_for_stream(
 fn peer_request_side_closed(stream: &UnixStream) -> bool {
     let mut descriptors = [PollFd::new(stream, PollFlags::POLLIN)];
     match poll(&mut descriptors, 0) {
-        Ok(_) => descriptors[0].revents().map_or(true, |events| {
+        Ok(_) => descriptors[0].revents().is_none_or(|events| {
             events.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL)
         }),
         Err(Errno::EINTR) => false,

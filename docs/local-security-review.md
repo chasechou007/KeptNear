@@ -35,7 +35,7 @@ material, an installed long-running Broker, or a network sync provider.
 | LSR-002 | High | Vault control files, encrypted records, and plaintext imports could be read without a byte limit, and required vault entries could resolve through symbolic links. | Core reads now require regular non-symbolic-link files, use `O_NOFOLLOW` on Unix, and enforce 64 KiB control-file, 16 MiB encrypted-record, and 64 MiB plaintext-import limits. Vault roots and required entries reject symbolic links. Migration, refresh, quarantine, and CLI Doctor use the same fail-closed boundary. |
 | LSR-003 | High | Plaintext export followed an existing symbolic-link destination and inherited ambient file permissions. | Export rejects non-regular and symbolic-link destinations, opens with `O_NOFOLLOW` on Unix, applies mode `0600` before writing secret bytes, syncs the file, and clears the serialized plaintext buffer on drop. |
 | LSR-004 | High | A release App could honor `PSW_FFI_LIBRARY` or current-working-directory debug dylib candidates. | Release builds now load `libpsw_ffi.dylib` only from the App bundle. Environment and working-directory overrides remain available only in debug builds and are regression tested. |
-| LSR-005 | High | The lockfile selected `rustls-webpki 0.102.8`, which matched four RustSec advisories. | `rustls` is pinned to `0.23.43` and the lockfile selects `rustls-webpki 0.103.13`; both declare an MSRV of Rust 1.71 and build with the workspace's Rust 1.75 toolchain. The available 1,169-advisory database reports no known vulnerability in the resulting lockfile. |
+| LSR-005 | High | The lockfile selected `rustls-webpki 0.102.8`, which matched four RustSec advisories. | `rustls` is pinned to `0.23.43` and the lockfile selects `rustls-webpki 0.103.13`; both build with the workspace's reviewed Rust 1.93 toolchain. The available 1,169-advisory database reports no known vulnerability in the resulting lockfile. |
 | LSR-006 | Medium | `keptnear vault doctor` could describe symbolic-link structure as valid and read unbounded metadata even though Core would reject it. | Doctor now rejects symbolic-link roots and entries, limits `vault.json` to 64 KiB, uses no-follow opening on Unix, and has focused regressions. |
 | LSR-007 | Medium | The App FFI command decoder accepted unknown JSON fields, weakening the closed bridge contract. | The command enum now rejects unknown fields, including its empty `version` command shape, and a seeded private value is verified absent from the error response. |
 
@@ -100,13 +100,13 @@ issue exists.
 
 ## Validation Evidence
 
-- Rust 1.75.0 built and passed 522 tests across Core, FFI, Broker, shared
+- Rust 1.93.0 built and passed 523 tests across Core, FFI, Broker, shared
   client, MCP, CLI, migration, recovery, two-device sync, parser hardening, and
   package-manifest targets.
 - SwiftPM passed 234 macOS workflow tests and a debug build.
 - Workspace Clippy passed for all targets and features with warnings denied.
 - The cross-adapter seeded-secret gate passed for Broker, MCP, CLI, and App.
-- Dependency-license review passed for 116 registry packages under the
+- Dependency-license review passed for 125 registry packages under the
   repository's GPLv3 compatibility policy.
 - `cargo-audit 0.22.2 --no-fetch --stale` reported zero vulnerabilities against
   the available 1,169-advisory snapshot after the TLS upgrade. Its online

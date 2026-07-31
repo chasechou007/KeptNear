@@ -1471,7 +1471,7 @@ impl DeviceStateStore {
             };
         }
         if approval.status() == ApprovalStatus::Pending {
-            return Ok(StoredApprovalResolution::NotYetCreated(approval));
+            return Ok(StoredApprovalResolution::NotYetCreated);
         }
         Ok(StoredApprovalResolution::AlreadyTerminal(approval))
     }
@@ -1510,7 +1510,7 @@ impl DeviceStateStore {
             return Ok(StoredAllowOnceResolution::AlreadyTerminal(request));
         }
         if request.created_at() > resolved_at {
-            return Ok(StoredAllowOnceResolution::NotYetCreated(request));
+            return Ok(StoredAllowOnceResolution::NotYetCreated);
         }
         if request.expires_at() <= resolved_at {
             transaction
@@ -1521,13 +1521,13 @@ impl DeviceStateStore {
                     [approval_request_id.to_string()],
                 )
                 .map_err(map_write_error)?;
-            let expired = approval_from_connection(&transaction, approval_request_id)?
+            approval_from_connection(&transaction, approval_request_id)?
                 .ok_or(DeviceStateError::CorruptSchema)?;
             transaction
                 .commit()
                 .map_err(|error| map_database_error(DeviceStateDatabaseOperation::Write, error))?;
             self.verify_managed_files()?;
-            return Ok(StoredAllowOnceResolution::Expired(expired));
+            return Ok(StoredAllowOnceResolution::Expired);
         }
 
         insert_use_grant_row(&transaction, grant)?;
@@ -1586,7 +1586,7 @@ impl DeviceStateStore {
             return Ok(StoredAccessRuleResolution::AlreadyTerminal(request));
         }
         if request.created_at() > resolved_at {
-            return Ok(StoredAccessRuleResolution::NotYetCreated(request));
+            return Ok(StoredAccessRuleResolution::NotYetCreated);
         }
         if request.expires_at() <= resolved_at {
             transaction
@@ -1597,13 +1597,13 @@ impl DeviceStateStore {
                     [approval_request_id.to_string()],
                 )
                 .map_err(map_write_error)?;
-            let expired = approval_from_connection(&transaction, approval_request_id)?
+            approval_from_connection(&transaction, approval_request_id)?
                 .ok_or(DeviceStateError::CorruptSchema)?;
             transaction
                 .commit()
                 .map_err(|error| map_database_error(DeviceStateDatabaseOperation::Write, error))?;
             self.verify_managed_files()?;
-            return Ok(StoredAccessRuleResolution::Expired(expired));
+            return Ok(StoredAccessRuleResolution::Expired);
         }
 
         let existing =
@@ -2132,15 +2132,15 @@ pub(crate) enum StoredApprovalResolution {
     Resolved(ApprovalRequest),
     Expired(ApprovalRequest),
     AlreadyTerminal(ApprovalRequest),
-    NotYetCreated(ApprovalRequest),
+    NotYetCreated,
     Missing,
 }
 
 pub(crate) enum StoredAllowOnceResolution {
     Approved(ApprovalRequest),
-    Expired(ApprovalRequest),
+    Expired,
     AlreadyTerminal(ApprovalRequest),
-    NotYetCreated(ApprovalRequest),
+    NotYetCreated,
     SubjectMismatch(ApprovalRequest),
     Missing,
 }
@@ -2151,9 +2151,9 @@ pub(crate) enum StoredAccessRuleResolution {
         rule: AccessRule,
         newly_created: bool,
     },
-    Expired(ApprovalRequest),
+    Expired,
     AlreadyTerminal(ApprovalRequest),
-    NotYetCreated(ApprovalRequest),
+    NotYetCreated,
     SubjectMismatch(ApprovalRequest),
     ConflictingRule(ApprovalRequest),
     Missing,
@@ -2290,7 +2290,7 @@ fn key_and_configure(
              PRAGMA cipher_plaintext_header_size = 0;",
         )
         .map_err(|error| map_database_error(DeviceStateDatabaseOperation::Configure, error))?;
-    verify_pragma_i64(connection, "PRAGMA cipher_log_level = NONE", 0)?;
+    verify_pragma_text(connection, "PRAGMA cipher_log_level = NONE", "NONE")?;
 
     let version_text: String = connection
         .query_row("PRAGMA cipher_version", [], |row| row.get(0))
@@ -2412,6 +2412,23 @@ fn verify_pragma_i64(
                 value.data_type(),
             )),
         })
+        .map_err(|error| map_database_error(DeviceStateDatabaseOperation::Configure, error))?;
+    if value != expected {
+        return Err(DeviceStateError::Database {
+            operation: DeviceStateDatabaseOperation::Configure,
+            category: DeviceStateDatabaseErrorCategory::Other,
+        });
+    }
+    Ok(())
+}
+
+fn verify_pragma_text(
+    connection: &Connection,
+    pragma: &str,
+    expected: &str,
+) -> Result<(), DeviceStateError> {
+    let value: String = connection
+        .query_row(pragma, [], |row| row.get(0))
         .map_err(|error| map_database_error(DeviceStateDatabaseOperation::Configure, error))?;
     if value != expected {
         return Err(DeviceStateError::Database {

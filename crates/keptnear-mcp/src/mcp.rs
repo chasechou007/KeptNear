@@ -265,7 +265,7 @@ where
 }
 
 fn valid_optional_object(value: Option<&Value>) -> bool {
-    value.map_or(true, Value::is_object)
+    value.is_none_or(Value::is_object)
 }
 
 fn valid_list_tools_params(value: Option<&Value>) -> bool {
@@ -275,7 +275,7 @@ fn valid_list_tools_params(value: Option<&Value>) -> bool {
     let Some(params) = params.as_object() else {
         return false;
     };
-    params.keys().all(|key| key == "_meta") && params.get("_meta").map_or(true, Value::is_object)
+    params.keys().all(|key| key == "_meta") && params.get("_meta").is_none_or(Value::is_object)
 }
 
 fn tool_result(structured: Value, is_error: bool) -> Value {

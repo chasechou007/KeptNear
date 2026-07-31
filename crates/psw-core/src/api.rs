@@ -1737,7 +1737,7 @@ impl UnlockedVault {
         items.retain(|item| {
             tombstones
                 .get(&item.id)
-                .map_or(true, |deleted_revision| deleted_revision < &item.revision)
+                .is_none_or(|deleted_revision| deleted_revision < &item.revision)
         });
         report.detected_conflicts = detect_conflicts(&items)?.len();
         Ok(CandidateLoad { items, report })
@@ -2088,7 +2088,7 @@ impl UnlockedVault {
         for (credential_id, mut heads) in heads_by_credential {
             heads.sort_by_key(CredentialRevision::revision_id);
             let is_conflicted = heads.len() > 1;
-            let query_matches = needle.map_or(true, |needle| {
+            let query_matches = needle.is_none_or(|needle| {
                 heads
                     .iter()
                     .filter(|revision| revision.lifecycle() != CredentialLifecycle::Deleted)
@@ -2632,9 +2632,9 @@ fn unique_target_merge_base(
     let selected = *maximal.first()?;
     let selected_base = *revisions_by_id.get(&selected.0)?;
     if maximal.iter().skip(1).any(|candidate| {
-        revisions_by_id.get(&candidate.0).map_or(true, |base| {
-            !target_revisions_semantically_equivalent(selected_base, base)
-        })
+        revisions_by_id
+            .get(&candidate.0)
+            .is_none_or(|base| !target_revisions_semantically_equivalent(selected_base, base))
     }) {
         return None;
     }

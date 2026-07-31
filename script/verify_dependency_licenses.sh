@@ -85,6 +85,7 @@ allowed_registry_expressions = {
     "BSD-3-Clause",
     "ISC",
     "MPL-2.0",
+    "Zlib",
     "Zlib OR Apache-2.0 OR MIT",
     "MIT OR Apache-2.0 OR Zlib",
     "MIT OR Apache-2.0 OR BSD-1-Clause",

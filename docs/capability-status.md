@@ -1,6 +1,6 @@
 # Capability Status
 
-Review date: 2026-07-30
+Review date: 2026-07-31
 
 KeptNear uses four public status labels. A feature moving between labels
 requires implementation evidence, applicable tests, and an updated public-copy
@@ -56,7 +56,8 @@ pairing, approval, operation, restart, upgrade, and uninstall lifecycle.
 
 ## Not Shipped
 
-- No binary or GitHub Release is currently published.
+- The published Apple Silicon DMG is unsigned, not notarized, externally
+  unaudited, and not recommended for production secrets.
 - No end-user Broker service or supported MCP/CLI installation flow is
   released.
 - No signed and notarized artifact has passed the optional distribution

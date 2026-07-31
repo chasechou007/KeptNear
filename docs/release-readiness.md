@@ -31,17 +31,19 @@ explicit unsigned installation warnings. The signed profile alone performs
 Developer ID, hardened-runtime, notarization, stapling, Gatekeeper, and signed
 install checks.
 
-Both binary profiles are currently blocked by their artifact decisions and by
-an independent dependency gate. `script/verify_sqlcipher_distribution_gate.sh`
+The unsigned profile has an approved bounded artifact decision and dependency
+receipt, but each exact DMG must still pass its clean-revision readiness gate.
+The signed profile remains blocked by its separate artifact decision and Apple
+trust-chain requirements. `script/verify_sqlcipher_distribution_gate.sh`
 reads the actual `libsqlite3-sys` lock entry, requires the reviewed
 `bundled-sqlcipher` mapping, and verifies
 `docs/sqlcipher-distribution-evidence.json` against the workspace manifest,
 current lockfile, complete first-party Rust workspace source tree, Broker
 manifest, complete Broker source tree, SQLCipher FFI key bridge, encrypted
 state implementation, schema, and regression suite. This includes Broker path
-dependencies such as `psw-core`. The bundled SQLCipher 4.5.3 mapping is
-hard-blocked until the dependency is upgraded and the source-bound suite is
-revalidated. Editing either Markdown artifact decision cannot bypass this gate.
+dependencies such as `psw-core`. The bundled SQLCipher 4.10.0 mapping has passed
+the required source-bound encrypted-state revalidation. Editing either Markdown
+artifact decision cannot bypass this gate.
 Release Cargo builds use `--locked`, a fixed target triple, and a
 repository-owned target directory, so the dependency graph and selected output
 path cannot change after the receipt check. The receipt also binds
@@ -62,11 +64,13 @@ with fixed macOS system utility paths; every `shasum` identity and receipt hash
 runs under a minimal environment that excludes Perl loader overrides and passes
 through a fixed `/usr/bin/awk` digest parser. Distribution Cargo starts from an
 empty process environment and runs from `/` with an absolute manifest,
-system-only `PATH`, temporary private `HOME` and `CARGO_HOME`, offline registry
-archive/index cache access, dependency source re-extraction, and no discoverable
-user, workspace, or parent Cargo configuration. Until then, strict unsigned and
-signed gates must exit non-zero. `local-test` may still create a development
-DMG, but its manifest must retain `Distribution ready: false`.
+temporary private `HOME` and `CARGO_HOME`, offline registry archive/index cache
+access, dependency source re-extraction, and a generated source-bound registry
+configuration instead of user, workspace, or parent Cargo configuration. Its
+`PATH` contains only fixed system tools plus the individually hashed
+`cargo-clippy` and `clippy-driver` executables when validation needs them.
+`local-test` may still create a development DMG, but its manifest must retain
+`Distribution ready: false`.
 
 ## Dependency Review
 
@@ -77,30 +81,28 @@ Current security-sensitive Rust dependencies:
 - `rand_core`: operating system randomness.
 - `hmac` and `sha1`: TOTP generation per RFC 6238 SHA-1 compatibility.
 - `serde` and `serde_json`: vault metadata, record encoding, and import parsing.
-- `zeroize`: pinned for Rust 1.75 compatibility; `SecretBytes` also clears its allocation on drop.
+- `zeroize`: pinned at the reviewed version; `SecretBytes` also clears its allocation on drop.
 - `hkdf` and `sha2`: domain-separated SQLCipher database-key derivation.
 - `rusqlite` and bundled SQLCipher Community Edition: authenticated encrypted
   device-state pages, WAL, transactions, and schema migration support.
-- `core-foundation` and `security-framework-sys`: Rust 1.75-compatible,
-  macOS-only bindings for the Broker's device-bound Data Protection Keychain
+- `core-foundation` and `security-framework-sys`: reviewed macOS-only bindings
+  for the Broker's device-bound Data Protection Keychain
   item.
 
 Current compatibility pins:
 
 - `base64ct = 1.6.0`
 - `core-foundation = 0.9.4`
-- `rusqlite = 0.31.0`, embedding SQLCipher 4.5.3
+- `rusqlite = 0.39.0` through `libsqlite3-sys = 0.37.0`, embedding SQLCipher 4.10.0
 - `security-framework-sys = 2.9.1`
 - `rustls = 0.23.43`, selecting `rustls-webpki = 0.103.13`
 - `zeroize = 1.8.1`
 
-These pins avoid transitive crates that require Rust 2024 edition and newer compilers than the current workspace Rust 1.75 toolchain.
-The SQLCipher pin is older than the current upstream line and is not approved
-for distribution of the new device-state feature. Before enabling that feature
-in any DMG, raise the Rust toolchain, refresh `rusqlite` and bundled SQLCipher,
-repeat wrong-key/tamper/format/permission tests, rerun the dependency audit, and
-verify schema compatibility. Source distributions and future binaries must
-retain `THIRD_PARTY_NOTICES.md`.
+The workspace and reviewed distribution runner use Rust 1.93.0. The SQLCipher
+refresh repeated wrong-key, tamper, missing-state, format, and permission tests,
+the dependency-license review, and all-target Clippy under the source-bound
+toolchain. Source distributions and future binaries must retain
+`THIRD_PARTY_NOTICES.md`.
 
 The 2026-07-31 local review upgraded the TLS chain after the prior
 `rustls-webpki` selection matched four RustSec advisories. The resulting
@@ -254,7 +256,7 @@ The macOS first-version closure keeps these limitations explicit:
 
 - The project is locally reviewed but externally unaudited. No source or DMG is
   recommended for production credentials.
-- The current local-test DMG is unsigned and not notarized. macOS may warn or
+- The published experimental DMG is unsigned and not notarized. macOS may warn or
   block normal launch, Apple does not attest its publisher identity, and
   unsigned/ad-hoc Keychain continuity across replacement or reinstall is not a
   release guarantee.
@@ -264,8 +266,9 @@ The macOS first-version closure keeps these limitations explicit:
 - Broker, MCP adapter, and CLI executables are packaged but are not installed
   or activated as an end-user service. The complete first-run pairing,
   approval, restart, upgrade, and uninstall lifecycle is not shipped.
-- The bundled SQLCipher 4.5.3 compatibility pin must be upgraded and
-  revalidated before machine-access state is enabled in a distributed DMG.
+- Bundled machine-access components remain inactive for end users. Their
+  SQLCipher 4.10.0 state layer has passed source-bound revalidation, but that
+  does not install a Broker service or expose MCP/CLI credential operations.
 - KeptNear does not operate iCloud Drive, Dropbox, Syncthing, WebDAV, or any
   other sync provider. Provider upload, deletion, ordering, and availability
   behavior has not been validated by the two-device filesystem matrix.
