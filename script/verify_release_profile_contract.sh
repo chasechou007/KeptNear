@@ -140,35 +140,35 @@ grep -F 'script/verify_unsigned_alpha_release_ready.sh' "$ROOT_DIR/docs/release-
 grep -F 'script/verify_public_alpha_release_ready.sh' "$ROOT_DIR/docs/release-readiness.md" >/dev/null
 
 PACKAGE_BUILD_COUNT="$(
-  awk '$1 == "package_cargo" && $2 == "build" { count += 1 } END { print count + 0 }' \
+  /usr/bin/awk '$1 == "package_cargo" && $2 == "build" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/package_macos_alpha.sh"
 )"
 PACKAGE_LOCKED_COUNT="$(
-  awk '$1 == "--locked" { count += 1 } END { print count + 0 }' \
+  /usr/bin/awk '$1 == "--locked" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/package_macos_alpha.sh"
 )"
 PACKAGE_TARGET_DIR_COUNT="$(
-  awk '$1 == "--target-dir" { count += 1 } END { print count + 0 }' \
+  /usr/bin/awk '$1 == "--target-dir" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/package_macos_alpha.sh"
 )"
 PACKAGE_TARGET_COUNT="$(
-  awk '$1 == "--target" { count += 1 } END { print count + 0 }' \
+  /usr/bin/awk '$1 == "--target" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/package_macos_alpha.sh"
 )"
 ARTIFACT_BUILD_COUNT="$(
-  awk '$1 == "artifact_cargo" && $2 == "build" { count += 1 } END { print count + 0 }' \
+  /usr/bin/awk '$1 == "artifact_cargo" && $2 == "build" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
 )"
 ARTIFACT_LOCKED_COUNT="$(
-  awk '$1 == "--locked" { count += 1 } END { print count + 0 }' \
+  /usr/bin/awk '$1 == "--locked" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
 )"
 ARTIFACT_TARGET_DIR_COUNT="$(
-  awk '$1 == "--target-dir" { count += 1 } END { print count + 0 }' \
+  /usr/bin/awk '$1 == "--target-dir" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
 )"
 ARTIFACT_TARGET_COUNT="$(
-  awk '$1 == "--target" { count += 1 } END { print count + 0 }' \
+  /usr/bin/awk '$1 == "--target" { count += 1 } END { print count + 0 }' \
     "$ROOT_DIR/script/verify_macos_alpha_artifact.sh"
 )"
 if [[ \
@@ -193,6 +193,25 @@ fi
 grep -F 'environment_command+=(-u "$variable_name")' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F '"RUSTC=$KEPTNEAR_ACTIVE_RUSTC_PATH"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F '"CARGO_BUILD_RUSTC=$KEPTNEAR_ACTIVE_RUSTC_PATH"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+
+EXPECTED_TOOLCHAIN_SHA256="$(
+  /usr/bin/env -i PATH=/usr/bin:/bin LANG=C LC_ALL=C \
+    /usr/bin/shasum -a 256 "$DISTRIBUTION_TOOLCHAIN" |
+    /usr/bin/awk '{print $1}'
+)"
+EXPORTED_AWK_TOOLCHAIN_SHA256="$(
+  /usr/bin/env \
+    'BASH_FUNC_awk%%=() { printf "%s\n" forged-digest; }' \
+    /bin/bash -c \
+      'source "$1"; keptnear_sha256_file "$2"' \
+      _ \
+      "$DISTRIBUTION_TOOLCHAIN" \
+      "$DISTRIBUTION_TOOLCHAIN"
+)"
+if [[ "$EXPORTED_AWK_TOOLCHAIN_SHA256" != "$EXPECTED_TOOLCHAIN_SHA256" ]]; then
+  echo "release profile contract violation: exported awk function replaced the trusted digest parser" >&2
+  exit 1
+fi
 
 "$REVIEW_GATE" --profile source >/dev/null
 if SQLCIPHER_GATE_OUTPUT="$("$SQLCIPHER_GATE" 2>&1)"; then

@@ -121,7 +121,7 @@ while IFS=' ' read -r object_id path; do
   fi
 done <"$HISTORY_OBJECTS"
 
-awk -F '\t' '!seen[$1]++' "$HISTORY_BLOBS" >"$UNIQUE_HISTORY_BLOBS"
+/usr/bin/awk -F '\t' '!seen[$1]++' "$HISTORY_BLOBS" >"$UNIQUE_HISTORY_BLOBS"
 
 history_blob_count=0
 while IFS=$'\t' read -r object_id path; do

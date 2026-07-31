@@ -126,10 +126,11 @@ mode, and a system-only `PATH`. Registry sources are re-extracted into that
 temporary Cargo home so Cargo rechecks the locked package archives instead of
 trusting mutable previously extracted source. Tool and source hashes use the
 fixed macOS `shasum` under a separate minimal environment so Perl loader
-variables cannot alter the result. User, workspace, and parent Cargo
-configuration therefore cannot inject forced build-script environment values.
-`local-test` remains a development-only path and does not claim this
-distribution evidence.
+variables cannot alter the result, and digest parsing calls the fixed
+`/usr/bin/awk` executable rather than a Shell-resolved command. User, workspace,
+and parent Cargo configuration therefore cannot inject forced build-script
+environment values. `local-test` remains a development-only path and does not
+claim this distribution evidence.
 
 The protocol manifest records the exact App, Broker, MCP, CLI, and FFI paths
 and SHA-256 values, their component versions, the shared

@@ -77,13 +77,17 @@ require_command() {
 
 manifest_field() {
   local field="$1"
-  awk -F': ' -v key="$field" '$1 == key { print $2; exit }' "$MANIFEST_PATH"
+  "$KEPTNEAR_SYSTEM_AWK" \
+    -F': ' \
+    -v key="$field" \
+    '$1 == key { print $2; exit }' \
+    "$MANIFEST_PATH"
 }
 
 manifest_section_field() {
   local section="$1"
   local field="$2"
-  awk -F': ' -v section="$section" -v key="$field" '
+  "$KEPTNEAR_SYSTEM_AWK" -F': ' -v section="$section" -v key="$field" '
     $0 == section { in_section = 1; next }
     in_section && $0 == "" { in_section = 0; next }
     in_section && $1 == key {
@@ -170,7 +174,7 @@ require_command xcrun
   keptnear_run_clean_shasum -a 256 -c "$(basename "$CHECKSUM_PATH")" >/dev/null
 )
 
-ACTUAL_SHA256="$(keptnear_run_clean_shasum -a 256 "$ARCHIVE_PATH" | awk '{print $1}')"
+ACTUAL_SHA256="$(keptnear_sha256_file "$ARCHIVE_PATH")"
 MANIFEST_SHA256="$(require_manifest_field "SHA-256")"
 assert_equals "manifest SHA-256" "$MANIFEST_SHA256" "$ACTUAL_SHA256"
 
@@ -178,20 +182,14 @@ ACTUAL_SIZE_BYTES="$(wc -c <"$ARCHIVE_PATH" | tr -d ' ')"
 MANIFEST_SIZE_BYTES="$(require_manifest_field "Size bytes")"
 assert_equals "manifest size" "$MANIFEST_SIZE_BYTES" "$ACTUAL_SIZE_BYTES"
 
-ACTUAL_PROTOCOL_MANIFEST_SHA256="$(
-  keptnear_run_clean_shasum -a 256 "$PROTOCOL_MANIFEST_PATH" |
-    awk '{print $1}'
-)"
+ACTUAL_PROTOCOL_MANIFEST_SHA256="$(keptnear_sha256_file "$PROTOCOL_MANIFEST_PATH")"
 MANIFEST_PROTOCOL_MANIFEST_SHA256="$(require_manifest_field "Protocol manifest SHA-256")"
 assert_equals \
   "protocol manifest SHA-256" \
   "$MANIFEST_PROTOCOL_MANIFEST_SHA256" \
   "$ACTUAL_PROTOCOL_MANIFEST_SHA256"
 
-ACTUAL_SQLCIPHER_EVIDENCE_SHA256="$(
-  keptnear_run_clean_shasum -a 256 "$SQLCIPHER_EVIDENCE_PATH" |
-    awk '{print $1}'
-)"
+ACTUAL_SQLCIPHER_EVIDENCE_SHA256="$(keptnear_sha256_file "$SQLCIPHER_EVIDENCE_PATH")"
 MANIFEST_SQLCIPHER_EVIDENCE_SHA256="$(require_manifest_field "SQLCipher distribution evidence SHA-256")"
 assert_equals \
   "SQLCipher distribution evidence SHA-256" \

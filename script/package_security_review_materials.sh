@@ -10,6 +10,15 @@ ARCHIVE_PATH="$DIST_DIR/$PACKAGE_NAME.tar.gz"
 CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
 MANIFEST_PATH="$DIST_DIR/$PACKAGE_NAME-manifest.txt"
 
+clean_shasum() {
+  /usr/bin/env \
+    -i \
+    PATH=/usr/bin:/bin \
+    LANG=C \
+    LC_ALL=C \
+    /usr/bin/shasum "$@"
+}
+
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/psw-security-review-materials.XXXXXX")"
 STAGING_ROOT="$TMP_DIR/$PACKAGE_NAME"
 
@@ -140,7 +149,7 @@ rm -f "$ARCHIVE_PATH" "$CHECKSUM_PATH" "$MANIFEST_PATH"
   COPYFILE_DISABLE=1 tar -czf "$ARCHIVE_PATH" "$PACKAGE_NAME"
 )
 
-ARCHIVE_SHA256="$(shasum -a 256 "$ARCHIVE_PATH" | awk '{print $1}')"
+ARCHIVE_SHA256="$(clean_shasum -a 256 "$ARCHIVE_PATH" | /usr/bin/awk '{print $1}')"
 printf '%s  %s\n' "$ARCHIVE_SHA256" "$(basename "$ARCHIVE_PATH")" >"$CHECKSUM_PATH"
 cp "$STAGED_MANIFEST" "$MANIFEST_PATH"
 
@@ -162,7 +171,7 @@ require_manifest_text "Excluded material classes"
 
 (
   cd "$DIST_DIR"
-  shasum -a 256 -c "$(basename "$CHECKSUM_PATH")" >/dev/null
+  clean_shasum -a 256 -c "$(basename "$CHECKSUM_PATH")" >/dev/null
 )
 
 echo "Security review materials archive: $ARCHIVE_PATH"

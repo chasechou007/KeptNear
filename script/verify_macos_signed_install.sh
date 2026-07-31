@@ -50,7 +50,7 @@ require_command() {
 manifest_section_field() {
   local section="$1"
   local field="$2"
-  awk -F': ' -v section="$section" -v key="$field" '
+  /usr/bin/awk -F': ' -v section="$section" -v key="$field" '
     $0 == section { in_section = 1; next }
     in_section && $0 == "" { in_section = 0; next }
     in_section && $1 == key {
@@ -63,7 +63,7 @@ manifest_section_field() {
 
 manifest_field() {
   local field="$1"
-  awk -F': ' -v key="$field" '$1 == key { print $2; exit }' "$MANIFEST_PATH"
+  /usr/bin/awk -F': ' -v key="$field" '$1 == key { print $2; exit }' "$MANIFEST_PATH"
 }
 
 require_manifest_value() {

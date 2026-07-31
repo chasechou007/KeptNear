@@ -176,19 +176,19 @@ if ! RUSTC_VERBOSE_VERSION="$("${RUSTC_PROBE_RUNNER[@]}" "${CARGO_RUSTC_PROBE[@]
 fi
 RUSTC_RELEASE="$(
   printf '%s\n' "$RUSTC_VERBOSE_VERSION" |
-    awk -F': ' '$1 == "release" { print $2; exit }'
+    "$KEPTNEAR_SYSTEM_AWK" -F': ' '$1 == "release" { print $2; exit }'
 )"
 RUSTC_COMMIT_HASH="$(
   printf '%s\n' "$RUSTC_VERBOSE_VERSION" |
-    awk -F': ' '$1 == "commit-hash" { print $2; exit }'
+    "$KEPTNEAR_SYSTEM_AWK" -F': ' '$1 == "commit-hash" { print $2; exit }'
 )"
 RUSTC_HOST="$(
   printf '%s\n' "$RUSTC_VERBOSE_VERSION" |
-    awk -F': ' '$1 == "host" { print $2; exit }'
+    "$KEPTNEAR_SYSTEM_AWK" -F': ' '$1 == "host" { print $2; exit }'
 )"
 RUSTC_LLVM_VERSION="$(
   printf '%s\n' "$RUSTC_VERBOSE_VERSION" |
-    awk -F': ' '$1 == "LLVM version" { print $2; exit }'
+    "$KEPTNEAR_SYSTEM_AWK" -F': ' '$1 == "LLVM version" { print $2; exit }'
 )"
 if [[ -z "$RUSTC_RELEASE" || -z "$RUSTC_COMMIT_HASH" || -z "$RUSTC_HOST" || -z "$RUSTC_LLVM_VERSION" ]]; then
   echo "SQLCipher distribution gate failed: Cargo-selected rustc did not provide the required compiler identity" >&2
@@ -218,7 +218,7 @@ if ! grep -E 'rusqlite[[:space:]]*=.*features[[:space:]]*=[[:space:]]*\[[^]]*"bu
 fi
 
 LIBSQLITE3_SYS_VERSIONS="$(
-  awk '
+  "$KEPTNEAR_SYSTEM_AWK" '
     $0 == "[[package]]" {
       in_package = 0
       next
@@ -239,7 +239,7 @@ LIBSQLITE3_SYS_VERSIONS="$(
 
 LIBSQLITE3_SYS_VERSION_COUNT="$(
   printf '%s\n' "$LIBSQLITE3_SYS_VERSIONS" |
-    awk 'NF { count += 1 } END { print count + 0 }'
+    "$KEPTNEAR_SYSTEM_AWK" 'NF { count += 1 } END { print count + 0 }'
 )"
 if [[ "$LIBSQLITE3_SYS_VERSION_COUNT" -eq 0 ]]; then
   echo "SQLCipher distribution gate failed: Cargo.lock does not contain libsqlite3-sys" >&2
@@ -265,8 +265,7 @@ case "$LIBSQLITE3_SYS_VERSION" in
 esac
 
 sha256_file() {
-  keptnear_run_clean_shasum -a 256 "$1" |
-    "$KEPTNEAR_SYSTEM_AWK" '{print $1}'
+  keptnear_sha256_file "$1"
 }
 
 source_tree_sha256() {

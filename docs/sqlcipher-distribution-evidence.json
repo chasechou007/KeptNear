@@ -42,10 +42,10 @@
     "stateStoreSha256": "7d27b09b6dacc446188cd449301b9264e269fd856e2d3edbe063283122c6a788",
     "stateSchemaSha256": "296bdd97d0fee04aafdc521b1302e48240a24e5c5fb811063da3585516bad53f",
     "brokerIntegrationTestsSha256": "7d17389d076ac24cc2b023df5ca478528ec0fad7a7d9d2431df2a285274187d9",
-    "packageScriptSha256": "6fa21c51334a5d2a3bea952b819537ac28a951948e39625fb0510e0271489344",
-    "artifactVerifierSha256": "f4869d9de71fa83ad32743b846e52e8d71f744ae083481da653a574539bc1813",
-    "distributionGateSha256": "2e39d5cda6b4c1acb51acfd9f40e8e5a25f227ecf17ec12897f137f64d1613dc",
-    "distributionToolchainSha256": "58032ee3c7246eb9829e51a5cc075b88240aa6387da3dfdee70a6f0dfdfaea0f",
+    "packageScriptSha256": "3cf43df94369e3fd5440b1b2ec55808fc04a657221c4d11a3b042aa164f79815",
+    "artifactVerifierSha256": "d236129d7a9539b9c87d84f420b35ab2f8e8f2dbb456f0d3505fd6de952a61c6",
+    "distributionGateSha256": "c2bb5146fe22cb232cff68e1f3c12594619a398dd0dda8b0c1c15ceccc3b1543",
+    "distributionToolchainSha256": "e4f824ecc52f653d57e06ea4d410f3055c91b52d07c69f06dae4443012f1912c",
     "distributionCargoRunnerSha256": "05df28334bb1e224718a9901f0960d85bdee309d8634030463f3f13f75a38d17"
   },
   "revalidation": {

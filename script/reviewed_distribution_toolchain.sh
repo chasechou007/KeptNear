@@ -70,9 +70,13 @@ keptnear_run_clean_shasum() {
     "$KEPTNEAR_SYSTEM_SHASUM" "$@"
 }
 
-keptnear_toolchain_sha256() {
+keptnear_sha256_file() {
   keptnear_run_clean_shasum -a 256 "$1" |
     "$KEPTNEAR_SYSTEM_AWK" '{print $1}'
+}
+
+keptnear_toolchain_sha256() {
+  keptnear_sha256_file "$1"
 }
 
 keptnear_assert_fixed_identity_utilities() {

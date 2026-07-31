@@ -138,7 +138,11 @@ is_missing_external_value() {
 
 summary_value() {
   local label="$1"
-  awk -F': ' -v label="$label" '$0 ~ "^- " label ": " { print $2; exit }' "$EVIDENCE_PATH"
+  /usr/bin/awk \
+    -F': ' \
+    -v label="$label" \
+    '$0 ~ "^- " label ": " { print $2; exit }' \
+    "$EVIDENCE_PATH"
 }
 
 require_summary_value() {
@@ -155,7 +159,11 @@ require_summary_value() {
 
 release_value() {
   local label="$1"
-  awk -F': ' -v label="$label" '$0 ~ "^- " label ": " { print $2; exit }' "$EVIDENCE_PATH"
+  /usr/bin/awk \
+    -F': ' \
+    -v label="$label" \
+    '$0 ~ "^- " label ": " { print $2; exit }' \
+    "$EVIDENCE_PATH"
 }
 
 require_release_value() {
@@ -199,7 +207,7 @@ require_validation_on_date() {
   local validation_date="$1"
   local command_name="$2"
   local label="$3"
-  if awk -F'|' -v expected_date="$validation_date" -v expected_command="\`$command_name\`" '
+  if /usr/bin/awk -F'|' -v expected_date="$validation_date" -v expected_command="\`$command_name\`" '
     function trim(value) {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
       return value
@@ -227,7 +235,7 @@ require_accepted_risk_row() {
     return
   fi
 
-  if awk -F'|' -v id="$risk_id" -v owner="$expected_owner" '
+  if /usr/bin/awk -F'|' -v id="$risk_id" -v owner="$expected_owner" '
     function trim(value) {
       gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
       return value
