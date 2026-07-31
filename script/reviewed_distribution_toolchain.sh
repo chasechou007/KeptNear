@@ -328,11 +328,9 @@ keptnear_resolve_active_rust_toolchain() {
   if [[ \
     "$cargo_home_candidate" != /* || \
     ! -d "$cargo_home_candidate" || \
-    -L "$cargo_home_candidate" || \
-    ! -d "$cargo_home_candidate/registry/cache" || \
-    ! -d "$cargo_home_candidate/registry/index" \
+    -L "$cargo_home_candidate" \
   ]]; then
-    keptnear_toolchain_fail "could not resolve an absolute Cargo registry cache"
+    keptnear_toolchain_fail "could not resolve an absolute Cargo home"
     return 1
   fi
   KEPTNEAR_ACTIVE_CARGO_CACHE_HOME="$(cd "$cargo_home_candidate" && /bin/pwd -P)"

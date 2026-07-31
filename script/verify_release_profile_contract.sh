@@ -137,6 +137,8 @@ grep -F '"CFLAGS=$KEPTNEAR_ACTIVE_CFLAGS"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F '"PATH=$KEPTNEAR_ISOLATED_BIN:$KEPTNEAR_SYSTEM_PATH"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F '"HOME=$KEPTNEAR_ISOLATED_HOME"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F '"CARGO_HOME=$KEPTNEAR_ISOLATED_CARGO_HOME"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'cargo_home_candidate="$KEPTNEAR_CURRENT_USER_HOME/.cargo"' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
+grep -F 'reviewed Cargo registry $cargo_registry_entry is unavailable' "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F "isolated_cargo_config=\"\$KEPTNEAR_ISOLATED_CARGO_HOME/config.toml\"" "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F "'offline = true'" "$DISTRIBUTION_TOOLCHAIN" >/dev/null
 grep -F "'git-fetch-with-cli = false'" "$DISTRIBUTION_TOOLCHAIN" >/dev/null
