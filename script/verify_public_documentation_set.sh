@@ -76,6 +76,8 @@ README_PATH="$ROOT_DIR/README.md"
 README_ZH_PATH="$ROOT_DIR/README.zh-CN.md"
 PRODUCT_OVERVIEW_PATH="$ROOT_DIR/docs/product-overview.md"
 PRODUCT_OVERVIEW_ZH_PATH="$ROOT_DIR/docs/product-overview.zh-CN.md"
+VAULT_SCREENSHOT_PATH="$ROOT_DIR/assets/screenshots/keptnear-vault-overview.png"
+APPS_TOOLS_SCREENSHOT_PATH="$ROOT_DIR/assets/screenshots/keptnear-apps-tools.png"
 
 for path in \
   "$BUILD_PATH" \
@@ -90,7 +92,9 @@ for path in \
   "$README_PATH" \
   "$README_ZH_PATH" \
   "$PRODUCT_OVERVIEW_PATH" \
-  "$PRODUCT_OVERVIEW_ZH_PATH"; do
+  "$PRODUCT_OVERVIEW_ZH_PATH" \
+  "$VAULT_SCREENSHOT_PATH" \
+  "$APPS_TOOLS_SCREENSHOT_PATH"; do
   require_file "$path"
 done
 
@@ -130,9 +134,13 @@ require_literal "$RELEASE_PATH" "docs/sqlcipher-distribution-evidence.json"
 require_literal "$README_PATH" "docs/sqlcipher-distribution-evidence.json"
 require_literal "$README_PATH" "README.zh-CN.md"
 require_literal "$README_PATH" "docs/product-overview.md"
+require_literal "$README_PATH" "assets/screenshots/keptnear-vault-overview.png"
+require_literal "$README_PATH" "assets/screenshots/keptnear-apps-tools.png"
 require_literal "$README_ZH_PATH" "README.md"
 require_literal "$README_ZH_PATH" "docs/product-overview.zh-CN.md"
 require_literal "$README_ZH_PATH" "AR-002"
+require_literal "$README_ZH_PATH" "assets/screenshots/keptnear-vault-overview.png"
+require_literal "$README_ZH_PATH" "assets/screenshots/keptnear-apps-tools.png"
 require_literal "$PRODUCT_OVERVIEW_PATH" "product-overview.zh-CN.md"
 require_literal "$PRODUCT_OVERVIEW_ZH_PATH" "product-overview.md"
 
