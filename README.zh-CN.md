@@ -26,6 +26,11 @@ Syncthing 或 WebDAV 等不受信任的文件服务传输加密文件，都由�
 CLI 工具和 MCP Host：它们应当只能使用经过选择和授权的凭据，而不是得到整个
 密码库，也不需要把原始密钥粘贴进普通的 Agent 对话或工具输出。
 
+<p align="center">
+  <img src="assets/screenshots/keptnear-vault-overview.png" alt="KeptNear 密码库工作区，使用合成登录数据且敏感字段保持隐藏" width="1100">
+</p>
+<p align="center"><sub>使用合成测试数据的原生 macOS 密码库工作区。</sub></p>
+
 ## 为什么开发 KeptNear
 
 - **密码库始终属于你。** KeptNear 不要求注册账号，也不运营托管密码库或云同步服务。
@@ -75,6 +80,11 @@ CLI 工具和 MCP Host：它们应当只能使用经过选择和授权的凭据�
 可移动密码库只保存加密凭据数据。设备信任、应用配对、授权、审批和审计状态
 保留在当前设备上，不会跟随密码库同步。MCP 和 CLI 提供经过授权的操作，
 而不是通用的原始密钥读取命令。
+
+<p align="center">
+  <img src="assets/screenshots/keptnear-apps-tools.png" alt="KeptNear 应用与工具控制面，当前没有已配对的使用方" width="1100">
+</p>
+<p align="center"><sub>源码构建中的“应用与工具”控制面。面向最终用户的机器访问仍是开发者预览。</sub></p>
 
 完整产品模型请阅读[产品说明](docs/product-overview.zh-CN.md)，实现边界请阅读
 [架构文档](docs/architecture.md)。

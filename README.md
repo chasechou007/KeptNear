@@ -29,6 +29,11 @@ for local applications, CLI tools, and MCP hosts that need to use a selected
 credential without receiving the rest of the vault or placing raw secrets in
 ordinary Agent conversations and tool output.
 
+<p align="center">
+  <img src="assets/screenshots/keptnear-vault-overview.png" alt="KeptNear vault workspace showing synthetic login data with secrets hidden" width="1100">
+</p>
+<p align="center"><sub>Native macOS vault workspace using synthetic fixture data.</sub></p>
+
 ## Why KeptNear
 
 - **Your vault stays yours.** KeptNear requires no account and operates no
@@ -84,6 +89,11 @@ The portable vault contains encrypted credential data. Device trust,
 application pairing, grants, approvals, and audit state stay device-local and
 are not copied with the vault. MCP and CLI expose approved operations rather
 than a generic raw-secret retrieval command.
+
+<p align="center">
+  <img src="assets/screenshots/keptnear-apps-tools.png" alt="KeptNear Apps and Tools control surface with no paired consumers" width="1100">
+</p>
+<p align="center"><sub>Source-build Apps &amp; Tools control surface. End-user machine access remains a developer preview.</sub></p>
 
 Read the [Product Overview](docs/product-overview.md) for the complete product
 model and [Architecture](docs/architecture.md) for implementation boundaries.
