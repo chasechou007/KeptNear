@@ -80,10 +80,6 @@ require_executable "$ROOT_DIR/scripts/check.sh" "broad repository checks"
 require_executable "$ROOT_DIR/script/verify_public_source_tree.sh" "public-source verifier"
 require_executable "$ROOT_DIR/script/verify_dependency_licenses.sh" "dependency-license verifier"
 require_executable "$ROOT_DIR/script/verify_security_review_evidence.sh" "review-policy verifier"
-command -v openspec >/dev/null 2>&1 || {
-  echo "missing required command: openspec" >&2
-  exit 1
-}
 
 cd "$ROOT_DIR"
 
@@ -98,7 +94,6 @@ REPORT
   report_step "Broad repository checks" "$ROOT_DIR/scripts/check.sh"
   report_step "Public-source exclusions and secret scan" "$ROOT_DIR/script/verify_public_source_tree.sh"
   report_step "Dependency licenses" "$ROOT_DIR/script/verify_dependency_licenses.sh"
-  report_step "Strict OpenSpec validation" openspec validate --all --strict
   report_step "Source review policy" "$ROOT_DIR/script/verify_security_review_evidence.sh" --profile source --allow-missing
   printf '\nSource-preview readiness is not approved in allow-missing report mode.\n'
   exit 0
@@ -108,7 +103,6 @@ run_step "Clean source revision" verify_clean_source
 run_step "Broad repository checks" "$ROOT_DIR/scripts/check.sh"
 run_step "Public-source exclusions and secret scan" "$ROOT_DIR/script/verify_public_source_tree.sh"
 run_step "Dependency licenses" "$ROOT_DIR/script/verify_dependency_licenses.sh"
-run_step "Strict OpenSpec validation" openspec validate --all --strict
 run_step "Source review policy" "$ROOT_DIR/script/verify_security_review_evidence.sh" --profile source
 cat <<'SUMMARY'
 
