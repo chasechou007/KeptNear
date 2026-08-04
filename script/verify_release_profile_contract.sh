@@ -81,6 +81,10 @@ DISTRIBUTION_CARGO_HELP="$("$DISTRIBUTION_CARGO_RUNNER" --help)"
 
 require_text "$SOURCE_HELP" "Profile: source-preview." "source profile"
 require_text "$SOURCE_HELP" "does not require Apple signing or external security review" "source profile"
+if /usr/bin/grep -E 'openspec|\.echopath|\.codex|AGENTS\.md|CONTEXT\.md' "$SOURCE_PROFILE" >/dev/null; then
+  echo "release profile contract violation: source profile depends on private parent context" >&2
+  exit 1
+fi
 require_text "$UNSIGNED_HELP" "Profile: unsigned-experimental." "unsigned profile"
 require_text "$UNSIGNED_HELP" "not require Developer ID signing, notarization, or external security review" "unsigned profile"
 require_text "$SIGNED_HELP" "signed-experimental profile only" "signed profile"

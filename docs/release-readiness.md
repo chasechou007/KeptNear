@@ -23,8 +23,10 @@ production-use recommendation at `Not recommended`.
 
 The source profile verifies a clean revision, broad Rust/Swift checks,
 public-tree exclusions and repository secret patterns, dependency licenses,
-strict OpenSpec state, and the source review policy without building an
-artifact. The unsigned profile adds AR-002, local macOS and vault-format gates,
+and the source review policy without building an artifact. Private planning and
+OpenSpec validation remain owned by the maintainer workspace and are not public
+source-profile dependencies. The unsigned profile adds AR-002, local macOS and
+vault-format gates,
 Launch Services verification, clean-source packaging in
 `unsigned-experimental` mode, checksum and protocol-manifest verification, and
 explicit unsigned installation warnings. The signed profile alone performs

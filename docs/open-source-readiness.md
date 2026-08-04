@@ -97,7 +97,8 @@ block source publication or an explicitly unsigned experimental DMG.
 - `.echopath/`
 - `AGENTS.md`
 - `CONTEXT.md`
-- `openspec/`, which is managed as a separate local Git repository
+- `openspec/`, which lives in the maintainer's private parent workspace and is
+  absent from the public repository
 - real `.pswvault` directories
 - real password-manager export files
 - signing certificates, notary credentials, private keys, and local `.env`
