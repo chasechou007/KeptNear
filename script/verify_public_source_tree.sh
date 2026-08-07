@@ -23,7 +23,7 @@ while IFS= read -r path; do
   [[ -n "$path" ]] || continue
 
   case "$path" in
-    .codex/*|.echopath/*|openspec/*|AGENTS.md|CONTEXT.md|target/*|.build/*|apps/macos/.build/*|dist/*)
+    .codex/*|.echopath/*|opendomain/*|openspec/*|AGENTS.md|CONTEXT.md|target/*|.build/*|apps/macos/.build/*|dist/*)
       report_violation "forbidden local path is publishable: $path"
       ;;
   esac

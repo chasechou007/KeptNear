@@ -76,7 +76,7 @@ check_sensitive_path() {
   basename="${lower_path##*/}"
 
   case "$lower_path" in
-    .codex/*|.echopath/*|openspec/*|agents.md|context.md)
+    .codex/*|.echopath/*|opendomain/*|openspec/*|agents.md|context.md)
       report_violation "$scope contains private development context: $path"
       ;;
   esac
