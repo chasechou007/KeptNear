@@ -16,6 +16,7 @@ cd "$ROOT_DIR"
 "$ROOT_DIR/script/verify_public_capability_claims.sh"
 "$ROOT_DIR/script/verify_public_documentation_set.sh"
 "$ROOT_DIR/script/verify_cross_adapter_secret_markers.sh"
+"$ROOT_DIR/script/verify_macos_service_management_probe.sh"
 cargo fmt --all --check
 cargo test --workspace
 cargo build -p psw-ffi

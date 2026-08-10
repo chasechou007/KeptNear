@@ -65,6 +65,7 @@ extract_sha256() {
 
 BUILD_PATH="$ROOT_DIR/docs/build.md"
 INSTALL_PATH="$ROOT_DIR/docs/macos-alpha-packaging.md"
+SERVICE_ACTIVATION_PATH="$ROOT_DIR/docs/macos-service-activation-feasibility.md"
 RECOVERY_PATH="$ROOT_DIR/docs/backup.md"
 PRIVACY_PATH="$ROOT_DIR/docs/diagnostics.md"
 LOGGING_PATH="$ROOT_DIR/docs/logging-policy.md"
@@ -82,6 +83,7 @@ APPS_TOOLS_SCREENSHOT_PATH="$ROOT_DIR/assets/screenshots/keptnear-apps-tools.png
 for path in \
   "$BUILD_PATH" \
   "$INSTALL_PATH" \
+  "$SERVICE_ACTIVATION_PATH" \
   "$RECOVERY_PATH" \
   "$PRIVACY_PATH" \
   "$LOGGING_PATH" \
@@ -107,6 +109,11 @@ require_literal "$INSTALL_PATH" "shasum -a 256 -c"
 require_literal "$INSTALL_PATH" "disable Gatekeeper globally"
 require_literal "$INSTALL_PATH" "does not activate the bundled Broker"
 require_literal "$INSTALL_PATH" "not suitable for production secrets"
+require_literal "$SERVICE_ACTIVATION_PATH" 'code 3 (`kSMErrorInvalidSignature`)'
+require_literal "$SERVICE_ACTIVATION_PATH" "Eligible for local development evidence only"
+require_literal "$SERVICE_ACTIVATION_PATH" "current DMG therefore remains Bundled But Not Activated"
+require_literal "$README_PATH" "docs/macos-service-activation-feasibility.md"
+require_literal "$README_ZH_PATH" "docs/macos-service-activation-feasibility.md"
 
 require_literal "$RECOVERY_PATH" 'locked-vault'
 require_literal "$RECOVERY_PATH" 'valid recovery kit'

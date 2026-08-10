@@ -226,6 +226,7 @@ script/, scripts/       构建、打包和验证门禁
 
 - [构建和验证](docs/build.md)
 - [macOS Alpha 打包](docs/macos-alpha-packaging.md)
+- [macOS 服务激活可行性](docs/macos-service-activation-feasibility.md)
 - [加密备份与恢复](docs/backup.md)
 - [本地文件同步](docs/sync.md)
 - [导入导出格式](docs/import-formats.md)
