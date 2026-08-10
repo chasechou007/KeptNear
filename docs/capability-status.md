@@ -54,6 +54,12 @@ bundle. It does not activate a long-running Broker service, merge the App's
 in-process human-control runtime with the external Broker, or complete the
 pairing, approval, operation, restart, upgrade, and uninstall lifecycle.
 
+A dedicated ServiceManagement feasibility probe proves that an ad-hoc signed
+local test bundle can register and run a per-user LaunchAgent on the recorded
+test machine. A genuinely unsigned bundle is rejected with
+`kSMErrorInvalidSignature`. This evidence does not change the shipped state:
+the current product bundle contains no LaunchAgent and activates no Broker.
+
 ## Not Shipped
 
 - The published Apple Silicon DMG is unsigned, not notarized, externally

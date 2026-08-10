@@ -246,6 +246,7 @@ Use and operations:
 
 - [Build and Verification](docs/build.md)
 - [macOS Alpha Packaging](docs/macos-alpha-packaging.md)
+- [macOS Service Activation Feasibility](docs/macos-service-activation-feasibility.md)
 - [Encrypted Backup and Recovery](docs/backup.md)
 - [Local File Sync](docs/sync.md)
 - [Import and Export Formats](docs/import-formats.md)
