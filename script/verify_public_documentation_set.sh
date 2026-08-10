@@ -66,6 +66,7 @@ extract_sha256() {
 BUILD_PATH="$ROOT_DIR/docs/build.md"
 INSTALL_PATH="$ROOT_DIR/docs/macos-alpha-packaging.md"
 SERVICE_ACTIVATION_PATH="$ROOT_DIR/docs/macos-service-activation-feasibility.md"
+HUMAN_CONTROL_PROTOCOL_PATH="$ROOT_DIR/docs/human-control-protocol.md"
 RECOVERY_PATH="$ROOT_DIR/docs/backup.md"
 PRIVACY_PATH="$ROOT_DIR/docs/diagnostics.md"
 LOGGING_PATH="$ROOT_DIR/docs/logging-policy.md"
@@ -84,6 +85,7 @@ for path in \
   "$BUILD_PATH" \
   "$INSTALL_PATH" \
   "$SERVICE_ACTIVATION_PATH" \
+  "$HUMAN_CONTROL_PROTOCOL_PATH" \
   "$RECOVERY_PATH" \
   "$PRIVACY_PATH" \
   "$LOGGING_PATH" \
@@ -114,6 +116,12 @@ require_literal "$SERVICE_ACTIVATION_PATH" "Eligible for local development evide
 require_literal "$SERVICE_ACTIVATION_PATH" "current DMG therefore remains Bundled But Not Activated"
 require_literal "$README_PATH" "docs/macos-service-activation-feasibility.md"
 require_literal "$README_ZH_PATH" "docs/macos-service-activation-feasibility.md"
+require_literal "$HUMAN_CONTROL_PROTOCOL_PATH" 'Protocol identity: `keptnear.human-control`'
+require_literal "$HUMAN_CONTROL_PROTOCOL_PATH" 'Schema identity: `keptnear.human-control.schema.v1`'
+require_literal "$HUMAN_CONTROL_PROTOCOL_PATH" 'Maximum frame: 1 MiB.'
+require_literal "$HUMAN_CONTROL_PROTOCOL_PATH" '`secret.get`'
+require_literal "$HUMAN_CONTROL_PROTOCOL_PATH" 'No minor version may add a secret-returning result'
+require_literal "$ROOT_DIR/docs/architecture.md" 'See `docs/human-control-protocol.md`.'
 
 require_literal "$RECOVERY_PATH" 'locked-vault'
 require_literal "$RECOVERY_PATH" 'valid recovery kit'

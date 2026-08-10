@@ -87,6 +87,16 @@ Access Rule or Use Grant. Authentication then requires a separate,
 connection-bound Ed25519 challenge and proof before the connection stores its
 Consumer identity.
 
+The separate App-to-Broker human-control protocol is frozen in source as
+`keptnear.human-control` version 1.0. Its 29-operation catalog covers controller
+session negotiation, readiness, pause, machine Vault lock state, pending human
+decisions, authorization inventory, Usage Profiles, revocation, audit, repair,
+and shutdown. It contains none of the six Consumer machine capabilities. Only
+the Vault unlock request can carry a bounded unlock credential, while every
+result is secret-free. The external dispatcher, controller Keychain authority,
+and App client are not implemented by this contract freeze, so installation
+still does not activate the service. See `docs/human-control-protocol.md`.
+
 `keptnear-client` holds the shared first-party Ed25519 identity, Data Protection
 Keychain, protocol negotiation, pairing, connection authentication, and framed
 request client used by MCP and CLI. MCP and CLI use distinct stable Keychain
