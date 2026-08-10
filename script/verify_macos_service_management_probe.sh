@@ -271,6 +271,57 @@ if [[ "$RUN_PROBE" != "1" ]]; then
   exit 0
 fi
 
+register_service() {
+  local phase="$1"
+  local command_status=0
+  local output=""
+  local status=""
+  local status_output=""
+  local attempt
+
+  # Registration can mutate Login Items state before the controller reports an
+  # error. Conservatively arm cleanup before invoking ServiceManagement.
+  REGISTERED=1
+  output="$($CONTROLLER register)" || command_status=$?
+  printf '%s\n' "$output"
+  if ! status="$(/usr/bin/plutil -extract status raw -o - - <<<"$output")"; then
+    echo "probe registration returned malformed status output" >&2
+    return 1
+  fi
+
+  if [[ "$status" == "enabled" ]]; then
+    return 0
+  fi
+  if [[ "$status" == "requires-approval" ]]; then
+    if [[ "$APPROVAL_TIMEOUT" == "0" ]]; then
+      printf '{"mode":"%s","phase":"%s","registration":"requires-approval","status":"%s"}\n' \
+        "$SIGNING_MODE" "$phase" "$status"
+      return 3
+    fi
+
+    for ((attempt = 0; attempt < APPROVAL_TIMEOUT; attempt += 1)); do
+      status_output="$($CONTROLLER status)"
+      status="$(/usr/bin/plutil -extract status raw -o - - <<<"$status_output")"
+      if [[ "$status" == "enabled" ]]; then
+        printf '%s\n' "$status_output"
+        return 0
+      fi
+      /bin/sleep 1
+    done
+    printf '{"mode":"%s","phase":"%s","registration":"approval-timeout","status":"%s"}\n' \
+      "$SIGNING_MODE" "$phase" "$status"
+    return 3
+  fi
+  if [[ "$command_status" -ne 0 ]]; then
+    printf '{"mode":"%s","phase":"%s","registration":"rejected","status":"%s"}\n' \
+      "$SIGNING_MODE" "$phase" "$status"
+    return 1
+  fi
+
+  echo "probe registration returned an unexpected state" >&2
+  return 1
+}
+
 if /bin/launchctl print "gui/$(/usr/bin/id -u)/$SERVICE_LABEL" >/dev/null 2>&1; then
   echo "probe service job already exists; refusing to alter existing Login Items state" >&2
   exit 1
@@ -284,46 +335,7 @@ if [[ "$INITIAL_RESULT" != "not-registered" && "$INITIAL_RESULT" != "not-found" 
   exit 1
 fi
 
-REGISTER_OUTPUT=""
-REGISTER_STATUS=0
-REGISTER_OUTPUT="$($CONTROLLER register)" || REGISTER_STATUS=$?
-printf '%s\n' "$REGISTER_OUTPUT"
-
-REGISTER_RESULT="$(/usr/bin/plutil -extract status raw -o - - <<<"$REGISTER_OUTPUT")"
-if [[ "$REGISTER_RESULT" == "requires-approval" ]]; then
-  REGISTERED=1
-  if [[ "$APPROVAL_TIMEOUT" == "0" ]]; then
-    printf '{"mode":"%s","registration":"requires-approval","status":"%s"}\n' \
-      "$SIGNING_MODE" "$REGISTER_RESULT"
-    exit 3
-  fi
-
-  APPROVAL_RESULT="$REGISTER_RESULT"
-  for ((attempt = 0; attempt < APPROVAL_TIMEOUT; attempt += 1)); do
-    APPROVAL_OUTPUT="$($CONTROLLER status)"
-    APPROVAL_RESULT="$(/usr/bin/plutil -extract status raw -o - - <<<"$APPROVAL_OUTPUT")"
-    if [[ "$APPROVAL_RESULT" == "enabled" ]]; then
-      printf '%s\n' "$APPROVAL_OUTPUT"
-      break
-    fi
-    /bin/sleep 1
-  done
-  if [[ "$APPROVAL_RESULT" != "enabled" ]]; then
-    printf '{"mode":"%s","registration":"approval-timeout","status":"%s"}\n' \
-      "$SIGNING_MODE" "$APPROVAL_RESULT"
-    exit 3
-  fi
-elif [[ "$REGISTER_STATUS" -ne 0 ]]; then
-  printf '{"mode":"%s","registration":"rejected","status":"%s"}\n' \
-    "$SIGNING_MODE" "$REGISTER_RESULT"
-  exit 1
-else
-  REGISTERED=1
-fi
-if [[ "$REGISTER_RESULT" != "enabled" && "${APPROVAL_RESULT:-}" != "enabled" ]]; then
-  echo "probe registration returned an unexpected state" >&2
-  exit 1
-fi
+register_service "initial"
 
 wait_for_marker() {
   local expected_generation="$1"
@@ -389,13 +401,7 @@ if ! wait_for_marker "1"; then
     exit 1
   fi
 
-  MOVE_REGISTER_OUTPUT="$($CONTROLLER register)"
-  printf '%s\n' "$MOVE_REGISTER_OUTPUT"
-  REGISTERED=1
-  if [[ "$(/usr/bin/plutil -extract status raw -o - - <<<"$MOVE_REGISTER_OUTPUT")" != "enabled" ]]; then
-    echo "moved probe service did not re-register" >&2
-    exit 1
-  fi
+  register_service "move-repair"
   if ! wait_for_marker "1"; then
     echo "moved probe agent did not start after re-registration" >&2
     exit 1
@@ -438,13 +444,7 @@ fi
 write_service_plist "2"
 sign_bundle
 /bin/rm -f "$MARKER_PATH"
-REPLACEMENT_OUTPUT="$($CONTROLLER register)"
-printf '%s\n' "$REPLACEMENT_OUTPUT"
-REGISTERED=1
-if [[ "$(/usr/bin/plutil -extract status raw -o - - <<<"$REPLACEMENT_OUTPUT")" != "enabled" ]]; then
-  echo "replacement probe did not become enabled" >&2
-  exit 1
-fi
+register_service "replacement"
 if ! wait_for_marker "2"; then
   echo "replacement probe agent did not publish generation 2" >&2
   exit 1
