@@ -1,0 +1,284 @@
+# Human-Control Protocol
+
+This document freezes the source-level version 1 contract for the authenticated
+App-to-Broker management channel. It does not mean the installed Broker service
+or end-user machine access is active. The current App still uses its in-process
+Apps & Tools bridge until the external controller client and dispatcher are
+implemented and accepted.
+
+The executable contract is defined in
+`crates/psw-broker/src/human_control_protocol.rs`.
+
+## Boundary
+
+Protocol identity: `keptnear.human-control`
+
+Schema identity: `keptnear.human-control.schema.v1`
+
+Current version: `1.0`
+
+The human controller is a separate role. It is not a Consumer and receives no
+Consumer capability through this channel. In particular, the operation catalog
+does not contain `credential.search`, `access.request`, `grant.status`,
+`http.request`, `process.run`, `secret.get`, or whole-Vault export.
+
+Only `vault.unlock` accepts a Vault unlock credential. Controller challenge and
+proof operations accept bounded authentication material. Every successful
+result is secret-free metadata or a fixed control receipt. No result contains a
+password, token, Secret Field value, controller private key, Consumer key,
+unlock credential, request body, command argument, full local path, or arbitrary
+diagnostic text.
+
+## Framing And Envelopes
+
+The transport uses the existing Broker framing shape: one unsigned 32-bit
+big-endian payload length followed by exactly that many UTF-8 JSON bytes.
+
+- Maximum frame: 1 MiB.
+- Maximum `hello` request or response: 16 KiB.
+- Maximum controller challenge, proof, or lease message: 64 KiB.
+- Maximum ordinary authenticated request: 64 KiB.
+- Maximum `vault.unlock` request: 128 KiB.
+- Maximum decoded unlock credential: 64 KiB.
+- Maximum secret-free response: 1 MiB.
+- Maximum collection entries: 256.
+- Maximum audit events per page or export: 256.
+
+Requests use this closed envelope:
+
+```json
+{
+  "protocol": "keptnear.human-control",
+  "version": { "major": 1, "minor": 0 },
+  "requestId": "<canonical control request id>",
+  "operation": "readiness.get",
+  "body": {}
+}
+```
+
+Successful responses use the selected version and matching request identity:
+
+```json
+{
+  "protocol": "keptnear.human-control",
+  "version": { "major": 1, "minor": 0 },
+  "requestId": "<matching control request id>",
+  "result": {}
+}
+```
+
+Failures replace `result` with a closed error object:
+
+```json
+{
+  "protocol": "keptnear.human-control",
+  "version": { "major": 1, "minor": 0 },
+  "requestId": "<matching control request id>",
+  "error": {
+    "code": "authentication-failed",
+    "retryable": false,
+    "requiredAction": "authenticate-controller"
+  }
+}
+```
+
+Unknown or duplicate fields at any depth, duplicate object keys, invalid UTF-8,
+unknown operations, incompatible schema identities, non-canonical identities,
+invalid union variants, and messages beyond the applicable bound are rejected.
+Errors never echo submitted bytes or include a free-form `message`, `detail`,
+path, or underlying operating-system error.
+
+## Negotiation
+
+`hello` is the only operation allowed before negotiation. Its body is:
+
+```json
+{
+  "role": "human-controller",
+  "protocolVersions": [
+    { "major": 1, "minimumMinor": 0, "maximumMinor": 0 }
+  ],
+  "schemaIds": ["keptnear.human-control.schema.v1"]
+}
+```
+
+At most eight ranges are accepted, and each major version may appear once. The
+Broker selects the highest mutually supported minor version within its current
+major. No shared major produces `protocol-incompatible`. Operations whose
+`introducedMinor` exceeds the selected minor are unavailable. Version 1.0
+negotiates the complete catalog below rather than a Consumer capability set.
+
+A successful result contains only the selected version, schema identity,
+ephemeral Broker instance identity, global limits, and ordered operation names.
+It does not expose protected device state. After negotiation, only
+`controller.challenge` and `controller.authenticate` are accepted until the
+dedicated controller proof succeeds. Every later operation requires a live
+authenticated controller session and bounded lease.
+
+## Request Schemas
+
+Every body is a closed object. Optional fields are explicitly noted; all other
+fields are required. Stable identity fields are typed, canonical identifiers
+rather than labels or paths.
+
+| Schema | Fields |
+| --- | --- |
+| `Hello` | `role`, `protocolVersions`, `schemaIds` |
+| `ControllerChallenge` | `controllerId`, `clientNonce` |
+| `ControllerProof` | `controllerId`, `controllerSessionId`, `brokerInstanceId`, `clientNonce`, `brokerNonce`, `deadline`, `proof` |
+| `ControllerLease` | `controllerSessionId`, `brokerInstanceId` |
+| `Empty` | no fields |
+| `PauseUpdate` | `paused` |
+| `VaultUnlock` | `vaultId`, exactly one `credential` union |
+| `VaultIdentity` | `vaultId` |
+| `PendingDecision` | `pendingRequestId`, fixed `decision` |
+| `PairingApproval` | `pendingRequestId`, bounded `label` |
+| `UnlockApproval` | `pendingRequestId`, `vaultId` |
+| `CredentialReview` | `pendingRequestId` |
+| `CredentialSelection` | `pendingRequestId`, `credentialId`, `secretFieldId` |
+| `CredentialAuthorization` | selection fields plus `capability`, `confirmationPolicy`, `ruleLifetime` |
+| `AuthorizationSnapshot` | `vaultId` |
+| `ConsumerIdentity` | `consumerId` |
+| `UsageProfileCatalog` | `consumerId`, optional bounded `executableName` |
+| `UsageProfileCreate` | `consumerId`, `templateId`, bounded `label`, typed `technicalField` |
+| `UsageProfileRemove` | `consumerId`, `usageProfileId` |
+| `FieldAccessRevoke` | `consumerId`, `vaultId`, `credentialId`, `secretFieldId` |
+| `GrantRevoke` | `consumerId`, `useGrantId` |
+| `ConsumerRevoke` | `consumerId`, fixed `scope` |
+| `AuditPage` | typed `filter`, optional `cursor`, bounded `limit` |
+| `AuditClear` | explicit bounded `selection`, `confirmationId` |
+| `AuditExport` | typed `filter`, bounded `limit` |
+| `RepairPrepare` | `expectedComponent`, `expectedProtocol` |
+| `Shutdown` | fixed `reason` |
+
+The `credential` union accepts either a Base64 master-password byte string or a
+fixed-length Base64 local-unlock value. It accepts no file path, Keychain query,
+environment variable, command argument, or credential reference. The decoded
+value is bounded before secret-handling allocation and must be zeroized after
+the unlock attempt. The exact controller algorithm, transcript, nonce, proof,
+deadline, Keychain identity, and replay bounds are a separate cryptographic
+contract; these fields reserve their closed wire positions without choosing
+those values here.
+
+## Operation Catalog
+
+All operations were introduced in minor version 0.
+
+### Negotiation And Controller Session
+
+| Operation | Authentication | Request | Response |
+| --- | --- | --- | --- |
+| `hello` | none | `Hello` | `Hello` |
+| `controller.challenge` | negotiated | `ControllerChallenge` | `ControllerChallenge` |
+| `controller.authenticate` | negotiated | `ControllerProof` | `ControllerAuthenticated` |
+| `controller.lease.renew` | authenticated | `ControllerLease` | `ControllerLease` |
+| `readiness.get` | authenticated | `Empty` | `Readiness` |
+
+`Readiness` contains bounded component identity, negotiated protocol and schema,
+protected-state category, Machine Access Pause, and machine Vault lock state. It
+contains no full path, key identity, credential metadata, or service log.
+
+### Pause And Vault State
+
+| Operation | Request | Response |
+| --- | --- | --- |
+| `machine-access.pause.set` | `PauseUpdate` | `PauseState` |
+| `vault.unlock` | `VaultUnlock` | `VaultState` |
+| `vault.lock` | `VaultIdentity` | `VaultState` |
+
+Pause does not lock the human App session, and service repair does not resume a
+paused Broker. `VaultState` returns only Vault identity, locked or unlocked
+state, and an optional machine unlock-session identity.
+
+### Pending Human Decisions
+
+| Operation | Request | Response |
+| --- | --- | --- |
+| `pending.list` | `Empty` | `PendingQueue` |
+| `pending.deny` | `PendingDecision` | `DecisionReceipt` |
+| `pairing.approve` | `PairingApproval` | `DecisionReceipt` |
+| `unlock.approve` | `UnlockApproval` | `DecisionReceipt` |
+| `credential.review` | `CredentialReview` | `CredentialReview` |
+| `credential.allow-once` | `CredentialSelection` | `DecisionReceipt` |
+| `credential.authorize` | `CredentialAuthorization` | `DecisionReceipt` |
+
+Pending results may contain bounded labels, path-free process identity evidence,
+stable identities, capability names, Secret Field kinds, human-review titles,
+and expiry metadata. They never contain a Secret Field value or submitted
+unlock credential. Pairing approval establishes identity only and grants no
+credential access.
+
+### Authorization And Usage Profiles
+
+| Operation | Request | Response |
+| --- | --- | --- |
+| `authorization.snapshot` | `AuthorizationSnapshot` | `AuthorizationSnapshot` |
+| `consumer.detail` | `ConsumerIdentity` | `ConsumerDetail` |
+| `usage-profile.catalog` | `UsageProfileCatalog` | `UsageProfileCatalog` |
+| `usage-profile.create` | `UsageProfileCreate` | `UsageProfile` |
+| `usage-profile.remove` | `UsageProfileRemove` | `RemovalReceipt` |
+| `access.field.revoke` | `FieldAccessRevoke` | `RevocationSummary` |
+| `grant.revoke` | `GrantRevoke` | `RevocationSummary` |
+| `consumer.revoke` | `ConsumerRevoke` | `RevocationSummary` |
+| `access.all.revoke` | `Empty` | `RevocationSummary` |
+
+Authorization projections contain stable identities, field kinds, capability
+versions, confirmation policy, rule lifetime, profile placement metadata,
+counts, and fixed state. A Usage Profile remains declarative placement and
+grants no access. Revocation prevents future KeptNear delivery and cannot erase
+material already received by a compatible child or remote service.
+
+### Audit, Repair, And Shutdown
+
+| Operation | Request | Response |
+| --- | --- | --- |
+| `audit.list` | `AuditPage` | `AuditPage` |
+| `audit.clear` | `AuditClear` | `AuditClearSummary` |
+| `audit.export` | `AuditExport` | `AuditExport` |
+| `repair.prepare` | `RepairPrepare` | `RepairReadiness` |
+| `shutdown` | `Shutdown` | `ShutdownReceipt` |
+
+Audit results use only existing fixed audit fields and stable identities.
+`repair.prepare` and `shutdown` first lock machine Vault sessions and invalidate
+live Grants; neither operation clears protected device state, resumes pause,
+changes portable Vaults, removes host configuration, or edits Agent policy.
+
+## Fixed Failures
+
+The only version 1 failure codes are:
+
+```text
+protocol-incompatible       malformed-frame
+oversized-frame             negotiation-required
+authentication-required     authentication-failed
+replay-rejected             controller-unavailable
+unsupported-operation       invalid-request
+vault-locked                unlock-failed
+request-unavailable         conflict
+protected-state-unavailable repair-required
+rate-limited                operation-failed
+```
+
+Optional `requiredAction` values are limited to:
+
+```text
+update-component       send-hello
+authenticate-controller reauthenticate
+unlock-vault           review-request
+retry-later            repair-service
+disable-machine-access
+```
+
+The Broker maps internal failures to these values. A wrong controller proof,
+wrong unlock credential, missing pending request, revoked identity, corrupt
+state, socket problem, database error, or operating-system failure cannot add
+free-form details to the wire response.
+
+## Versioning Rule
+
+Changing a field type, removing or renaming an operation or field, weakening a
+bound, changing result secrecy, or reinterpreting an existing fixed value is a
+major-version change. A later minor may add an operation or optional response
+metadata only when version negotiation keeps it unavailable to older clients.
+No minor version may add a secret-returning result or turn the human controller
+into a Consumer.

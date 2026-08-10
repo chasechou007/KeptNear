@@ -19,6 +19,7 @@ mod dispatcher;
 mod grant_invalidation;
 mod http_request;
 mod human_control;
+mod human_control_protocol;
 #[cfg(all(test, unix))]
 mod integration_tests;
 mod local_data;
@@ -115,6 +116,21 @@ pub use human_control::{
     BrokerHumanControlError, BrokerPendingRequest, BrokerPendingRequestId,
     BrokerPendingRequestKind, BrokerPendingRequestQueue, BrokerUsageProfileSummary,
     MAX_CONSUMER_DETAIL_AUDIT_EVENTS,
+};
+pub use human_control_protocol::{
+    HumanControlAuthenticationRequirement, HumanControlFailureCode, HumanControlOperation,
+    HumanControlOperationContract, HumanControlProtocolFailure,
+    HumanControlProtocolValidationError, HumanControlProtocolVersion,
+    HumanControlProtocolVersionRange, HumanControlRequestSchema, HumanControlRequestSecretClass,
+    HumanControlRequiredAction, HumanControlResponseSchema, HumanControlResultSecrecy,
+    HumanControlVersionOffer, HUMAN_CONTROL_FAILURE_CODES, HUMAN_CONTROL_OPERATION_CONTRACTS,
+    HUMAN_CONTROL_PROTOCOL_MAJOR, HUMAN_CONTROL_PROTOCOL_MINOR, HUMAN_CONTROL_PROTOCOL_NAME,
+    HUMAN_CONTROL_REQUIRED_ACTIONS, HUMAN_CONTROL_SCHEMA_ID, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+    MAX_HUMAN_CONTROL_AUTH_LENGTH, MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
+    MAX_HUMAN_CONTROL_FRAME_LENGTH, MAX_HUMAN_CONTROL_HELLO_LENGTH,
+    MAX_HUMAN_CONTROL_REQUEST_LENGTH, MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
+    MAX_HUMAN_CONTROL_UNLOCK_CREDENTIAL_BYTES, MAX_HUMAN_CONTROL_UNLOCK_LENGTH,
+    MAX_HUMAN_CONTROL_VERSION_RANGES,
 };
 pub use local_data::{
     BrokerLocalDataClearConfirmation, BrokerLocalDataClearSummary, BrokerLocalDataError,
