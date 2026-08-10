@@ -178,53 +178,28 @@ MODULE_CACHE="$TMP_DIR/module-cache"
   "$AGENT_SOURCE" \
   -o "$AGENT"
 
-cat >"$INFO_PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>CFBundleExecutable</key>
-  <string>$APP_NAME</string>
-  <key>CFBundleIdentifier</key>
-  <string>com.chasechou.keptnear.service-probe</string>
-  <key>CFBundleName</key>
-  <string>$APP_NAME</string>
-  <key>CFBundlePackageType</key>
-  <string>APPL</string>
-  <key>LSMinimumSystemVersion</key>
-  <string>13.0</string>
-  <key>LSUIElement</key>
-  <true/>
-</dict>
-</plist>
-PLIST
+/usr/bin/plutil -create xml1 "$INFO_PLIST"
+/usr/bin/plutil -insert CFBundleExecutable -string "$APP_NAME" "$INFO_PLIST"
+/usr/bin/plutil -insert CFBundleIdentifier -string "com.chasechou.keptnear.service-probe" "$INFO_PLIST"
+/usr/bin/plutil -insert CFBundleName -string "$APP_NAME" "$INFO_PLIST"
+/usr/bin/plutil -insert CFBundlePackageType -string "APPL" "$INFO_PLIST"
+/usr/bin/plutil -insert LSMinimumSystemVersion -string "13.0" "$INFO_PLIST"
+/usr/bin/plutil -insert LSUIElement -bool true "$INFO_PLIST"
 
 write_service_plist() {
   local generation="$1"
 
-  cat >"$SERVICE_PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>$SERVICE_LABEL</string>
-  <key>BundleProgram</key>
-  <string>Contents/Helpers/$AGENT_NAME</string>
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>KEPTNEAR_SERVICE_PROBE_GENERATION</key>
-    <string>$generation</string>
-    <key>KEPTNEAR_SERVICE_PROBE_MARKER</key>
-    <string>$MARKER_PATH</string>
-  </dict>
-  <key>KeepAlive</key>
-  <true/>
-  <key>RunAtLoad</key>
-  <true/>
-</dict>
-</plist>
-PLIST
+  /bin/rm -f "$SERVICE_PLIST"
+  /usr/bin/plutil -create xml1 "$SERVICE_PLIST"
+  /usr/bin/plutil -insert Label -string "$SERVICE_LABEL" "$SERVICE_PLIST"
+  /usr/bin/plutil -insert BundleProgram -string "Contents/Helpers/$AGENT_NAME" "$SERVICE_PLIST"
+  /usr/bin/plutil -insert EnvironmentVariables -dictionary "$SERVICE_PLIST"
+  /usr/bin/plutil -insert EnvironmentVariables.KEPTNEAR_SERVICE_PROBE_GENERATION \
+    -string "$generation" "$SERVICE_PLIST"
+  /usr/bin/plutil -insert EnvironmentVariables.KEPTNEAR_SERVICE_PROBE_MARKER \
+    -string "$MARKER_PATH" "$SERVICE_PLIST"
+  /usr/bin/plutil -insert KeepAlive -bool true "$SERVICE_PLIST"
+  /usr/bin/plutil -insert RunAtLoad -bool true "$SERVICE_PLIST"
 }
 
 write_service_plist "1"
