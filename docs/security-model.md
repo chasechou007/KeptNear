@@ -560,7 +560,10 @@ query, disable synchronization, and use
 authentication have separate fixed-order, length-prefixed domains, 30-second
 single-use challenges, and bounded failure windows. Disable, update, and
 reinstall preserve complete authority; v1 supports rotation only through a
-confirmed device-access clear followed by a later explicit enable. The runtime
+confirmed device-access clear followed by a later explicit enable. A
+`removal-pending-v1` item in the same restricted access group is created before
+either authority side is removed and deleted last, so an interrupted clear
+cannot be mistaken for resumable bootstrap. The runtime
 Keychain adapter and Broker controller record are not yet implemented, so this
 contract does not activate machine access. See
 `docs/controller-authority-contract.md`.

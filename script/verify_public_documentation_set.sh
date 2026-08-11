@@ -128,9 +128,11 @@ require_literal "$ROOT_DIR/docs/architecture.md" 'See `docs/human-control-protoc
 require_literal "$ROOT_DIR/docs/architecture.md" '`docs/controller-authority-contract.md`.'
 require_literal "$CONTROLLER_AUTHORITY_PATH" 'Contract: `keptnear.controller-authority.v1`'
 require_literal "$CONTROLLER_AUTHORITY_PATH" '`app.keptnear.human-controller-key.v1`'
+require_literal "$CONTROLLER_AUTHORITY_PATH" '`removal-pending-v1`'
 require_literal "$CONTROLLER_AUTHORITY_PATH" '`<signing-prefix>.app.keptnear.human-controller`'
 require_literal "$CONTROLLER_AUTHORITY_PATH" 'At most one challenge exists on a human-control connection.'
 require_literal "$CONTROLLER_AUTHORITY_PATH" 'Version 1 has no in-place, scheduled, age-based, or update-triggered controller'
+require_literal "$CONTROLLER_AUTHORITY_PATH" 'Any later enable or repair that sees the marker resumes removal'
 require_literal "$CONTROLLER_AUTHORITY_PATH" 'Bundled But Not Activated'
 
 require_literal "$RECOVERY_PATH" 'locked-vault'

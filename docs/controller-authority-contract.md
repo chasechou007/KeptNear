@@ -55,6 +55,12 @@ The controller seed is one Data Protection Keychain generic-password item:
 | `kSecAttrAccessible` | `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` |
 | `kSecAttrAccessGroup` | `<signing-prefix>.app.keptnear.human-controller` |
 
+Controller removal uses a second generic-password item in the same service and
+access group. Its account is `removal-pending-v1` and its fixed non-secret value
+is `keptnear.controller-removal.v1`. It is removal provenance, not signing
+material, and never leaves the Keychain. It uses the same Data Protection,
+non-synchronizing, device-only, create-only, and exact-query rules as the seed.
+
 The label is presentation metadata and is not part of item identity. Add,
 load, update, and delete queries must all include class, service, account,
 Data Protection Keychain, non-synchronizing state, and the exact access group.
@@ -155,7 +161,8 @@ expiry decision. No wall-clock change can extend a challenge.
 
 Bootstrap is allowed only after explicit Enable Machine Access or explicit
 repair. Ordinary installation and first App launch never create controller
-authority.
+authority. Bootstrap is prohibited while the `removal-pending-v1` marker
+exists; enable or repair must resume removal instead.
 
 The fail-closed sequence is:
 
@@ -163,8 +170,8 @@ The fail-closed sequence is:
    Broker component, and stopped or fresh service state;
 2. inspect the Keychain seed and Broker controller public record separately;
 3. if both are absent, create the Keychain seed once with `SecItemAdd`;
-4. if only the seed exists after an interrupted attempt, reuse it without
-   generating a replacement;
+4. if only the seed exists after an interrupted attempt and no removal marker
+   exists, reuse it without generating a replacement;
 5. start the Broker, which loads the same Keychain seed and derives the expected
    public key and controller identity;
 6. negotiate human-control v1 and issue a `controller.challenge` whose purpose
@@ -178,7 +185,9 @@ The fail-closed sequence is:
 
 There is no cross-store claim of atomicity between Keychain and SQLCipher. A
 crash after Keychain creation leaves `key-only`, which is not ready but may
-resume the signed bootstrap. `record-only` and mismatched complete authority
+resume the signed bootstrap only when the removal marker is absent. Marker
+presence takes precedence over every seed-and-record combination and permits
+only continuation of removal. `record-only` and mismatched complete authority
 are rejected and never repaired by generating a key or replacing a record.
 They require explicit device-access clearing.
 
@@ -231,21 +240,29 @@ rotation. The only supported rotation is:
 
 1. reauthenticate the human user and confirm Clear Device Access Data;
 2. stop and unregister the Broker;
-3. remove the Broker public controller record with the protected device state;
-4. only after that succeeds, delete the exact Keychain seed;
-5. verify both sides are absent without generating replacement authority;
-6. perform a later explicit Enable Machine Access to create and bootstrap a
+3. create the `removal-pending-v1` marker with `SecItemAdd` before mutating
+   either authority side; a duplicate marker means removal is being resumed;
+4. remove the Broker public controller record with the protected device state;
+5. only after that succeeds, delete the exact Keychain seed;
+6. verify both authority sides are absent without generating replacement
+   authority;
+7. delete the removal marker last;
+8. perform a later explicit Enable Machine Access to create and bootstrap a
    fresh key.
 
-If protected-record removal fails, the Keychain seed is retained. If Keychain
-deletion fails after the public record is gone, the clear remains incomplete
-and retries deletion of that same item. Neither case silently initializes a
-new record or seed. Every `.pswvault` remains untouched.
+If marker creation fails, removal does not begin. If protected-record removal
+fails, the Keychain seed and marker are retained. If Keychain deletion fails
+after the public record is gone, the marker is retained and the clear remains
+incomplete. Any later enable or repair that sees the marker resumes removal of
+that same authority and cannot enter bootstrap. The marker is removed only
+after both authority sides are verified absent. No failure silently initializes
+a new record or seed. Every `.pswvault` remains untouched.
 
 ## Current Implementation Boundary
 
 The constants, transcript construction, controller-ID derivation, presence
-matrix, rotation policy, and removal order are frozen and tested in source.
+matrix, removal provenance, rotation policy, and removal order are frozen and
+tested in source.
 Runtime Keychain access, entitlement packaging, Broker persistence,
 challenge consumption, rate limiting, App signing, and service activation are
 subsequent implementation work. Public capability status therefore remains

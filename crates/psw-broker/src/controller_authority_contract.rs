@@ -21,6 +21,10 @@ pub const CONTROLLER_AUTHENTICATION_DOMAIN: &str = "KeptNear human controller au
 pub const CONTROLLER_KEYCHAIN_SERVICE: &str = "app.keptnear.human-controller-key.v1";
 /// Stable primary controller-key Keychain account.
 pub const CONTROLLER_KEYCHAIN_ACCOUNT: &str = "primary-v1";
+/// Stable account for the non-secret controller-removal provenance marker.
+pub const CONTROLLER_KEYCHAIN_REMOVAL_MARKER_ACCOUNT: &str = "removal-pending-v1";
+/// Fixed non-secret value stored while controller removal is incomplete.
+pub const CONTROLLER_KEYCHAIN_REMOVAL_MARKER_VALUE: &[u8] = b"keptnear.controller-removal.v1";
 /// Human-readable Keychain label. This is not part of item identity.
 pub const CONTROLLER_KEYCHAIN_LABEL: &str = "KeptNear Human Controller key";
 /// Access-group suffix shared only by the App and packaged Broker.
@@ -162,6 +166,8 @@ pub enum ControllerAuthorityPresence {
     Absent,
     /// The Keychain seed exists but bootstrap did not commit the Broker record.
     KeyOnly,
+    /// A protected removal marker exists, regardless of the remaining seed or record.
+    RemovalPending,
     /// A Broker public record exists but the Keychain seed is missing.
     RecordOnly,
     /// Both sides exist and the derived identity and public key match exactly.
@@ -179,6 +185,8 @@ pub enum ControllerEnableDisposition {
     ResumeBootstrap,
     /// Preserve the complete authority and perform ordinary authentication.
     AuthenticateExisting,
+    /// Refuse enablement and continue the already-started removal sequence only.
+    ResumeRemovalOnly,
     /// Refuse activation until the incomplete authority is explicitly cleared.
     RejectIncompleteAuthority,
 }
@@ -193,6 +201,9 @@ pub const fn controller_enable_disposition(
         ControllerAuthorityPresence::KeyOnly => ControllerEnableDisposition::ResumeBootstrap,
         ControllerAuthorityPresence::CompleteMatching => {
             ControllerEnableDisposition::AuthenticateExisting
+        }
+        ControllerAuthorityPresence::RemovalPending => {
+            ControllerEnableDisposition::ResumeRemovalOnly
         }
         ControllerAuthorityPresence::RecordOnly
         | ControllerAuthorityPresence::CompleteMismatched => {
@@ -216,14 +227,14 @@ pub const CONTROLLER_ROTATION_POLICY: ControllerRotationPolicy =
 /// Required deletion ordering for a confirmed device-access clear.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ControllerRemovalOrder {
-    /// Remove the Broker public record before deleting the Keychain seed, then
-    /// verify both are absent without generating replacement authority.
-    BrokerRecordThenKeychainSeed,
+    /// Create the removal marker, remove the Broker record, delete the seed,
+    /// verify both absent, and delete the marker last.
+    MarkerThenBrokerRecordThenKeychainSeedThenMarker,
 }
 
 /// Frozen version 1 controller-authority removal order.
 pub const CONTROLLER_REMOVAL_ORDER: ControllerRemovalOrder =
-    ControllerRemovalOrder::BrokerRecordThenKeychainSeed;
+    ControllerRemovalOrder::MarkerThenBrokerRecordThenKeychainSeedThenMarker;
 
 /// Exact bounded fields signed for bootstrap or ordinary authentication.
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -401,6 +412,14 @@ mod tests {
         );
         assert_eq!(CONTROLLER_KEYCHAIN_ACCOUNT, "primary-v1");
         assert_eq!(
+            CONTROLLER_KEYCHAIN_REMOVAL_MARKER_ACCOUNT,
+            "removal-pending-v1"
+        );
+        assert_eq!(
+            CONTROLLER_KEYCHAIN_REMOVAL_MARKER_VALUE,
+            b"keptnear.controller-removal.v1"
+        );
+        assert_eq!(
             CONTROLLER_KEYCHAIN_PRINCIPALS,
             [
                 ControllerKeychainPrincipal::App,
@@ -522,6 +541,10 @@ mod tests {
             controller_enable_disposition(ControllerAuthorityPresence::CompleteMatching),
             ControllerEnableDisposition::AuthenticateExisting
         );
+        assert_eq!(
+            controller_enable_disposition(ControllerAuthorityPresence::RemovalPending),
+            ControllerEnableDisposition::ResumeRemovalOnly
+        );
         for incomplete in [
             ControllerAuthorityPresence::RecordOnly,
             ControllerAuthorityPresence::CompleteMismatched,
@@ -537,7 +560,7 @@ mod tests {
         );
         assert_eq!(
             CONTROLLER_REMOVAL_ORDER,
-            ControllerRemovalOrder::BrokerRecordThenKeychainSeed
+            ControllerRemovalOrder::MarkerThenBrokerRecordThenKeychainSeedThenMarker
         );
         assert_eq!(CONTROLLER_CHALLENGE_TTL, Duration::from_secs(30));
         assert_eq!(MAX_OUTSTANDING_CONTROLLER_CHALLENGES_PER_CONNECTION, 1);
