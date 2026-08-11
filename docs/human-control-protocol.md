@@ -210,9 +210,13 @@ state, and an optional machine unlock-session identity.
 
 Pending results may contain bounded labels, path-free process identity evidence,
 stable identities, capability names, Secret Field kinds, human-review titles,
-and expiry metadata. They never contain a Secret Field value or submitted
-unlock credential. Pairing approval establishes identity only and grants no
-credential access.
+and expiry metadata. Process-local pairing entries include the comparison code,
+short pairing-key fingerprint, remaining lifetime, and path-free observed
+executable and signing evidence needed to identify the requester. The stable
+pairing-first queue is truncated to 256 entries; resolving visible entries
+exposes any remainder on a subsequent read. Results never contain a Secret
+Field value or submitted unlock credential. Pairing approval establishes
+identity only and grants no credential access.
 
 ### Authorization And Usage Profiles
 

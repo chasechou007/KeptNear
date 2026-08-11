@@ -7,12 +7,13 @@ use crate::{
     bundled_usage_profile_templates, recommend_bundled_usage_profile, ApprovalRequestId,
     BrokerAppsToolsSnapshot, BrokerAuditClearConfirmation, BrokerAuditClearSummary,
     BrokerAuditCursor, BrokerAuditExport, BrokerAuditFilter, BrokerAuditPage, BrokerConsumerDetail,
-    BrokerCredentialCandidateSelection, BrokerGrantInvalidationSummary,
-    BrokerHumanCredentialCandidate, BrokerHumanCredentialReview, BrokerHumanSecretFieldCandidate,
-    BrokerInstanceId, BrokerPairingUserApproval, BrokerPendingRequest, BrokerPendingRequestId,
-    BrokerPendingRequestKind, BrokerReadinessProjection, BrokerRevocationSummary, BrokerRuntime,
-    BrokerRuntimeError, BrokerVaultSessionSnapshot, BundledUsageProfileRecommendation,
-    BundledUsageProfileTemplate, Capability, ConfirmationPolicy, ConsumerId,
+    BrokerConsumerIdentityEvidence, BrokerCredentialCandidateSelection,
+    BrokerGrantInvalidationSummary, BrokerHumanCredentialCandidate, BrokerHumanCredentialReview,
+    BrokerHumanSecretFieldCandidate, BrokerInstanceId, BrokerPairingUserApproval,
+    BrokerPendingRequest, BrokerPendingRequestId, BrokerPendingRequestKind,
+    BrokerReadinessProjection, BrokerRevocationSummary, BrokerRuntime, BrokerRuntimeError,
+    BrokerVaultSessionSnapshot, BundledUsageProfileRecommendation, BundledUsageProfileTemplate,
+    Capability, ConfirmationPolicy, ConsumerEvidenceFingerprint, ConsumerId,
     ControllerAuthenticationChallenge, ControllerAuthenticationCompletion,
     ControllerAuthenticationConnection, ControllerAuthenticationError,
     ControllerAuthenticationMode, ControllerAuthenticationProof, ControllerAuthenticationService,
@@ -20,9 +21,10 @@ use crate::{
     ControllerChallengeRequest, ControllerId, ControllerKeyStore, ControllerSessionId,
     CredentialFieldScope, CredentialId, HumanControlFailureCode, HumanControlOperation,
     HumanControlProtocolFailure, HumanControlProtocolVersion, HumanControlRequiredAction,
-    HumanControlVersionOffer, PairingRequestId, SecretFieldId, SecretFieldKind, StateTimestamp,
-    UsageProfile, UsageProfileDefinition, UsageProfileId, UseGrantId, HUMAN_CONTROL_SCHEMA_ID,
-    MAX_HUMAN_CONTROL_AUDIT_EVENTS, MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
+    HumanControlVersionOffer, PairingComparisonCode, PairingRequestId, SecretFieldId,
+    SecretFieldKind, StateTimestamp, UsageProfile, UsageProfileDefinition, UsageProfileId,
+    UseGrantId, HUMAN_CONTROL_SCHEMA_ID, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+    MAX_HUMAN_CONTROL_COLLECTION_ITEMS, MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
 };
 
 const MAX_HUMAN_CONTROL_AUDIT_EXPORT_BYTES: usize = MAX_HUMAN_CONTROL_RESPONSE_LENGTH / 2;
@@ -272,7 +274,7 @@ impl Debug for HumanControlRequest {
 }
 
 /// Pending-decision projection that deliberately excludes request descriptions.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq)]
 pub struct HumanControlPendingRequest {
     /// Stable pending identity.
     pub request_id: BrokerPendingRequestId,
@@ -280,6 +282,14 @@ pub struct HumanControlPendingRequest {
     pub kind: BrokerPendingRequestKind,
     /// Stable paired Consumer identity when allocated.
     pub consumer_id: Option<ConsumerId>,
+    /// Bounded path-free operating-system evidence for pairing verification.
+    pub identity_evidence: Option<BrokerConsumerIdentityEvidence>,
+    /// Human comparison code shared with the requesting Consumer.
+    pub pairing_comparison_code: Option<PairingComparisonCode>,
+    /// Short fingerprint of the proposed Consumer pairing key.
+    pub pairing_key_fingerprint: Option<ConsumerEvidenceFingerprint>,
+    /// Remaining process-local pairing lifetime in milliseconds.
+    pub pairing_remaining_millis: Option<u64>,
     /// Stable Vault identity when applicable.
     pub vault_id: Option<VaultId>,
     /// Exact field scope when the request already names one.
@@ -298,12 +308,39 @@ impl From<&BrokerPendingRequest> for HumanControlPendingRequest {
             request_id: request.request_id(),
             kind: request.kind(),
             consumer_id: request.consumer_id(),
+            identity_evidence: request.identity_evidence().cloned(),
+            pairing_comparison_code: request.pairing_comparison_code(),
+            pairing_key_fingerprint: request.pairing_key_fingerprint(),
+            pairing_remaining_millis: request
+                .remaining()
+                .map(|remaining| u64::try_from(remaining.as_millis()).unwrap_or(u64::MAX)),
             vault_id: request.vault_id(),
             field_scope: request.field_scope(),
             capability: request.capability(),
             created_at: request.created_at(),
             expires_at: request.expires_at(),
         }
+    }
+}
+
+impl Debug for HumanControlPendingRequest {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HumanControlPendingRequest")
+            .field("request_id", &self.request_id)
+            .field("kind", &self.kind)
+            .field("consumer_id", &self.consumer_id)
+            .field("has_identity_evidence", &self.identity_evidence.is_some())
+            .field(
+                "has_pairing_verification",
+                &self.pairing_comparison_code.is_some(),
+            )
+            .field("vault_id", &self.vault_id)
+            .field("field_scope", &self.field_scope)
+            .field("capability", &self.capability)
+            .field("created_at", &self.created_at)
+            .field("expires_at", &self.expires_at)
+            .finish()
     }
 }
 
@@ -807,6 +844,7 @@ where
                     queue
                         .requests()
                         .iter()
+                        .take(pending_projection_limit(queue.pending_count()))
                         .map(HumanControlPendingRequest::from)
                         .collect(),
                 ))
@@ -971,6 +1009,14 @@ where
 
 fn grant_revoke_response(removed: bool) -> HumanControlResponse {
     HumanControlResponse::RevocationSummary(BrokerRevocationSummary::for_use_grant(removed))
+}
+
+const fn pending_projection_limit(pending_count: usize) -> usize {
+    if pending_count > MAX_HUMAN_CONTROL_COLLECTION_ITEMS {
+        MAX_HUMAN_CONTROL_COLLECTION_ITEMS
+    } else {
+        pending_count
+    }
 }
 
 fn map_authentication_error(error: ControllerAuthenticationError) -> HumanControlDispatchError {
@@ -1183,6 +1229,7 @@ mod tests {
                 if summary.kind() == BrokerRevocationKind::UseGrant
                     && summary.use_grants_removed() == 1
         ));
+        assert_eq!(pending_projection_limit(320), 256);
     }
 
     #[test]
@@ -1230,6 +1277,14 @@ mod tests {
             .next()
             .expect("projection body");
         assert!(!projection.contains("description"));
+        for required in [
+            "identity_evidence",
+            "pairing_comparison_code",
+            "pairing_key_fingerprint",
+            "pairing_remaining_millis",
+        ] {
+            assert!(projection.contains(required));
+        }
         let review = source
             .split("pub struct HumanControlCredentialReview")
             .nth(1)
