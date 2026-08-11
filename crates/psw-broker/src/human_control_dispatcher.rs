@@ -21,9 +21,9 @@ use crate::{
     ControllerBootstrapMode, ControllerChallengeRequest, ControllerId, ControllerKeyStore,
     ControllerSessionId, CredentialFieldScope, CredentialId, HumanControlFailureCode,
     HumanControlOperation, HumanControlProtocolFailure, HumanControlProtocolVersion,
-    HumanControlRequiredAction, HumanControlVersionOffer, PairingComparisonCode, PairingRequestId,
-    RuleLifetime, SecretFieldId, SecretFieldKind, StateTimestamp, UsageProfile,
-    UsageProfileDefinition, UsageProfileId, UseGrantId, HUMAN_CONTROL_SCHEMA_ID,
+    HumanControlRequiredAction, HumanControlVersionOffer, PackagedComponent, PairingComparisonCode,
+    PairingRequestId, RuleLifetime, SecretFieldId, SecretFieldKind, StateTimestamp, UsageProfile,
+    UsageProfileDefinition, UsageProfileId, UseGrantId, CONTROLLER_ROLE, HUMAN_CONTROL_SCHEMA_ID,
     MAX_HUMAN_CONTROL_AUDIT_EVENTS, MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
     MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
 };
@@ -128,6 +128,8 @@ pub enum HumanControlRequest {
     UnlockApprove {
         /// Persisted unlock approval identity.
         request_id: ApprovalRequestId,
+        /// Exact Vault identity shown to the human controller.
+        vault_id: VaultId,
     },
     /// Review credential candidates without returning the Consumer description.
     CredentialReview {
@@ -151,6 +153,8 @@ pub enum HumanControlRequest {
         confirmation_policy: ConfirmationPolicy,
         /// Human-selected persistent or absolute expiry boundary.
         rule_lifetime: RuleLifetime,
+        /// Exact capability shown to the human controller.
+        capability: Capability,
     },
     /// Read one Vault's secret-free authorization summary.
     AuthorizationSnapshot {
@@ -230,7 +234,12 @@ pub enum HumanControlRequest {
         limit: usize,
     },
     /// Quiesce process state before App-managed repair.
-    RepairPrepare,
+    RepairPrepare {
+        /// Exact component the controller expects to quiesce.
+        expected_component: PackagedComponent,
+        /// Exact human-control protocol expected by the repair client.
+        expected_protocol: HumanControlProtocolVersion,
+    },
     /// Gracefully stop process-owned sessions and grants.
     Shutdown,
 }
@@ -267,7 +276,7 @@ impl HumanControlRequest {
             Self::AuditList { .. } => HumanControlOperation::AuditList,
             Self::AuditClear { .. } => HumanControlOperation::AuditClear,
             Self::AuditExport { .. } => HumanControlOperation::AuditExport,
-            Self::RepairPrepare => HumanControlOperation::RepairPrepare,
+            Self::RepairPrepare { .. } => HumanControlOperation::RepairPrepare,
             Self::Shutdown => HumanControlOperation::Shutdown,
         }
     }
@@ -867,6 +876,21 @@ where
                 ),
             ));
         };
+        if offer.role() != CONTROLLER_ROLE
+            || !offer
+                .schema_ids()
+                .iter()
+                .any(|schema_id| schema_id == HUMAN_CONTROL_SCHEMA_ID)
+        {
+            state.close();
+            return Err(HumanControlDispatchError::new(
+                HumanControlProtocolFailure::new(
+                    HumanControlFailureCode::ProtocolIncompatible,
+                    false,
+                    Some(HumanControlRequiredAction::UpdateComponent),
+                ),
+            ));
+        }
         state.phase = HumanControlConnectionPhase::Negotiated(protocol);
         Ok(HumanControlResponse::Hello {
             protocol,
@@ -1040,9 +1064,12 @@ where
                     .map_err(map_runtime_error)?;
                 Ok(HumanControlResponse::DecisionReceipt { changed: true })
             }
-            HumanControlRequest::UnlockApprove { request_id } => {
+            HumanControlRequest::UnlockApprove {
+                request_id,
+                vault_id,
+            } => {
                 runtime
-                    .approve_pending_unlock(request_id, observed_at)
+                    .approve_pending_unlock(request_id, vault_id, observed_at)
                     .map_err(map_runtime_error)?;
                 Ok(HumanControlResponse::DecisionReceipt { changed: true })
             }
@@ -1068,11 +1095,13 @@ where
                 selection,
                 confirmation_policy,
                 rule_lifetime,
+                capability,
             } => {
                 let created = runtime
                     .configure_pending_request_access_rule(
                         request_id,
                         selection,
+                        capability,
                         confirmation_policy,
                         rule_lifetime,
                         observed_at,
@@ -1176,10 +1205,16 @@ where
                     .map(HumanControlResponse::AuditExport)
                     .map_err(map_runtime_error)
             }
-            HumanControlRequest::RepairPrepare => runtime
-                .shutdown_at(observed_at)
-                .map(HumanControlResponse::RepairReadiness)
-                .map_err(map_runtime_error),
+            HumanControlRequest::RepairPrepare {
+                expected_component,
+                expected_protocol,
+            } => {
+                validate_repair_target(expected_component, expected_protocol)?;
+                runtime
+                    .shutdown_at(observed_at)
+                    .map(HumanControlResponse::RepairReadiness)
+                    .map_err(map_runtime_error)
+            }
             HumanControlRequest::Shutdown => runtime
                 .shutdown_at(observed_at)
                 .map(HumanControlResponse::ShutdownReceipt)
@@ -1191,6 +1226,24 @@ where
             ),
         }
     }
+}
+
+fn validate_repair_target(
+    expected_component: PackagedComponent,
+    expected_protocol: HumanControlProtocolVersion,
+) -> Result<(), HumanControlDispatchError> {
+    if expected_component != PackagedComponent::Broker
+        || expected_protocol != HumanControlProtocolVersion::current()
+    {
+        return Err(HumanControlDispatchError::new(
+            HumanControlProtocolFailure::new(
+                HumanControlFailureCode::ProtocolIncompatible,
+                false,
+                Some(HumanControlRequiredAction::UpdateComponent),
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn grant_revoke_response(removed: bool) -> HumanControlResponse {
@@ -1385,9 +1438,11 @@ mod tests {
 
     fn hello() -> HumanControlRequest {
         HumanControlRequest::Hello(
-            HumanControlVersionOffer::new([
-                HumanControlProtocolVersionRange::new(1, 0, 0).expect("range")
-            ])
+            HumanControlVersionOffer::new(
+                CONTROLLER_ROLE,
+                [HumanControlProtocolVersionRange::new(1, 0, 0).expect("range")],
+                [HUMAN_CONTROL_SCHEMA_ID.to_owned()],
+            )
             .expect("offer"),
         )
     }
@@ -1435,6 +1490,7 @@ mod tests {
                 selection: None,
                 confirmation_policy: ConfirmationPolicy::EveryUse,
                 rule_lifetime: RuleLifetime::Until(expires_at),
+                capability: Capability::v1(crate::CapabilityName::HttpRequest),
             },
             HumanControlRequest::CredentialAuthorize {
                 rule_lifetime: RuleLifetime::Until(actual),
@@ -1463,6 +1519,71 @@ mod tests {
             metadata_wire_budget(&bounded),
             bounded.len().saturating_mul(6)
         );
+    }
+
+    #[test]
+    fn negotiation_rejects_wrong_role_or_schema_before_challenge_state() {
+        let (home, mut runtime) = runtime("negotiation-bindings");
+        let dispatcher = HumanControlDispatcher::new(
+            runtime.process().broker_instance_id(),
+            MemoryControllerKeyStore::seeded(0x31),
+        );
+        for (role, schema) in [
+            ("consumer", HUMAN_CONTROL_SCHEMA_ID),
+            (CONTROLLER_ROLE, "keptnear.human-control.schema.future"),
+        ] {
+            let mut state = dispatcher.connection();
+            let request = HumanControlRequest::Hello(
+                HumanControlVersionOffer::new(
+                    role,
+                    [HumanControlProtocolVersionRange::new(1, 0, 0).expect("range")],
+                    [schema.to_owned()],
+                )
+                .expect("structurally bounded offer"),
+            );
+            let error = dispatcher
+                .dispatch(
+                    &mut runtime,
+                    &mut state,
+                    request,
+                    Instant::now(),
+                    timestamp(101),
+                )
+                .expect_err("incompatible identity");
+            assert_eq!(
+                error.failure().code(),
+                HumanControlFailureCode::ProtocolIncompatible
+            );
+            assert_eq!(state.phase(), HumanControlConnectionPhase::Closed);
+        }
+        runtime.shutdown_at(timestamp(102)).expect("shutdown");
+        drop(runtime);
+        fs::remove_dir_all(home).expect("cleanup");
+    }
+
+    #[test]
+    fn repair_target_must_match_before_runtime_quiescence() {
+        assert!(validate_repair_target(
+            PackagedComponent::Broker,
+            HumanControlProtocolVersion::current()
+        )
+        .is_ok());
+        for (component, protocol) in [
+            (
+                PackagedComponent::MacOsApp,
+                HumanControlProtocolVersion::current(),
+            ),
+            (
+                PackagedComponent::Broker,
+                HumanControlProtocolVersion::new(2, 0).expect("future protocol"),
+            ),
+        ] {
+            let error = validate_repair_target(component, protocol).expect_err("mismatch");
+            assert_eq!(
+                error.failure().code(),
+                HumanControlFailureCode::ProtocolIncompatible
+            );
+        }
     }
 
     #[test]

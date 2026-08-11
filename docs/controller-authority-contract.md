@@ -27,6 +27,11 @@ Access Rule, Use Grant, and Usage Profile. Possessing this key permits only the
 closed human-control catalog. It never grants a Consumer capability or returns
 a Secret Field.
 
+Negotiation accepts a compatible version only when the typed offer also
+retains and supplies the exact `human-controller` role and the current schema
+identity. An unknown role or schema closes the connection before a controller
+challenge can be issued.
+
 The controller identity is:
 
 ```text

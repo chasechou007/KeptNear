@@ -360,6 +360,96 @@ fn first_run_initializes_only_when_device_key_and_managed_state_are_both_absent(
 }
 
 #[test]
+fn human_approval_actions_preserve_exact_vault_and_capability_bindings() {
+    let home = TestHome::new("human-approval-bindings");
+    let key_store = MemoryKeyStore::default();
+    let mut runtime = BrokerRuntime::open_or_initialize_with_paths_at(
+        home.paths.clone(),
+        key_store,
+        timestamp(100),
+    )
+    .expect("runtime");
+    let consumer = Consumer::new(
+        [0x91; 32],
+        "Human approval binding fixture".to_owned(),
+        ObservedConsumerIdentity::new(Some("binding-fixture".to_owned()), None, None, None)
+            .expect("identity"),
+        timestamp(101),
+    )
+    .expect("consumer");
+    runtime
+        .device_state()
+        .insert_consumer(&consumer)
+        .expect("insert consumer");
+
+    let expected_vault_id = VaultId::generate();
+    let unlock = runtime
+        .submit_approval(
+            ApprovalSubject::Unlock {
+                consumer_id: consumer.consumer_id(),
+                vault_id: expected_vault_id,
+            },
+            timestamp(102),
+            timestamp(1_000),
+        )
+        .expect("unlock approval");
+    let unlock_id = unlock.receipt().approval_request_id();
+    assert!(matches!(
+        runtime.approve_pending_unlock(unlock_id, VaultId::generate(), timestamp(103)),
+        Err(BrokerRuntimeError::Approval(
+            BrokerApprovalError::ApprovalUnavailable
+        ))
+    ));
+    assert_eq!(
+        runtime
+            .poll_approval(consumer.consumer_id(), unlock_id, timestamp(104))
+            .expect("unlock remains pending")
+            .status(),
+        ApprovalStatus::Pending
+    );
+
+    let expected_capability = Capability::v1(CapabilityName::HttpRequest);
+    let target = AuthorizationTarget::new(
+        consumer.consumer_id(),
+        CredentialFieldScope::new(
+            expected_vault_id,
+            CredentialId::generate(),
+            SecretFieldId::generate(),
+        ),
+        expected_capability,
+    );
+    let access = runtime
+        .submit_approval(
+            ApprovalSubject::Access { target },
+            timestamp(105),
+            timestamp(1_000),
+        )
+        .expect("access approval");
+    let access_id = access.receipt().approval_request_id();
+    assert!(matches!(
+        runtime.configure_pending_request_access_rule(
+            access_id,
+            None,
+            Capability::v1(CapabilityName::ProcessRun),
+            ConfirmationPolicy::EveryUse,
+            RuleLifetime::Persistent,
+            timestamp(106),
+        ),
+        Err(BrokerRuntimeError::Approval(
+            BrokerApprovalError::ApprovalUnavailable
+        ))
+    ));
+    assert_eq!(
+        runtime
+            .poll_approval(consumer.consumer_id(), access_id, timestamp(107))
+            .expect("access remains pending")
+            .status(),
+        ApprovalStatus::Pending
+    );
+    runtime.shutdown_at(timestamp(108)).expect("shutdown");
+}
+
+#[test]
 fn first_run_refuses_key_only_or_state_only_authority_without_replacement() {
     let key_only_home = TestHome::new("first-run-key-only");
     let key_only_store = MemoryKeyStore::default();
@@ -1315,6 +1405,7 @@ fn first_request_actions_deny_and_allow_once_without_creating_access_rules() {
         .configure_pending_request_access_rule(
             persistent_id,
             None,
+            target.capability(),
             ConfirmationPolicy::EveryUse,
             bounded_rule_lifetime,
             timestamp(now_ms + 13),
@@ -1358,6 +1449,7 @@ fn first_request_actions_deny_and_allow_once_without_creating_access_rules() {
         .configure_pending_request_access_rule(
             repeated_id,
             None,
+            target.capability(),
             ConfirmationPolicy::EveryUse,
             bounded_rule_lifetime,
             timestamp(now_ms + 16),
@@ -1381,6 +1473,7 @@ fn first_request_actions_deny_and_allow_once_without_creating_access_rules() {
         .configure_pending_request_access_rule(
             conflicting_id,
             None,
+            target.capability(),
             ConfirmationPolicy::AutomaticWhileUnlocked,
             bounded_rule_lifetime,
             timestamp(now_ms + 18),

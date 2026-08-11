@@ -65,7 +65,7 @@ use crate::protocol::{BrokerProtocolVersion, BrokerSessionId};
 use crate::revocation::{BrokerRevocationError, BrokerRevocationManager, BrokerRevocationSummary};
 use crate::state_model::{
     ApprovalRequestId, ApprovalStatus, ApprovalSubject, AuditDecision, AuditEventId,
-    AuthorizationTarget, ConfirmationPolicy, ConsumerId, CredentialFieldScope,
+    AuthorizationTarget, Capability, ConfirmationPolicy, ConsumerId, CredentialFieldScope,
     ObservedConsumerIdentity, PairingRequestId, RuleLifetime, StateTimestamp, UsageProfile,
     UsageProfileDefinition, UsageProfileId, UseGrantId, VaultSessionId,
 };
@@ -1558,6 +1558,7 @@ impl BrokerRuntime {
     pub fn approve_pending_unlock(
         &self,
         approval_request_id: ApprovalRequestId,
+        expected_vault_id: VaultId,
         approved_at: StateTimestamp,
     ) -> Result<(), BrokerRuntimeError> {
         let pending = self.pending_approval_snapshot(approval_request_id, approved_at)?;
@@ -1566,6 +1567,11 @@ impl BrokerRuntime {
                 BrokerApprovalError::ApprovalUnavailable,
             ));
         };
+        if *vault_id != expected_vault_id {
+            return Err(BrokerRuntimeError::Approval(
+                BrokerApprovalError::ApprovalUnavailable,
+            ));
+        }
         self.current_vault_session_id(*vault_id)?;
         let receipt = self.resolve_approval(
             approval_request_id,
@@ -1649,12 +1655,27 @@ impl BrokerRuntime {
         &mut self,
         approval_request_id: ApprovalRequestId,
         selection: Option<BrokerCredentialCandidateSelection>,
+        expected_capability: Capability,
         confirmation_policy: ConfirmationPolicy,
         rule_lifetime: RuleLifetime,
         approved_at: StateTimestamp,
     ) -> Result<BrokerAccessRuleCreation, BrokerRuntimeError> {
         let pending = self.pending_approval_snapshot(approval_request_id, approved_at)?;
         let expected_subject = pending.subject().clone();
+        let pending_capability = match pending.subject() {
+            ApprovalSubject::Access { target } => target.capability(),
+            ApprovalSubject::CredentialAccess { capability, .. } => *capability,
+            ApprovalSubject::Pairing { .. } | ApprovalSubject::Unlock { .. } => {
+                return Err(BrokerRuntimeError::Approval(
+                    BrokerApprovalError::ApprovalUnavailable,
+                ));
+            }
+        };
+        if pending_capability != expected_capability {
+            return Err(BrokerRuntimeError::Approval(
+                BrokerApprovalError::ApprovalUnavailable,
+            ));
+        }
         let (target, secret_kind, _) =
             self.pending_access_target(approval_request_id, &pending, selection, approved_at)?;
         let approval = BrokerAccessRuleApproval::after_user_approval(

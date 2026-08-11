@@ -32,6 +32,10 @@ pub const MAX_HUMAN_CONTROL_COLLECTION_ITEMS: usize = 256;
 pub const MAX_HUMAN_CONTROL_AUDIT_EVENTS: usize = 256;
 /// Maximum protocol version ranges accepted during negotiation.
 pub const MAX_HUMAN_CONTROL_VERSION_RANGES: usize = 8;
+/// Maximum schema identities accepted during negotiation.
+pub const MAX_HUMAN_CONTROL_SCHEMA_IDS: usize = 8;
+/// Maximum bytes accepted for one negotiation role or schema identity.
+pub const MAX_HUMAN_CONTROL_NEGOTIATION_ID_BYTES: usize = 128;
 
 const _: () = assert!(MAX_HUMAN_CONTROL_UNLOCK_CREDENTIAL_BYTES < MAX_HUMAN_CONTROL_UNLOCK_LENGTH);
 const _: () = assert!(MAX_HUMAN_CONTROL_COLLECTION_ITEMS <= 256);
@@ -213,16 +217,30 @@ impl HumanControlProtocolVersionRange {
 /// Canonical bounded protocol ranges offered by one App controller.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HumanControlVersionOffer {
+    role: String,
     ranges: Vec<HumanControlProtocolVersionRange>,
+    schema_ids: Vec<String>,
 }
 
 impl HumanControlVersionOffer {
-    /// Creates a non-empty offer with at most one range for each major version.
+    /// Creates a bounded offer that retains every compatibility constraint.
     pub fn new(
+        role: impl Into<String>,
         ranges: impl IntoIterator<Item = HumanControlProtocolVersionRange>,
+        schema_ids: impl IntoIterator<Item = String>,
     ) -> Result<Self, HumanControlProtocolValidationError> {
+        let role = role.into();
         let mut ranges = ranges.into_iter().collect::<Vec<_>>();
-        if ranges.is_empty() || ranges.len() > MAX_HUMAN_CONTROL_VERSION_RANGES {
+        let schema_ids = schema_ids.into_iter().collect::<Vec<_>>();
+        if !valid_negotiation_identity(&role)
+            || ranges.is_empty()
+            || ranges.len() > MAX_HUMAN_CONTROL_VERSION_RANGES
+            || schema_ids.is_empty()
+            || schema_ids.len() > MAX_HUMAN_CONTROL_SCHEMA_IDS
+            || schema_ids
+                .iter()
+                .any(|schema_id| !valid_negotiation_identity(schema_id))
+        {
             return Err(HumanControlProtocolValidationError::InvalidVersionOffer);
         }
         let majors = ranges
@@ -232,14 +250,33 @@ impl HumanControlVersionOffer {
         if majors.len() != ranges.len() {
             return Err(HumanControlProtocolValidationError::InvalidVersionOffer);
         }
+        if schema_ids.iter().collect::<BTreeSet<_>>().len() != schema_ids.len() {
+            return Err(HumanControlProtocolValidationError::InvalidVersionOffer);
+        }
         ranges.sort_by_key(|range| range.major);
-        Ok(Self { ranges })
+        Ok(Self {
+            role,
+            ranges,
+            schema_ids,
+        })
+    }
+
+    /// Returns the exact offered controller role.
+    #[must_use]
+    pub fn role(&self) -> &str {
+        &self.role
     }
 
     /// Returns offered ranges in ascending major-version order.
     #[must_use]
     pub fn ranges(&self) -> &[HumanControlProtocolVersionRange] {
         &self.ranges
+    }
+
+    /// Returns the bounded schema identities offered by the controller.
+    #[must_use]
+    pub fn schema_ids(&self) -> &[String] {
+        &self.schema_ids
     }
 
     /// Selects the highest compatible version implemented by this Broker.
@@ -250,6 +287,15 @@ impl HumanControlVersionOffer {
             .filter_map(|range| range.highest_compatible(HumanControlProtocolVersion::current()))
             .max()
     }
+}
+
+fn valid_negotiation_identity(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_HUMAN_CONTROL_NEGOTIATION_ID_BYTES
+        && value.is_ascii()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
 /// Authentication state required before one operation may be dispatched.
@@ -1116,28 +1162,39 @@ mod tests {
 
     #[test]
     fn version_offer_is_canonical_bounded_and_negotiates_only_current_major() {
-        let offer = HumanControlVersionOffer::new([
-            HumanControlProtocolVersionRange::new(2, 0, 4).expect("future range"),
-            HumanControlProtocolVersionRange::new(1, 0, 7).expect("current range"),
-        ])
+        let offer = HumanControlVersionOffer::new(
+            "human-controller",
+            [
+                HumanControlProtocolVersionRange::new(2, 0, 4).expect("future range"),
+                HumanControlProtocolVersionRange::new(1, 0, 7).expect("current range"),
+            ],
+            [HUMAN_CONTROL_SCHEMA_ID.to_owned()],
+        )
         .expect("canonical offer");
+        assert_eq!(offer.role(), "human-controller");
+        assert_eq!(offer.schema_ids(), [HUMAN_CONTROL_SCHEMA_ID]);
         assert_eq!(offer.ranges()[0].major(), 1);
         assert_eq!(
             offer.negotiate_current(),
             Some(HumanControlProtocolVersion::current())
         );
 
-        let future_only =
-            HumanControlVersionOffer::new([
-                HumanControlProtocolVersionRange::new(2, 0, 0).expect("future range")
-            ])
-            .expect("bounded offer");
+        let future_only = HumanControlVersionOffer::new(
+            "human-controller",
+            [HumanControlProtocolVersionRange::new(2, 0, 0).expect("future range")],
+            [HUMAN_CONTROL_SCHEMA_ID.to_owned()],
+        )
+        .expect("bounded offer");
         assert_eq!(future_only.negotiate_current(), None);
         assert_eq!(
-            HumanControlVersionOffer::new([
-                HumanControlProtocolVersionRange::new(1, 0, 0).expect("range"),
-                HumanControlProtocolVersionRange::new(1, 1, 1).expect("duplicate major"),
-            ]),
+            HumanControlVersionOffer::new(
+                "human-controller",
+                [
+                    HumanControlProtocolVersionRange::new(1, 0, 0).expect("range"),
+                    HumanControlProtocolVersionRange::new(1, 1, 1).expect("duplicate major"),
+                ],
+                [HUMAN_CONTROL_SCHEMA_ID.to_owned()],
+            ),
             Err(HumanControlProtocolValidationError::InvalidVersionOffer)
         );
         assert_eq!(
@@ -1188,12 +1245,16 @@ mod tests {
         );
 
         let future = read("human-control-future.json");
-        let offer = HumanControlVersionOffer::new([HumanControlProtocolVersionRange::new(
-            future.protocol.major,
-            future.protocol.minor,
-            future.protocol.minor,
+        let offer = HumanControlVersionOffer::new(
+            "human-controller",
+            [HumanControlProtocolVersionRange::new(
+                future.protocol.major,
+                future.protocol.minor,
+                future.protocol.minor,
+            )
+            .expect("future range")],
+            ["keptnear.human-control.schema.v2".to_owned()],
         )
-        .expect("future range")])
         .expect("future offer");
         assert_eq!(offer.negotiate_current(), None);
     }

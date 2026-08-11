@@ -111,6 +111,10 @@ Broker selects the highest mutually supported minor version within its current
 major. No shared major produces `protocol-incompatible`. Operations whose
 `introducedMinor` exceeds the selected minor are unavailable. Version 1.0
 negotiates the complete catalog below rather than a Consumer capability set.
+The typed offer retains the bounded role and schema list as well as the version
+ranges. The Broker requires the exact `human-controller` role and requires the
+current schema identity to be present before moving the connection into the
+negotiated phase; a shared version alone is insufficient.
 
 A successful result contains only the selected version, schema identity,
 ephemeral Broker instance identity, global limits, and ordered operation names.
@@ -259,9 +263,16 @@ already received by a compatible child or remote service.
 Audit results use only existing fixed audit fields and stable identities. Audit
 pages and exports reject limits outside 1 through 256. A Human Control export
 uses the exact accepted request limit and remains independently byte-bounded.
+`unlock.approve` compares the submitted Vault identity with the immutable
+pending subject before resolving it. `credential.authorize` likewise compares
+the submitted capability name and version before creating an Access Rule; a
+stale or confused controller request leaves the pending decision unchanged.
 `repair.prepare` and `shutdown` first lock machine Vault sessions and invalidate
-live Grants; neither operation clears protected device state, resumes pause,
-changes portable Vaults, removes host configuration, or edits Agent policy.
+live Grants. Before any quiescence, `repair.prepare` requires the expected
+component to be the Broker and the expected Human Control protocol to equal the
+running version. Neither operation clears protected device state, resumes
+pause, changes portable Vaults, removes host configuration, or edits Agent
+policy.
 
 ## Fixed Failures
 

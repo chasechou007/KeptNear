@@ -644,6 +644,15 @@ instant up to, but not including, their expiry. An expired rule can be removed
 and replaced by a fresh explicit approval, with insertion failure leaving the
 target denied.
 
+Human Control decision requests retain their comparison inputs through typed
+dispatch. Unlock approval must match both the pending request identity and its
+Vault identity. Access Rule creation must match the pending capability name and
+version in addition to the selected field, confirmation policy, and lifetime.
+Negotiation preserves and validates the controller role and schema identities,
+and repair validates the expected Broker component and Human Control protocol
+before it can quiesce sessions or grants. Mismatches fail without resolving the
+pending request or changing runtime state.
+
 Evaluation requires the Secret Field kind obtained by trusted Broker code from
 authenticated vault content, never a Consumer assertion. It matches every
 target identity and the capability version exactly, then returns either no
