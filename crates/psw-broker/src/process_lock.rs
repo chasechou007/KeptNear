@@ -34,6 +34,8 @@ pub enum BrokerProcessLockError {
     UnexpectedFileType,
     /// The lock file belongs to another operating-system user.
     UnexpectedOwner,
+    /// The lock inode has another hard-link name and must not be truncated.
+    HardLinked,
     /// Existing permissions expose the lock outside the owning user.
     InsecurePermissions {
         /// Observed permission bits.
@@ -61,6 +63,7 @@ impl Display for BrokerProcessLockError {
             Self::UnexpectedOwner => {
                 formatter.write_str("Broker process lock has an unexpected owner")
             }
+            Self::HardLinked => formatter.write_str("Broker process lock must not be hard linked"),
             Self::InsecurePermissions { mode } => write!(
                 formatter,
                 "Broker process lock must use owner-only permissions (found {mode:04o})"
@@ -261,6 +264,9 @@ fn validate_lock_metadata(metadata: &fs::Metadata) -> Result<(), BrokerProcessLo
     if metadata.uid() != nix::unistd::geteuid().as_raw() {
         return Err(BrokerProcessLockError::UnexpectedOwner);
     }
+    if metadata.nlink() != 1 {
+        return Err(BrokerProcessLockError::HardLinked);
+    }
     let mode = metadata.mode() & 0o777;
     if mode & 0o077 != 0 {
         return Err(BrokerProcessLockError::InsecurePermissions { mode });
@@ -309,17 +315,25 @@ mod tests {
     }
 
     #[test]
-    fn symbolic_link_and_broad_stale_file_fail_closed() {
+    fn symbolic_hard_link_and_broad_stale_file_fail_closed_without_target_mutation() {
         let (home, paths) = paths("unsafe");
         let lock_path = paths.runtime().join(BROKER_PROCESS_LOCK_FILENAME);
         let target = paths.runtime().join("target");
         fs::write(&target, b"stale").expect("target");
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("target mode");
         symlink(&target, &lock_path).expect("symlink");
         assert_eq!(
             BrokerProcessLock::acquire(&paths).unwrap_err(),
             BrokerProcessLockError::SymbolicLink
         );
         fs::remove_file(&lock_path).expect("remove link");
+        fs::hard_link(&target, &lock_path).expect("hard link");
+        assert_eq!(
+            BrokerProcessLock::acquire(&paths).unwrap_err(),
+            BrokerProcessLockError::HardLinked
+        );
+        assert_eq!(fs::read(&target).expect("unchanged target"), b"stale");
+        fs::remove_file(&lock_path).expect("remove hard link");
         fs::write(&lock_path, b"stale").expect("stale file");
         fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).expect("broad mode");
         assert_eq!(

@@ -2101,6 +2101,7 @@ impl DeviceStateStore {
         let mut connection = open_connection(&database_path)?;
         let sqlcipher_version = key_and_configure(&connection, root_key)?;
         authenticate_existing_database(&connection)?;
+        verify_database_integrity(&connection)?;
         migrate_schema(&mut connection)?;
         verify_schema(&connection)?;
         configure_authenticated_connection(&connection)?;
@@ -2618,6 +2619,10 @@ fn read_schema_version(connection: &Connection) -> Result<i64, DeviceStateError>
 fn verify_authenticated_database(connection: &Connection) -> Result<(), DeviceStateError> {
     verify_schema(connection)?;
 
+    verify_database_integrity(connection)
+}
+
+fn verify_database_integrity(connection: &Connection) -> Result<(), DeviceStateError> {
     let mut statement = connection
         .prepare("PRAGMA cipher_integrity_check")
         .map_err(|_| DeviceStateError::AuthenticationFailed)?;
@@ -4004,6 +4009,64 @@ mod tests {
                 supported: 2,
             }
         );
+    }
+
+    #[test]
+    fn corrupt_v1_state_is_not_migrated_before_integrity_check() {
+        let state = TestStateDirectory::new("corrupt-v1-migration");
+        let key = root_key(33);
+        let store = DeviceStateStore::initialize_at(&state.path, &key, timestamp(100))
+            .expect("initialize encrypted state");
+        store
+            .connection
+            .execute_batch(
+                "CREATE TABLE corruption_target(payload BLOB) STRICT;
+                 INSERT INTO corruption_target(payload) VALUES(zeroblob(32768));
+                 DROP TABLE controller_authority;
+                 PRAGMA user_version = 1;
+                 PRAGMA wal_checkpoint(TRUNCATE);",
+            )
+            .expect("construct multi-page authenticated v1 fixture");
+        let read_pragma = |pragma| {
+            store
+                .connection
+                .query_row(pragma, [], |row| match row.get_ref(0)? {
+                    ValueRef::Integer(value) => Ok(value),
+                    ValueRef::Text(value) => std::str::from_utf8(value)
+                        .ok()
+                        .and_then(|value| value.parse::<i64>().ok())
+                        .ok_or(rusqlite::Error::InvalidQuery),
+                    _ => Err(rusqlite::Error::InvalidQuery),
+                })
+                .expect("integer pragma")
+        };
+        let page_size = read_pragma("PRAGMA page_size");
+        let page_count = read_pragma("PRAGMA page_count");
+        assert!(page_count > 1);
+        let tamper_offset =
+            u64::try_from((page_count - 1) * page_size + 100).expect("positive database offset");
+        drop(store);
+
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(state.database_path())
+            .expect("open database for tamper");
+        file.seek(SeekFrom::Start(tamper_offset))
+            .expect("seek non-schema page");
+        file.write_all(&[0xff]).expect("tamper non-schema page");
+        file.sync_all().expect("sync tamper");
+        drop(file);
+
+        assert_eq!(
+            DeviceStateStore::open_at(&state.path, &key).expect_err("reject corrupt v1 state"),
+            DeviceStateError::AuthenticationFailed
+        );
+
+        let connection = open_connection(&state.database_path()).expect("reopen page one");
+        key_and_configure(&connection, &key).expect("key database");
+        authenticate_existing_database(&connection).expect("authenticate schema page");
+        assert_eq!(read_schema_version(&connection).expect("schema version"), 1);
     }
 
     #[test]

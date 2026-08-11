@@ -31,10 +31,7 @@ final class PSWMacWorkflowTests: XCTestCase {
         XCTAssertEqual(current["Label"] as? String, "app.keptnear.broker")
         XCTAssertEqual(
             current["ProgramArguments"] as? [String],
-            [
-                "/Applications/KeptNear.app/Contents/Helpers/keptnear-broker",
-                "--service"
-            ]
+            ["/Applications/KeptNear.app/Contents/Helpers/keptnear-broker"]
         )
 
         let future = try load("launch-agent-future.plist")

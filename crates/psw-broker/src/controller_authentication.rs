@@ -324,13 +324,22 @@ impl FailureTracker {
                 .is_some_and(|events| events.len() >= MAX_CONTROLLER_FAILURES_PER_IDENTITY)
     }
 
-    fn record(&mut self, controller_id: ControllerId, now: Instant) {
+    fn record_if_allowed(&mut self, controller_id: ControllerId, now: Instant) -> bool {
         self.prune(now);
+        if self.global.len() >= MAX_CONTROLLER_FAILURES_GLOBALLY
+            || self
+                .by_controller
+                .get(&controller_id)
+                .is_some_and(|events| events.len() >= MAX_CONTROLLER_FAILURES_PER_IDENTITY)
+        {
+            return false;
+        }
         self.global.push_back(now);
         self.by_controller
             .entry(controller_id)
             .or_default()
             .push_back(now);
+        true
     }
 
     fn prune(&mut self, now: Instant) {
@@ -549,12 +558,17 @@ impl ControllerAuthenticationConnection {
         now: Instant,
         error: ControllerAuthenticationError,
     ) -> Result<T, ControllerAuthenticationError> {
-        self.service
+        let recorded = self
+            .service
             .failures
             .lock()
             .map_err(|_| ControllerAuthenticationError::OperationFailed)?
-            .record(controller_id, now);
-        Err(error)
+            .record_if_allowed(controller_id, now);
+        if recorded {
+            Err(error)
+        } else {
+            Err(ControllerAuthenticationError::RateLimited)
+        }
     }
 }
 
@@ -821,6 +835,33 @@ mod tests {
                 now + Duration::from_secs(1),
             ),
             Err(ControllerAuthenticationError::RateLimited)
+        );
+
+        for nonce in 50..150 {
+            let mut malformed = budget_service.connection();
+            assert_eq!(
+                malformed.challenge(
+                    request(
+                        &key,
+                        ControllerAuthenticationMode::Bootstrap,
+                        nonce,
+                        "consumer",
+                    ),
+                    None,
+                    now + Duration::from_secs(1),
+                ),
+                Err(ControllerAuthenticationError::RateLimited)
+            );
+        }
+        let failures = budget_service.failures.lock().expect("failure tracker");
+        assert_eq!(failures.global.len(), MAX_CONTROLLER_FAILURES_PER_IDENTITY);
+        assert_eq!(
+            failures
+                .by_controller
+                .get(&key.controller_id())
+                .expect("controller failures")
+                .len(),
+            MAX_CONTROLLER_FAILURES_PER_IDENTITY
         );
     }
 }
