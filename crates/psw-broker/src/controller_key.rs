@@ -400,6 +400,33 @@ where
         }
     }
 
+    /// Loads authority for a challenge without creating or replacing a seed.
+    pub fn prepare_for_challenge(
+        &self,
+        record: Option<ControllerAuthorityRecord>,
+    ) -> Result<PreparedControllerAuthority, ControllerAuthorityError> {
+        if self.load_removal_marker()? {
+            return Err(ControllerAuthorityError::RemovalPending);
+        }
+        match (self.load_seed()?, record) {
+            (None, None) | (None, Some(_)) => Err(ControllerAuthorityError::IncompleteAuthority),
+            (Some(key), None) => Ok(PreparedControllerAuthority {
+                mode: ControllerBootstrapMode::ResumeBootstrap,
+                key,
+            }),
+            (Some(key), Some(record))
+                if key.controller_id() == record.controller_id()
+                    && key.public_key() == record.public_key() =>
+            {
+                Ok(PreparedControllerAuthority {
+                    mode: ControllerBootstrapMode::AuthenticateExisting,
+                    key,
+                })
+            }
+            (Some(_), Some(_)) => Err(ControllerAuthorityError::IncompleteAuthority),
+        }
+    }
+
     /// Creates or resumes the durable marker that must precede authority removal.
     pub fn begin_or_resume_removal(&self) -> Result<(), ControllerAuthorityError> {
         if !self.load_removal_marker()? {
@@ -567,6 +594,12 @@ mod tests {
     #[test]
     fn absent_authority_creates_once_and_key_only_resumes_without_regeneration() {
         let manager = ControllerAuthorityManager::new(MemoryStore::default());
+        assert!(matches!(
+            manager.prepare_for_challenge(None),
+            Err(ControllerAuthorityError::IncompleteAuthority)
+        ));
+        assert_eq!(manager.store.creates.get(), 0);
+
         let prepared = manager
             .prepare_for_explicit_enable(None)
             .expect("prepare new authority");
@@ -575,8 +608,8 @@ mod tests {
         drop(prepared);
 
         let resumed = manager
-            .prepare_for_explicit_enable(None)
-            .expect("resume bootstrap");
+            .prepare_for_challenge(None)
+            .expect("challenge resumes prepared bootstrap");
         assert_eq!(resumed.mode(), ControllerBootstrapMode::ResumeBootstrap);
         assert_eq!(manager.store.creates.get(), 1);
     }

@@ -648,6 +648,9 @@ Human Control decision requests retain their comparison inputs through typed
 dispatch. Unlock approval must match both the pending request identity and its
 Vault identity. Access Rule creation must match the pending capability name and
 version in addition to the selected field, confirmation policy, and lifetime.
+Allow Once and long-term authorization both compare submitted Credential and
+Secret Field identities with the immutable pending target, and denial requires
+the fixed `deny` decision before mutation.
 Negotiation preserves and validates the controller role and schema identities,
 and repair validates the expected Broker component and Human Control protocol
 before it can quiesce sessions or grants. Mismatches fail without resolving the

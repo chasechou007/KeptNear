@@ -12,6 +12,8 @@ pub const HUMAN_CONTROL_PROTOCOL_MAJOR: u16 = 1;
 pub const HUMAN_CONTROL_PROTOCOL_MINOR: u16 = 0;
 /// Immutable schema identity for the complete version 1 operation catalog.
 pub const HUMAN_CONTROL_SCHEMA_ID: &str = "keptnear.human-control.schema.v1";
+/// Fixed decision accepted by `pending.deny`.
+pub const HUMAN_CONTROL_DENY_DECISION: &str = "deny";
 /// Maximum accepted or emitted framed human-control payload.
 pub const MAX_HUMAN_CONTROL_FRAME_LENGTH: usize = 1024 * 1024;
 /// Maximum unauthenticated negotiation request or response.

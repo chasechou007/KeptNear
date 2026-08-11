@@ -23,9 +23,9 @@ use crate::{
     HumanControlOperation, HumanControlProtocolFailure, HumanControlProtocolVersion,
     HumanControlRequiredAction, HumanControlVersionOffer, PackagedComponent, PairingComparisonCode,
     PairingRequestId, RuleLifetime, SecretFieldId, SecretFieldKind, StateTimestamp, UsageProfile,
-    UsageProfileDefinition, UsageProfileId, UseGrantId, CONTROLLER_ROLE, HUMAN_CONTROL_SCHEMA_ID,
-    MAX_HUMAN_CONTROL_AUDIT_EVENTS, MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
-    MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
+    UsageProfileDefinition, UsageProfileId, UseGrantId, CONTROLLER_ROLE,
+    HUMAN_CONTROL_DENY_DECISION, HUMAN_CONTROL_SCHEMA_ID, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+    MAX_HUMAN_CONTROL_COLLECTION_ITEMS, MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
 };
 
 const MAX_HUMAN_CONTROL_AUDIT_EXPORT_BYTES: usize = MAX_HUMAN_CONTROL_RESPONSE_LENGTH / 2;
@@ -116,6 +116,8 @@ pub enum HumanControlRequest {
     PendingDeny {
         /// Stable pending decision identity.
         request_id: BrokerPendingRequestId,
+        /// Fixed denial decision retained from the closed wire body.
+        decision: String,
     },
     /// Approve one exact Consumer pairing.
     PairingApprove {
@@ -140,15 +142,15 @@ pub enum HumanControlRequest {
     CredentialAllowOnce {
         /// Persisted field or credential-access approval identity.
         request_id: ApprovalRequestId,
-        /// Exact candidate selection for a new-Credential request.
-        selection: Option<BrokerCredentialCandidateSelection>,
+        /// Exact Credential and Secret Field submitted by the controller.
+        selection: BrokerCredentialCandidateSelection,
     },
     /// Create one exact Access Rule.
     CredentialAuthorize {
         /// Persisted field or credential-access approval identity.
         request_id: ApprovalRequestId,
-        /// Exact candidate selection for a new-Credential request.
-        selection: Option<BrokerCredentialCandidateSelection>,
+        /// Exact Credential and Secret Field submitted by the controller.
+        selection: BrokerCredentialCandidateSelection,
         /// Human-selected confirmation policy for the Access Rule.
         confirmation_policy: ConfirmationPolicy,
         /// Human-selected persistent or absolute expiry boundary.
@@ -811,6 +813,24 @@ where
         }
     }
 
+    /// Prepares Controller authority only after trusted App enablement approval.
+    ///
+    /// This method is deliberately outside the Human Control wire catalog. The
+    /// future activation-qualified App flow must verify its artifact and obtain
+    /// explicit local approval before calling it.
+    pub fn prepare_controller_authority_after_explicit_enable(
+        &self,
+        runtime: &BrokerRuntime,
+    ) -> Result<ControllerBootstrapMode, HumanControlDispatchError> {
+        let record = runtime
+            .controller_authority_record()
+            .map_err(map_runtime_error)?;
+        self.authority
+            .prepare_for_explicit_enable(record)
+            .map(|prepared| prepared.mode())
+            .map_err(map_authority_error)
+    }
+
     /// Dispatches exactly one typed request through negotiation and controller auth.
     pub fn dispatch(
         &self,
@@ -921,7 +941,7 @@ where
             .map_err(map_runtime_error)?;
         let prepared = self
             .authority
-            .prepare_for_explicit_enable(record)
+            .prepare_for_challenge(record)
             .map_err(map_authority_error)?;
         let expected_mode = match prepared.mode() {
             ControllerBootstrapMode::BootstrapNew | ControllerBootstrapMode::ResumeBootstrap => {
@@ -1049,7 +1069,11 @@ where
                         .collect(),
                 ))
             }
-            HumanControlRequest::PendingDeny { request_id } => {
+            HumanControlRequest::PendingDeny {
+                request_id,
+                decision,
+            } => {
+                validate_pending_deny_decision(&decision)?;
                 runtime
                     .deny_pending_request(request_id, observed_at)
                     .map_err(map_runtime_error)?;
@@ -1086,7 +1110,7 @@ where
                 selection,
             } => {
                 runtime
-                    .allow_once_pending_request(request_id, selection, observed_at)
+                    .allow_once_pending_request(request_id, Some(selection), observed_at)
                     .map_err(map_runtime_error)?;
                 Ok(HumanControlResponse::DecisionReceipt { changed: true })
             }
@@ -1100,7 +1124,7 @@ where
                 let created = runtime
                     .configure_pending_request_access_rule(
                         request_id,
-                        selection,
+                        Some(selection),
                         capability,
                         confirmation_policy,
                         rule_lifetime,
@@ -1246,6 +1270,16 @@ fn validate_repair_target(
     Ok(())
 }
 
+fn validate_pending_deny_decision(decision: &str) -> Result<(), HumanControlDispatchError> {
+    if decision == HUMAN_CONTROL_DENY_DECISION {
+        Ok(())
+    } else {
+        Err(HumanControlDispatchError::code(
+            HumanControlFailureCode::InvalidRequest,
+        ))
+    }
+}
+
 fn grant_revoke_response(removed: bool) -> HumanControlResponse {
     HumanControlResponse::RevocationSummary(BrokerRevocationSummary::for_use_grant(removed))
 }
@@ -1356,6 +1390,14 @@ mod tests {
     }
 
     impl MemoryControllerKeyStore {
+        fn empty() -> Self {
+            Self {
+                seed: RefCell::new(None),
+                marker: Cell::new(false),
+                loads: Rc::new(Cell::new(0)),
+            }
+        }
+
         fn seeded(byte: u8) -> Self {
             Self {
                 seed: RefCell::new(Some(vec![byte; 32])),
@@ -1487,7 +1529,10 @@ mod tests {
         assert!(matches!(
             HumanControlRequest::CredentialAuthorize {
                 request_id: ApprovalRequestId::generate(),
-                selection: None,
+                selection: BrokerCredentialCandidateSelection::new(
+                    CredentialId::generate(),
+                    SecretFieldId::generate(),
+                ),
                 confirmation_policy: ConfirmationPolicy::EveryUse,
                 rule_lifetime: RuleLifetime::Until(expires_at),
                 capability: Capability::v1(crate::CapabilityName::HttpRequest),
@@ -1498,6 +1543,14 @@ mod tests {
             } if actual == expires_at
         ));
         assert!(validate_human_control_audit_limit(256).is_ok());
+        assert!(validate_pending_deny_decision(HUMAN_CONTROL_DENY_DECISION).is_ok());
+        assert_eq!(
+            validate_pending_deny_decision("approve")
+                .expect_err("reject contradictory decision")
+                .failure()
+                .code(),
+            HumanControlFailureCode::InvalidRequest
+        );
         assert_eq!(
             validate_human_control_audit_limit(257)
                 .expect_err("reject oversized audit page")
@@ -1557,6 +1610,53 @@ mod tests {
             assert_eq!(state.phase(), HumanControlConnectionPhase::Closed);
         }
         runtime.shutdown_at(timestamp(102)).expect("shutdown");
+        drop(runtime);
+        fs::remove_dir_all(home).expect("cleanup");
+    }
+
+    #[test]
+    fn unauthenticated_challenge_cannot_create_controller_authority() {
+        let (home, mut runtime) = runtime("challenge-no-create");
+        let dispatcher = HumanControlDispatcher::new(
+            runtime.process().broker_instance_id(),
+            MemoryControllerKeyStore::empty(),
+        );
+        let mut state = dispatcher.connection();
+        let now = Instant::now();
+        dispatcher
+            .dispatch(&mut runtime, &mut state, hello(), now, timestamp(101))
+            .expect("hello");
+        let untrusted_key =
+            ControllerSigningKey::from_stored_bytes(vec![0x32; 32]).expect("request key");
+        let request = ControllerChallengeRequest::new(
+            ControllerAuthenticationMode::Bootstrap,
+            HumanControlProtocolVersion::current(),
+            CONTROLLER_ROLE.to_owned(),
+            untrusted_key.controller_id(),
+            untrusted_key.public_key(),
+            crate::ControllerNonce::from_bytes([0x33; 32]),
+        )
+        .expect("challenge request");
+        let error = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::ControllerChallenge(request),
+                now,
+                timestamp(102),
+            )
+            .expect_err("authority was not explicitly prepared");
+        assert_eq!(
+            error.failure().code(),
+            HumanControlFailureCode::ControllerUnavailable
+        );
+        assert_eq!(
+            dispatcher
+                .prepare_controller_authority_after_explicit_enable(&runtime)
+                .expect("trusted explicit preparation"),
+            ControllerBootstrapMode::BootstrapNew
+        );
+        runtime.shutdown_at(timestamp(103)).expect("shutdown");
         drop(runtime);
         fs::remove_dir_all(home).expect("cleanup");
     }

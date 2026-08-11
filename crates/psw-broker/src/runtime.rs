@@ -1739,10 +1739,15 @@ impl BrokerRuntime {
     ) -> Result<(AuthorizationTarget, SecretFieldKind, VaultSessionId), BrokerRuntimeError> {
         match pending.subject() {
             ApprovalSubject::Access { target } => {
-                if selection.is_some() {
-                    return Err(BrokerRuntimeError::Approval(
-                        BrokerApprovalError::ApprovalUnavailable,
-                    ));
+                if let Some(selection) = selection {
+                    let field_scope = target.field_scope();
+                    if selection.credential_id() != field_scope.credential_id()
+                        || selection.secret_field_id() != field_scope.secret_field_id()
+                    {
+                        return Err(BrokerRuntimeError::Approval(
+                            BrokerApprovalError::ApprovalUnavailable,
+                        ));
+                    }
                 }
                 let vault_session_id =
                     self.current_vault_session_id(target.field_scope().vault_id())?;

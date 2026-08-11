@@ -190,6 +190,11 @@ The fail-closed sequence is:
    transaction;
 9. only after commit may the connection become an authenticated controller.
 
+Seed creation in step 3 is available only through the non-Wire trusted App
+enablement boundary after step 1. An unauthenticated `controller.challenge`
+never creates or replaces Keychain state; it can only load authority already
+prepared by explicit enablement or resume a permitted key-only bootstrap.
+
 There is no cross-store claim of atomicity between Keychain and SQLCipher. A
 crash after Keychain creation leaves `key-only`, which is not ready but may
 resume the signed bootstrap only when the removal marker is absent. Marker

@@ -427,13 +427,26 @@ fn human_approval_actions_preserve_exact_vault_and_capability_bindings() {
         .expect("access approval");
     let access_id = access.receipt().approval_request_id();
     assert!(matches!(
+        runtime.allow_once_pending_request(
+            access_id,
+            Some(BrokerCredentialCandidateSelection::new(
+                CredentialId::generate(),
+                SecretFieldId::generate(),
+            )),
+            timestamp(106),
+        ),
+        Err(BrokerRuntimeError::Approval(
+            BrokerApprovalError::ApprovalUnavailable
+        ))
+    ));
+    assert!(matches!(
         runtime.configure_pending_request_access_rule(
             access_id,
             None,
             Capability::v1(CapabilityName::ProcessRun),
             ConfirmationPolicy::EveryUse,
             RuleLifetime::Persistent,
-            timestamp(106),
+            timestamp(107),
         ),
         Err(BrokerRuntimeError::Approval(
             BrokerApprovalError::ApprovalUnavailable
@@ -441,12 +454,12 @@ fn human_approval_actions_preserve_exact_vault_and_capability_bindings() {
     ));
     assert_eq!(
         runtime
-            .poll_approval(consumer.consumer_id(), access_id, timestamp(107))
+            .poll_approval(consumer.consumer_id(), access_id, timestamp(108))
             .expect("access remains pending")
             .status(),
         ApprovalStatus::Pending
     );
-    runtime.shutdown_at(timestamp(108)).expect("shutdown");
+    runtime.shutdown_at(timestamp(109)).expect("shutdown");
 }
 
 #[test]

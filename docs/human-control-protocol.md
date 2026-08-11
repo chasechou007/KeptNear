@@ -222,6 +222,13 @@ exposes any remainder on a subsequent read. Results never contain a Secret
 Field value or submitted unlock credential. Pairing approval establishes
 identity only and grants no credential access.
 
+`pending.deny` retains and requires the exact fixed `deny` decision before it
+changes the pending request. Both credential approval operations retain the
+submitted Credential and Secret Field identities. Existing-field approvals
+compare those identities with the immutable pending target, while
+new-Credential approvals compare them with the current human-reviewed
+candidate. A mismatch leaves the request pending.
+
 Credential-review metadata uses a shared half-response byte budget in addition
 to the candidate-count bound. Individual titles, template identities, tags,
 field roles, and labels are UTF-8-safely bounded; Secret Field metadata is
