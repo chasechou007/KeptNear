@@ -6,15 +6,16 @@ use psw_core::{SecretBytes, VaultId};
 use crate::{
     bundled_usage_profile_templates, recommend_bundled_usage_profile, ApprovalRequestId,
     BrokerAppsToolsSnapshot, BrokerAuditClearConfirmation, BrokerAuditClearSummary,
-    BrokerAuditCursor, BrokerAuditExport, BrokerAuditFilter, BrokerAuditPage, BrokerConsumerDetail,
-    BrokerConsumerIdentityEvidence, BrokerCredentialCandidateSelection,
+    BrokerAuditCursor, BrokerAuditExport, BrokerAuditFilter, BrokerAuditPage,
+    BrokerConsumerAuditSummary, BrokerConsumerDetail, BrokerConsumerIdentityEvidence,
+    BrokerConsumerSummary, BrokerCredentialCandidateSelection, BrokerFieldGrantSummary,
     BrokerGrantInvalidationSummary, BrokerHumanCredentialCandidate, BrokerHumanCredentialReview,
     BrokerHumanSecretFieldCandidate, BrokerInstanceId, BrokerPairingUserApproval,
     BrokerPendingRequest, BrokerPendingRequestId, BrokerPendingRequestKind,
     BrokerReadinessProjection, BrokerRevocationSummary, BrokerRuntime, BrokerRuntimeError,
-    BrokerVaultSessionSnapshot, BundledUsageProfileRecommendation, BundledUsageProfileTemplate,
-    Capability, ConfirmationPolicy, ConsumerEvidenceFingerprint, ConsumerId,
-    ControllerAuthenticationChallenge, ControllerAuthenticationCompletion,
+    BrokerUsageProfileSummary, BrokerVaultSessionSnapshot, BundledUsageProfileRecommendation,
+    BundledUsageProfileTemplate, Capability, ConfirmationPolicy, ConsumerEvidenceFingerprint,
+    ConsumerId, ControllerAuthenticationChallenge, ControllerAuthenticationCompletion,
     ControllerAuthenticationConnection, ControllerAuthenticationError,
     ControllerAuthenticationMode, ControllerAuthenticationProof, ControllerAuthenticationService,
     ControllerAuthorityError, ControllerAuthorityManager, ControllerBootstrapMode,
@@ -447,6 +448,86 @@ pub struct HumanControlUsageProfileCatalog {
     pub recommendation: Option<BundledUsageProfileRecommendation>,
 }
 
+/// Bounded Vault authorization inventory for one human-control response.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HumanControlAuthorizationSnapshot {
+    /// Persisted machine-access pause state.
+    pub paused: bool,
+    /// Stable authorized Credential identities, capped at the protocol limit.
+    pub authorized_credential_ids: Vec<CredentialId>,
+    /// Paired Consumer summaries, capped at the protocol limit.
+    pub consumers: Vec<BrokerConsumerSummary>,
+    /// Whether additional Credential identities were omitted.
+    pub authorized_credentials_truncated: bool,
+    /// Whether additional Consumers were omitted.
+    pub consumers_truncated: bool,
+}
+
+impl From<BrokerAppsToolsSnapshot> for HumanControlAuthorizationSnapshot {
+    fn from(snapshot: BrokerAppsToolsSnapshot) -> Self {
+        Self {
+            paused: snapshot.paused(),
+            authorized_credentials_truncated: snapshot.authorized_credential_ids().len()
+                > MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
+            authorized_credential_ids: snapshot
+                .authorized_credential_ids()
+                .iter()
+                .copied()
+                .take(MAX_HUMAN_CONTROL_COLLECTION_ITEMS)
+                .collect(),
+            consumers_truncated: snapshot.consumers().len() > MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
+            consumers: snapshot
+                .consumers()
+                .iter()
+                .take(MAX_HUMAN_CONTROL_COLLECTION_ITEMS)
+                .cloned()
+                .collect(),
+        }
+    }
+}
+
+/// Bounded management detail for one paired Consumer.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HumanControlConsumerDetail {
+    /// Stable Consumer identity and bounded presentation evidence.
+    pub consumer: BrokerConsumerSummary,
+    /// Field grants capped at the protocol collection limit.
+    pub field_grants: Vec<BrokerFieldGrantSummary>,
+    /// Usage Profiles capped at the protocol collection limit.
+    pub usage_profiles: Vec<BrokerUsageProfileSummary>,
+    /// Existing bounded recent audit projection.
+    pub recent_audit_events: Vec<BrokerConsumerAuditSummary>,
+    /// Whether additional field grants were omitted.
+    pub field_grants_truncated: bool,
+    /// Whether additional Usage Profiles were omitted.
+    pub usage_profiles_truncated: bool,
+}
+
+impl From<BrokerConsumerDetail> for HumanControlConsumerDetail {
+    fn from(detail: BrokerConsumerDetail) -> Self {
+        Self {
+            consumer: detail.consumer().clone(),
+            field_grants_truncated: detail.field_grants().len()
+                > MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
+            field_grants: detail
+                .field_grants()
+                .iter()
+                .take(MAX_HUMAN_CONTROL_COLLECTION_ITEMS)
+                .cloned()
+                .collect(),
+            usage_profiles_truncated: detail.usage_profiles().len()
+                > MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
+            usage_profiles: detail
+                .usage_profiles()
+                .iter()
+                .take(MAX_HUMAN_CONTROL_COLLECTION_ITEMS)
+                .cloned()
+                .collect(),
+            recent_audit_events: detail.recent_audit_events().to_vec(),
+        }
+    }
+}
+
 /// Closed secret-free response catalog for human-control protocol version 1.
 #[derive(Debug)]
 pub enum HumanControlResponse {
@@ -494,9 +575,9 @@ pub enum HumanControlResponse {
     /// Human-only credential metadata without values or request description.
     CredentialReview(HumanControlCredentialReview),
     /// Vault-scoped authorization summary.
-    AuthorizationSnapshot(BrokerAppsToolsSnapshot),
+    AuthorizationSnapshot(HumanControlAuthorizationSnapshot),
     /// Consumer management detail.
-    ConsumerDetail(BrokerConsumerDetail),
+    ConsumerDetail(HumanControlConsumerDetail),
     /// Offline Usage Profile catalog.
     UsageProfileCatalog(HumanControlUsageProfileCatalog),
     /// Created Usage Profile metadata.
@@ -906,10 +987,12 @@ where
             }
             HumanControlRequest::AuthorizationSnapshot { vault_id } => runtime
                 .apps_tools_snapshot(vault_id)
+                .map(HumanControlAuthorizationSnapshot::from)
                 .map(HumanControlResponse::AuthorizationSnapshot)
                 .map_err(map_runtime_error),
             HumanControlRequest::ConsumerDetail { consumer_id } => runtime
                 .apps_tools_consumer_detail(consumer_id)
+                .map(HumanControlConsumerDetail::from)
                 .map(HumanControlResponse::ConsumerDetail)
                 .map_err(map_runtime_error),
             HumanControlRequest::UsageProfileCatalog {
@@ -970,10 +1053,13 @@ where
                 filter,
                 cursor,
                 limit,
-            } => runtime
-                .view_audit_at(filter, cursor, limit, observed_at)
-                .map(HumanControlResponse::AuditPage)
-                .map_err(map_runtime_error),
+            } => {
+                validate_human_control_audit_limit(limit)?;
+                runtime
+                    .view_audit_at(filter, cursor, limit, observed_at)
+                    .map(HumanControlResponse::AuditPage)
+                    .map_err(map_runtime_error)
+            }
             HumanControlRequest::AuditClear {
                 filter,
                 confirmation,
@@ -1016,6 +1102,16 @@ const fn pending_projection_limit(pending_count: usize) -> usize {
         MAX_HUMAN_CONTROL_COLLECTION_ITEMS
     } else {
         pending_count
+    }
+}
+
+fn validate_human_control_audit_limit(limit: usize) -> Result<(), HumanControlDispatchError> {
+    if limit == 0 || limit > MAX_HUMAN_CONTROL_AUDIT_EVENTS {
+        Err(HumanControlDispatchError::code(
+            HumanControlFailureCode::InvalidRequest,
+        ))
+    } else {
+        Ok(())
     }
 }
 
@@ -1230,6 +1326,14 @@ mod tests {
                     && summary.use_grants_removed() == 1
         ));
         assert_eq!(pending_projection_limit(320), 256);
+        assert!(validate_human_control_audit_limit(256).is_ok());
+        assert_eq!(
+            validate_human_control_audit_limit(257)
+                .expect_err("reject oversized audit page")
+                .failure()
+                .code(),
+            HumanControlFailureCode::InvalidRequest
+        );
     }
 
     #[test]

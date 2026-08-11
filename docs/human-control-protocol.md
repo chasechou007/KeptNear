@@ -234,9 +234,11 @@ identity only and grants no credential access.
 
 Authorization projections contain stable identities, field kinds, capability
 versions, confirmation policy, rule lifetime, profile placement metadata,
-counts, and fixed state. A Usage Profile remains declarative placement and
-grants no access. Revocation prevents future KeptNear delivery and cannot erase
-material already received by a compatible child or remote service.
+counts, and fixed state. Credential, Consumer, Access Rule, and Usage Profile
+collections are each truncated to 256 entries and carry a corresponding
+truncation flag. A Usage Profile remains declarative placement and grants no
+access. Revocation prevents future KeptNear delivery and cannot erase material
+already received by a compatible child or remote service.
 
 ### Audit, Repair, And Shutdown
 
@@ -248,7 +250,9 @@ material already received by a compatible child or remote service.
 | `repair.prepare` | `RepairPrepare` | `RepairReadiness` |
 | `shutdown` | `Shutdown` | `ShutdownReceipt` |
 
-Audit results use only existing fixed audit fields and stable identities.
+Audit results use only existing fixed audit fields and stable identities. Audit
+pages reject limits outside 1 through 256, and Human Control exports include at
+most 256 events.
 `repair.prepare` and `shutdown` first lock machine Vault sessions and invalidate
 live Grants; neither operation clears protected device state, resumes pause,
 changes portable Vaults, removes host configuration, or edits Agent policy.

@@ -2,7 +2,7 @@ use std::fmt::{Display, Formatter};
 
 use crate::{
     BrokerVaultSessionError, BrokerVaultSessionSnapshot, ComponentMetadata,
-    HumanControlProtocolVersion, PackagedComponent,
+    HumanControlProtocolVersion, PackagedComponent, MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
 };
 
 /// Fixed protected-state category exposed after authenticated runtime startup.
@@ -20,6 +20,7 @@ pub struct BrokerReadinessProjection {
     protected_state: BrokerProtectedStateCategory,
     machine_access_paused: bool,
     vaults: Vec<BrokerVaultSessionSnapshot>,
+    vaults_truncated: bool,
 }
 
 impl BrokerReadinessProjection {
@@ -28,6 +29,8 @@ impl BrokerReadinessProjection {
         mut vaults: Vec<BrokerVaultSessionSnapshot>,
     ) -> Self {
         vaults.sort_by_key(|snapshot| snapshot.vault_id());
+        let vaults_truncated = vaults.len() > MAX_HUMAN_CONTROL_COLLECTION_ITEMS;
+        vaults.truncate(MAX_HUMAN_CONTROL_COLLECTION_ITEMS);
         Self {
             component: ComponentMetadata::current(
                 PackagedComponent::Broker,
@@ -38,6 +41,7 @@ impl BrokerReadinessProjection {
             protected_state: BrokerProtectedStateCategory::Authenticated,
             machine_access_paused,
             vaults,
+            vaults_truncated,
         }
     }
 
@@ -69,6 +73,12 @@ impl BrokerReadinessProjection {
     #[must_use]
     pub fn vaults(&self) -> &[BrokerVaultSessionSnapshot] {
         &self.vaults
+    }
+
+    /// Returns whether additional tracked Vault states were omitted.
+    #[must_use]
+    pub const fn vaults_truncated(&self) -> bool {
+        self.vaults_truncated
     }
 }
 
@@ -114,6 +124,7 @@ mod tests {
         );
         assert!(projection.machine_access_paused());
         assert!(projection.vaults().is_empty());
+        assert!(!projection.vaults_truncated());
         let debug = format!("{projection:?}");
         for forbidden in ["/Users/", "/private/", ".pswvault", "device-v1.db"] {
             assert!(!debug.contains(forbidden));
