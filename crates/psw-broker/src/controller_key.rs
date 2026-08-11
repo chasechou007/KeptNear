@@ -222,6 +222,35 @@ pub trait ControllerKeyStore {
     fn delete_removal_marker(&self) -> Result<bool, ControllerKeyStoreError>;
 }
 
+impl<T> ControllerKeyStore for &T
+where
+    T: ControllerKeyStore + ?Sized,
+{
+    fn load_seed(&self) -> Result<Option<ControllerSigningKey>, ControllerKeyStoreError> {
+        (*self).load_seed()
+    }
+
+    fn create_seed(&self, key: &ControllerSigningKey) -> Result<(), ControllerKeyStoreError> {
+        (*self).create_seed(key)
+    }
+
+    fn delete_seed(&self) -> Result<bool, ControllerKeyStoreError> {
+        (*self).delete_seed()
+    }
+
+    fn removal_pending(&self) -> Result<bool, ControllerKeyStoreError> {
+        (*self).removal_pending()
+    }
+
+    fn create_removal_marker(&self) -> Result<(), ControllerKeyStoreError> {
+        (*self).create_removal_marker()
+    }
+
+    fn delete_removal_marker(&self) -> Result<bool, ControllerKeyStoreError> {
+        (*self).delete_removal_marker()
+    }
+}
+
 /// Sanitized controller-authority bootstrap failure.
 #[derive(Debug)]
 pub enum ControllerAuthorityError {
@@ -231,6 +260,10 @@ pub enum ControllerAuthorityError {
     IncompleteAuthority,
     /// Seed creation raced or read-back did not match the generated seed.
     CreationVerificationFailed,
+    /// Destructive removal was completed without first establishing provenance.
+    RemovalNotStarted,
+    /// Marker, seed deletion, or final absence could not be verified.
+    RemovalVerificationFailed,
     /// A restricted Keychain operation failed.
     Store {
         /// Stable attempted operation.
@@ -247,6 +280,10 @@ impl Display for ControllerAuthorityError {
             Self::IncompleteAuthority => formatter.write_str("controller authority is incomplete"),
             Self::CreationVerificationFailed => {
                 formatter.write_str("controller key creation could not be verified")
+            }
+            Self::RemovalNotStarted => formatter.write_str("controller removal was not started"),
+            Self::RemovalVerificationFailed => {
+                formatter.write_str("controller removal could not be verified")
             }
             Self::Store { operation, source } => {
                 write!(formatter, "controller {operation:?} failed: {source}")
@@ -361,6 +398,53 @@ where
             }
             (Some(_), Some(_)) => Err(ControllerAuthorityError::IncompleteAuthority),
         }
+    }
+
+    /// Creates or resumes the durable marker that must precede authority removal.
+    pub fn begin_or_resume_removal(&self) -> Result<(), ControllerAuthorityError> {
+        if !self.load_removal_marker()? {
+            match self.store.create_removal_marker() {
+                Ok(()) | Err(ControllerKeyStoreError::AlreadyExists) => {}
+                Err(source) => {
+                    return Err(ControllerAuthorityError::Store {
+                        operation: ControllerKeyStoreOperation::CreateRemovalMarker,
+                        source,
+                    });
+                }
+            }
+        }
+        if self.load_removal_marker()? {
+            Ok(())
+        } else {
+            Err(ControllerAuthorityError::RemovalVerificationFailed)
+        }
+    }
+
+    /// Deletes and verifies the seed, then removes the durable marker last.
+    pub fn complete_pending_removal(&self) -> Result<bool, ControllerAuthorityError> {
+        if !self.load_removal_marker()? {
+            return Err(ControllerAuthorityError::RemovalNotStarted);
+        }
+        let seed_removed =
+            self.store
+                .delete_seed()
+                .map_err(|source| ControllerAuthorityError::Store {
+                    operation: ControllerKeyStoreOperation::DeleteSeed,
+                    source,
+                })?;
+        if self.load_seed()?.is_some() {
+            return Err(ControllerAuthorityError::RemovalVerificationFailed);
+        }
+        self.store
+            .delete_removal_marker()
+            .map_err(|source| ControllerAuthorityError::Store {
+                operation: ControllerKeyStoreOperation::DeleteRemovalMarker,
+                source,
+            })?;
+        if self.load_removal_marker()? {
+            return Err(ControllerAuthorityError::RemovalVerificationFailed);
+        }
+        Ok(seed_removed)
     }
 
     fn create_and_verify_seed(
@@ -540,6 +624,25 @@ mod tests {
             ControllerBootstrapMode::AuthenticateExisting
         );
         assert_eq!(manager.store.creates.get(), 0);
+    }
+
+    #[test]
+    fn removal_marker_precedes_verified_seed_deletion_and_is_removed_last() {
+        let manager = ControllerAuthorityManager::new(MemoryStore::with_seed(10));
+        manager.begin_or_resume_removal().expect("begin removal");
+        assert!(manager.store.marker.get());
+        assert!(manager.store.seed.borrow().is_some());
+        manager.begin_or_resume_removal().expect("resume removal");
+
+        assert!(manager
+            .complete_pending_removal()
+            .expect("complete removal"));
+        assert!(manager.store.seed.borrow().is_none());
+        assert!(!manager.store.marker.get());
+        assert!(matches!(
+            manager.complete_pending_removal(),
+            Err(ControllerAuthorityError::RemovalNotStarted)
+        ));
     }
 
     #[test]

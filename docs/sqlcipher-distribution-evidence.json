@@ -35,13 +35,13 @@
   "source": {
     "workspaceManifestSha256": "326028d1d1e44f636519f928ccb0fd1350450423b06a4fd81019fa25466c3344",
     "cargoLockSha256": "e46d468b993a895969747f4274651ac65064c0a5131a2171ed49565fb27cf9b3",
-    "rustWorkspaceSourceTreeSha256": "20c1e181fe3bb73dde67ae65e9bb6f7c88c8f12e77ca573884339938cd599522",
+    "rustWorkspaceSourceTreeSha256": "779f8248c77de665ec435f26a31e065d3e2468aed0b39fc25be9752984e4af28",
     "brokerManifestSha256": "fc512dc883897b0bff55b131860a68bfeefb8ead5711438bbdf2b7cb943f639b",
-    "brokerSourceTreeSha256": "46a92c89ad4f83aa29b73569ec7874c05acf1642070ef33286cee55ba931221e",
+    "brokerSourceTreeSha256": "7a571271f52dcb0e5fcfe765d2fd54b2b2b12460e8cba8601b86d889c7f4a1e9",
     "sqlcipherFfiSha256": "8278e9c015e38981d8c0ffaeaef00be3812124652ccccd422c72350d98ce09fe",
     "stateStoreSha256": "75d4ead8c52f419afeca6b83a8f68552ad19790b70aeef549edbfb010bb7d2bc",
     "stateSchemaSha256": "5eb4a968eac16b517c1efa2c0b5c948ad05f842a8da4d7af391f89cef87ba8ed",
-    "brokerIntegrationTestsSha256": "7d17389d076ac24cc2b023df5ca478528ec0fad7a7d9d2431df2a285274187d9",
+    "brokerIntegrationTestsSha256": "51c9059165233fcb5be7d815616a4a4f781c48fd5193fecbf61962c09ea1b5cd",
     "packageScriptSha256": "3cf43df94369e3fd5440b1b2ec55808fc04a657221c4d11a3b042aa164f79815",
     "artifactVerifierSha256": "d236129d7a9539b9c87d84f420b35ab2f8e8f2dbb456f0d3505fd6de952a61c6",
     "distributionGateSha256": "0543dc91301b275fdd2e7d135dab04cfcf2c8f2198e4f0d88f9166725c4c2e43",
@@ -63,7 +63,7 @@
       "script/run_reviewed_distribution_cargo.sh clippy --workspace --all-targets --locked -- -D warnings"
     ],
     "reviewedBy": "KeptNear local quality gate",
-    "reviewedAt": "2026-08-11T20:14:09Z"
+    "reviewedAt": "2026-08-11T20:42:03Z"
   },
   "blocker": "None for the unsigned experimental profile; signed distribution remains separately gated."
 }

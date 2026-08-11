@@ -1,5 +1,8 @@
 use std::fmt::{Display, Formatter};
 
+use crate::controller_key::{
+    ControllerAuthorityError, ControllerAuthorityManager, ControllerKeyStore,
+};
 use crate::device_key::{DeviceKeyError, DeviceKeyManager, DeviceKeyStore};
 use crate::grant_invalidation::{
     BrokerGrantInvalidationError, BrokerGrantInvalidationSummary, BrokerGrantInvalidator,
@@ -31,6 +34,7 @@ pub struct BrokerLocalDataClearSummary {
     vault_lock_events_processed: usize,
     use_grants_removed: usize,
     managed_state_files_removed: usize,
+    controller_key_removed: bool,
     device_key_removed: bool,
     authenticated_reset_preparation: bool,
 }
@@ -52,6 +56,12 @@ impl BrokerLocalDataClearSummary {
     #[must_use]
     pub const fn managed_state_files_removed(self) -> usize {
         self.managed_state_files_removed
+    }
+
+    /// Returns whether an existing restricted controller seed was removed.
+    #[must_use]
+    pub const fn controller_key_removed(self) -> bool {
+        self.controller_key_removed
     }
 
     /// Returns whether an existing device root key was removed.
@@ -81,6 +91,15 @@ pub enum BrokerLocalDataError {
     GrantInvalidation(BrokerGrantInvalidationError),
     /// The session manager could not shut down for unopenable-state recovery.
     VaultSession(BrokerVaultSessionError),
+    /// Controller removal could not start before protected state mutation.
+    ControllerAuthority(ControllerAuthorityError),
+    /// Protected state is gone, but controller seed or marker removal failed.
+    ControllerAuthorityAfterStateRemoval {
+        /// Number of managed state files removed before the Keychain failure.
+        managed_state_files_removed: usize,
+        /// Sanitized controller-authority lifecycle failure.
+        source: ControllerAuthorityError,
+    },
     /// State files are gone, but Keychain root deletion failed.
     ///
     /// The operation is intentionally retryable through the unopenable-state
@@ -99,10 +118,8 @@ impl BrokerLocalDataError {
     pub const fn device_state_was_removed(&self) -> bool {
         matches!(
             self,
-            Self::DeviceKeyDeletionAfterStateRemoval {
-                managed_state_files_removed: _,
-                source: _
-            }
+            Self::ControllerAuthorityAfterStateRemoval { .. }
+                | Self::DeviceKeyDeletionAfterStateRemoval { .. }
         )
     }
 
@@ -110,7 +127,11 @@ impl BrokerLocalDataError {
     #[must_use]
     pub const fn managed_state_files_removed(&self) -> Option<usize> {
         match self {
-            Self::DeviceKeyDeletionAfterStateRemoval {
+            Self::ControllerAuthorityAfterStateRemoval {
+                managed_state_files_removed,
+                ..
+            }
+            | Self::DeviceKeyDeletionAfterStateRemoval {
                 managed_state_files_removed,
                 ..
             } => Some(*managed_state_files_removed),
@@ -140,6 +161,13 @@ impl Display for BrokerLocalDataError {
                     "local-data reset session shutdown failed: {source}"
                 )
             }
+            Self::ControllerAuthority(source) => {
+                write!(formatter, "controller removal preparation failed: {source}")
+            }
+            Self::ControllerAuthorityAfterStateRemoval { source, .. } => write!(
+                formatter,
+                "encrypted state was removed but controller removal failed: {source}"
+            ),
             Self::DeviceKeyDeletionAfterStateRemoval { source, .. } => write!(
                 formatter,
                 "encrypted state was removed but device-key deletion failed: {source}"
@@ -155,6 +183,8 @@ impl std::error::Error for BrokerLocalDataError {
             Self::DeviceState(source) => Some(source),
             Self::GrantInvalidation(source) => Some(source),
             Self::VaultSession(source) => Some(source),
+            Self::ControllerAuthority(source)
+            | Self::ControllerAuthorityAfterStateRemoval { source, .. } => Some(source),
             Self::DeviceKeyDeletionAfterStateRemoval { source, .. } => Some(source),
         }
     }
@@ -196,19 +226,30 @@ where
     /// Sessions and grants are revoked first, the SQLCipher connection is
     /// closed, managed files are removed and verified, and only then is the
     /// device root key removed and verified.
-    pub fn clear_local_data(
+    pub fn clear_local_data<C>(
         &self,
         _confirmation: BrokerLocalDataClearConfirmation,
         sessions: &BrokerVaultSessionManager,
         mut state: DeviceStateStore,
         paths: &DevicePaths,
-    ) -> Result<BrokerLocalDataClearSummary, BrokerLocalDataError> {
+        controller_keys: &C,
+    ) -> Result<BrokerLocalDataClearSummary, BrokerLocalDataError>
+    where
+        C: ControllerKeyStore + ?Sized,
+    {
         let preparation = BrokerGrantInvalidator::prepare_device_data_reset(sessions, &mut state)
             .map_err(BrokerLocalDataError::GrantInvalidation)?;
+        let controller = ControllerAuthorityManager::new(controller_keys);
+        controller
+            .begin_or_resume_removal()
+            .map_err(BrokerLocalDataError::ControllerAuthority)?;
+        state
+            .remove_controller_authority_record()
+            .map_err(BrokerLocalDataError::DeviceState)?;
         let removal = state
             .remove_for_local_data_clear(paths)
             .map_err(BrokerLocalDataError::DeviceState)?;
-        self.finish_clear(removal, preparation, true)
+        self.finish_clear(removal, preparation, true, &controller)
     }
 
     /// Clears state that cannot be authenticated after explicit confirmation.
@@ -216,31 +257,49 @@ where
     /// This recovery path is intended for corrupt state or a missing device
     /// key. It still shuts down sessions and validates every managed file, but
     /// cannot transactionally count grants in an unopenable database.
-    pub fn clear_unopenable_local_data(
+    pub fn clear_unopenable_local_data<C>(
         &self,
         _confirmation: BrokerLocalDataClearConfirmation,
         sessions: &BrokerVaultSessionManager,
         paths: &DevicePaths,
-    ) -> Result<BrokerLocalDataClearSummary, BrokerLocalDataError> {
+        controller_keys: &C,
+    ) -> Result<BrokerLocalDataClearSummary, BrokerLocalDataError>
+    where
+        C: ControllerKeyStore + ?Sized,
+    {
         let vault_lock_events_processed = sessions
             .shutdown()
             .map_err(BrokerLocalDataError::VaultSession)?
             .len();
+        let controller = ControllerAuthorityManager::new(controller_keys);
+        controller
+            .begin_or_resume_removal()
+            .map_err(BrokerLocalDataError::ControllerAuthority)?;
         let removal = DeviceStateStore::remove_existing_for_local_data_clear(paths)
             .map_err(BrokerLocalDataError::DeviceState)?;
         let preparation = BrokerGrantInvalidationSummary::default();
-        let mut summary = self.finish_clear(removal, preparation, false)?;
+        let mut summary = self.finish_clear(removal, preparation, false, &controller)?;
         summary.vault_lock_events_processed = vault_lock_events_processed;
         Ok(summary)
     }
 
-    fn finish_clear(
+    fn finish_clear<C>(
         &self,
         removal: DeviceStateRemoval,
         preparation: BrokerGrantInvalidationSummary,
         authenticated_reset_preparation: bool,
-    ) -> Result<BrokerLocalDataClearSummary, BrokerLocalDataError> {
+        controller: &ControllerAuthorityManager<&C>,
+    ) -> Result<BrokerLocalDataClearSummary, BrokerLocalDataError>
+    where
+        C: ControllerKeyStore + ?Sized,
+    {
         let managed_state_files_removed = removal.managed_files_removed();
+        let controller_key_removed = controller.complete_pending_removal().map_err(|source| {
+            BrokerLocalDataError::ControllerAuthorityAfterStateRemoval {
+                managed_state_files_removed,
+                source,
+            }
+        })?;
         let device_key_removed = self.device_keys.delete_existing().map_err(|source| {
             BrokerLocalDataError::DeviceKeyDeletionAfterStateRemoval {
                 managed_state_files_removed,
@@ -251,6 +310,7 @@ where
             vault_lock_events_processed: preparation.lock_events_processed(),
             use_grants_removed: preparation.use_grants_removed(),
             managed_state_files_removed,
+            controller_key_removed,
             device_key_removed,
             authenticated_reset_preparation,
         })
@@ -270,6 +330,10 @@ mod tests {
     use crate::device_key::{DeviceKeyStoreError, DeviceRootKey, DEVICE_ROOT_KEY_LENGTH};
     use crate::state_model::StateTimestamp;
     use crate::state_store::DEVICE_STATE_DATABASE_FILENAME;
+    use crate::{
+        ControllerAuthorityRecord, ControllerKeyStoreError, ControllerSigningKey,
+        CONTROLLER_SIGNING_SEED_LENGTH,
+    };
 
     use super::*;
 
@@ -331,6 +395,100 @@ mod tests {
             if !state.retain_after_delete {
                 state.bytes.take();
             }
+            Ok(existed)
+        }
+    }
+
+    #[derive(Default)]
+    struct MemoryControllerState {
+        seed: Option<Vec<u8>>,
+        marker: bool,
+        delete_error: Option<ControllerKeyStoreError>,
+    }
+
+    #[derive(Clone, Default)]
+    struct MemoryControllerKeyStore {
+        state: Arc<Mutex<MemoryControllerState>>,
+    }
+
+    impl MemoryControllerKeyStore {
+        fn seeded(byte: u8) -> Self {
+            Self {
+                state: Arc::new(Mutex::new(MemoryControllerState {
+                    seed: Some(vec![byte; CONTROLLER_SIGNING_SEED_LENGTH]),
+                    marker: false,
+                    delete_error: None,
+                })),
+            }
+        }
+
+        fn contains_seed(&self) -> bool {
+            self.state.lock().expect("controller state").seed.is_some()
+        }
+
+        fn marker_exists(&self) -> bool {
+            self.state.lock().expect("controller state").marker
+        }
+
+        fn fail_next_seed_delete(&self) {
+            self.state.lock().expect("controller state").delete_error =
+                Some(ControllerKeyStoreError::Platform { status: -2 });
+        }
+
+        fn record(&self, created_at: StateTimestamp) -> ControllerAuthorityRecord {
+            let key = self
+                .load_seed()
+                .expect("load controller seed")
+                .expect("controller seed");
+            ControllerAuthorityRecord::new(key.public_key(), created_at)
+        }
+    }
+
+    impl ControllerKeyStore for MemoryControllerKeyStore {
+        fn load_seed(&self) -> Result<Option<ControllerSigningKey>, ControllerKeyStoreError> {
+            self.state
+                .lock()
+                .expect("controller state")
+                .seed
+                .clone()
+                .map(ControllerSigningKey::from_stored_bytes)
+                .transpose()
+        }
+
+        fn create_seed(&self, key: &ControllerSigningKey) -> Result<(), ControllerKeyStoreError> {
+            let mut state = self.state.lock().expect("controller state");
+            if state.seed.is_some() {
+                return Err(ControllerKeyStoreError::AlreadyExists);
+            }
+            state.seed = Some(key.expose_seed().to_vec());
+            Ok(())
+        }
+
+        fn delete_seed(&self) -> Result<bool, ControllerKeyStoreError> {
+            let mut state = self.state.lock().expect("controller state");
+            if let Some(error) = state.delete_error.take() {
+                return Err(error);
+            }
+            Ok(state.seed.take().is_some())
+        }
+
+        fn removal_pending(&self) -> Result<bool, ControllerKeyStoreError> {
+            Ok(self.state.lock().expect("controller state").marker)
+        }
+
+        fn create_removal_marker(&self) -> Result<(), ControllerKeyStoreError> {
+            let mut state = self.state.lock().expect("controller state");
+            if state.marker {
+                return Err(ControllerKeyStoreError::AlreadyExists);
+            }
+            state.marker = true;
+            Ok(())
+        }
+
+        fn delete_removal_marker(&self) -> Result<bool, ControllerKeyStoreError> {
+            let mut state = self.state.lock().expect("controller state");
+            let existed = state.marker;
+            state.marker = false;
             Ok(existed)
         }
     }
@@ -444,6 +602,10 @@ mod tests {
     #[test]
     fn confirmed_clear_removes_state_then_key_but_preserves_directories_and_vaults() {
         let (home, key_store, manager, state) = initialized("clear");
+        let controller_keys = MemoryControllerKeyStore::seeded(0x71);
+        state
+            .insert_controller_authority_record(controller_keys.record(timestamp(101)))
+            .expect("controller record");
         let portable_vault = home.path.join("personal.pswvault");
         fs::create_dir(&portable_vault).expect("portable vault");
         let sessions = sessions();
@@ -454,15 +616,19 @@ mod tests {
                 &sessions,
                 state,
                 &home.paths,
+                &controller_keys,
             )
             .expect("clear local data");
 
         assert!(summary.authenticated_reset_preparation());
         assert!(summary.managed_state_files_removed() >= 1);
+        assert!(summary.controller_key_removed());
         assert!(summary.device_key_removed());
         assert!(sessions.is_shutdown().expect("shutdown"));
         assert!(!home.database_path().exists());
         assert!(!key_store.contains_key());
+        assert!(!controller_keys.contains_seed());
+        assert!(!controller_keys.marker_exists());
         assert!(home.paths.root().is_dir());
         assert!(home.paths.config().is_dir());
         assert!(home.paths.state().is_dir());
@@ -479,12 +645,14 @@ mod tests {
         fs::rename(home.database_path(), &target).expect("move database");
         symlink(&target, home.database_path()).expect("symlink database");
         let sessions = sessions();
+        let controller_keys = MemoryControllerKeyStore::default();
 
         let error = manager
             .clear_unopenable_local_data(
                 BrokerLocalDataClearConfirmation::after_user_confirmation(),
                 &sessions,
                 &home.paths,
+                &controller_keys,
             )
             .expect_err("reject unsafe state");
 
@@ -500,6 +668,7 @@ mod tests {
     fn keychain_failure_after_state_removal_is_explicit_and_retryable() {
         let (home, key_store, manager, state) = initialized("key-delete-retry");
         let sessions = sessions();
+        let controller_keys = MemoryControllerKeyStore::default();
         key_store.fail_next_delete();
 
         let error = manager
@@ -508,6 +677,7 @@ mod tests {
                 &sessions,
                 state,
                 &home.paths,
+                &controller_keys,
             )
             .expect_err("key deletion must fail once");
 
@@ -521,10 +691,56 @@ mod tests {
                 BrokerLocalDataClearConfirmation::after_user_confirmation(),
                 &sessions,
                 &home.paths,
+                &controller_keys,
             )
             .expect("retry key deletion");
         assert_eq!(retry.managed_state_files_removed(), 0);
         assert!(retry.device_key_removed());
+        assert!(!key_store.contains_key());
+    }
+
+    #[test]
+    fn controller_failure_after_state_removal_keeps_marker_and_retries_before_root_key() {
+        let (home, key_store, manager, state) = initialized("controller-delete-retry");
+        let sessions = sessions();
+        let controller_keys = MemoryControllerKeyStore::seeded(0x72);
+        state
+            .insert_controller_authority_record(controller_keys.record(timestamp(101)))
+            .expect("controller record");
+        controller_keys.fail_next_seed_delete();
+
+        let error = manager
+            .clear_local_data(
+                BrokerLocalDataClearConfirmation::after_user_confirmation(),
+                &sessions,
+                state,
+                &home.paths,
+                &controller_keys,
+            )
+            .expect_err("controller deletion must fail once");
+
+        assert!(matches!(
+            &error,
+            BrokerLocalDataError::ControllerAuthorityAfterStateRemoval { .. }
+        ));
+        assert!(error.device_state_was_removed());
+        assert!(!home.database_path().exists());
+        assert!(controller_keys.contains_seed());
+        assert!(controller_keys.marker_exists());
+        assert!(key_store.contains_key());
+
+        let retry = manager
+            .clear_unopenable_local_data(
+                BrokerLocalDataClearConfirmation::after_user_confirmation(),
+                &sessions,
+                &home.paths,
+                &controller_keys,
+            )
+            .expect("retry controller deletion");
+        assert!(retry.controller_key_removed());
+        assert!(retry.device_key_removed());
+        assert!(!controller_keys.contains_seed());
+        assert!(!controller_keys.marker_exists());
         assert!(!key_store.contains_key());
     }
 
@@ -538,12 +754,14 @@ mod tests {
         let key_store = MemoryKeyStore::default();
         let manager = BrokerLocalDataManager::new(key_store.clone());
         let sessions = sessions();
+        let controller_keys = MemoryControllerKeyStore::default();
 
         let first = manager
             .clear_unopenable_local_data(
                 BrokerLocalDataClearConfirmation::after_user_confirmation(),
                 &sessions,
                 &home.paths,
+                &controller_keys,
             )
             .expect("clear corrupt state");
         assert!(!first.authenticated_reset_preparation());
@@ -556,6 +774,7 @@ mod tests {
                 BrokerLocalDataClearConfirmation::after_user_confirmation(),
                 &sessions,
                 &home.paths,
+                &controller_keys,
             )
             .expect("repeat clear");
         assert_eq!(second.managed_state_files_removed(), 0);
@@ -570,12 +789,14 @@ mod tests {
         fs::set_permissions(home.paths.state(), fs::Permissions::from_mode(0o500))
             .expect("make state directory invalid");
         let sessions = sessions();
+        let controller_keys = MemoryControllerKeyStore::default();
 
         let error = manager
             .clear_unopenable_local_data(
                 BrokerLocalDataClearConfirmation::after_user_confirmation(),
                 &sessions,
                 &home.paths,
+                &controller_keys,
             )
             .expect_err("reject invalid directory");
 
@@ -593,6 +814,7 @@ mod tests {
         let (home, key_store, manager, state) = initialized("path-mismatch-source");
         let other_home = TestHome::new("path-mismatch-target");
         let sessions = sessions();
+        let controller_keys = MemoryControllerKeyStore::default();
 
         let error = manager
             .clear_local_data(
@@ -600,6 +822,7 @@ mod tests {
                 &sessions,
                 state,
                 &other_home.paths,
+                &controller_keys,
             )
             .expect_err("reject mismatched state root");
 

@@ -1641,7 +1641,7 @@ impl BrokerRuntime {
         self.verify_issued_grant_session(issuance, target, vault_session_id)
     }
 
-    /// Creates one exact persistent rule while approving its first request.
+    /// Creates one exact bounded-lifetime rule while approving its first request.
     ///
     /// The selected policy never creates a Use Grant here. The original
     /// operation must pass through the normal policy-specific grant boundary.
@@ -1650,6 +1650,7 @@ impl BrokerRuntime {
         approval_request_id: ApprovalRequestId,
         selection: Option<BrokerCredentialCandidateSelection>,
         confirmation_policy: ConfirmationPolicy,
+        rule_lifetime: RuleLifetime,
         approved_at: StateTimestamp,
     ) -> Result<BrokerAccessRuleCreation, BrokerRuntimeError> {
         let pending = self.pending_approval_snapshot(approval_request_id, approved_at)?;
@@ -1660,7 +1661,7 @@ impl BrokerRuntime {
             target,
             secret_kind,
             confirmation_policy,
-            RuleLifetime::Persistent,
+            rule_lifetime,
             approved_at,
         )
         .map_err(BrokerRuntimeError::AccessRule)?;

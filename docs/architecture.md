@@ -376,10 +376,13 @@ Device-local `~/.keptnear` state:
 - runtime IPC and a reserved private logs directory
 
 Device-local trust does not sync with `.pswvault`. App removal or reinstall does
-not delete `~/.keptnear` unless the user explicitly clears local data.
-The root key that encrypts this state is not stored in that directory. It uses
-a separate `ThisDeviceOnly` Keychain item and is exposed only as an opaque,
-zeroizing type inside `psw-broker`.
+not delete `~/.keptnear` unless the user explicitly clears local data. Confirmed
+clearing also rotates the separate human-controller authority using its durable
+removal marker; a residual controller seed can never be treated as resumable
+bootstrap after protected state has been deleted. The root key that encrypts
+this state is not stored in that directory. It uses a separate `ThisDeviceOnly`
+Keychain item and is exposed only as an opaque, zeroizing type inside
+`psw-broker`.
 
 Portable backup copies an exact allowlist from `.pswvault`: `vault.json`,
 `keys.enc`, optional `recovery.enc`, `items/`, `attachments/`, and

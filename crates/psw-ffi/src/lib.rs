@@ -2073,6 +2073,7 @@ fn configure_apps_tools_long_term_access(
                 request_id,
                 selection,
                 confirmation_policy,
+                RuleLifetime::Persistent,
                 approved_at,
             )
             .map(|creation| creation.rule().access_rule_id().to_string())

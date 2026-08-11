@@ -1310,11 +1310,13 @@ fn first_request_actions_deny_and_allow_once_without_creating_access_rules() {
         )
         .expect("persistent approval");
     let persistent_id = persistent.receipt().approval_request_id();
+    let bounded_rule_lifetime = RuleLifetime::Until(timestamp(now_ms + 120_000));
     let creation = runtime
         .configure_pending_request_access_rule(
             persistent_id,
             None,
             ConfirmationPolicy::EveryUse,
+            bounded_rule_lifetime,
             timestamp(now_ms + 13),
         )
         .expect("persistent Access Rule");
@@ -1323,7 +1325,7 @@ fn first_request_actions_deny_and_allow_once_without_creating_access_rules() {
         creation.rule().confirmation_policy(),
         ConfirmationPolicy::EveryUse
     );
-    assert_eq!(creation.rule().lifetime(), RuleLifetime::Persistent);
+    assert_eq!(creation.rule().lifetime(), bounded_rule_lifetime);
     assert_eq!(
         runtime
             .poll_approval(
@@ -1357,6 +1359,7 @@ fn first_request_actions_deny_and_allow_once_without_creating_access_rules() {
             repeated_id,
             None,
             ConfirmationPolicy::EveryUse,
+            bounded_rule_lifetime,
             timestamp(now_ms + 16),
         )
         .expect("idempotent persistent Access Rule");
@@ -1379,6 +1382,7 @@ fn first_request_actions_deny_and_allow_once_without_creating_access_rules() {
             conflicting_id,
             None,
             ConfirmationPolicy::AutomaticWhileUnlocked,
+            bounded_rule_lifetime,
             timestamp(now_ms + 18),
         )
         .is_err());

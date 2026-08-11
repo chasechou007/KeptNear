@@ -22,9 +22,10 @@ use crate::{
     ControllerSessionId, CredentialFieldScope, CredentialId, HumanControlFailureCode,
     HumanControlOperation, HumanControlProtocolFailure, HumanControlProtocolVersion,
     HumanControlRequiredAction, HumanControlVersionOffer, PairingComparisonCode, PairingRequestId,
-    SecretFieldId, SecretFieldKind, StateTimestamp, UsageProfile, UsageProfileDefinition,
-    UsageProfileId, UseGrantId, HUMAN_CONTROL_SCHEMA_ID, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
-    MAX_HUMAN_CONTROL_COLLECTION_ITEMS, MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
+    RuleLifetime, SecretFieldId, SecretFieldKind, StateTimestamp, UsageProfile,
+    UsageProfileDefinition, UsageProfileId, UseGrantId, HUMAN_CONTROL_SCHEMA_ID,
+    MAX_HUMAN_CONTROL_AUDIT_EVENTS, MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
+    MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
 };
 
 const MAX_HUMAN_CONTROL_AUDIT_EXPORT_BYTES: usize = MAX_HUMAN_CONTROL_RESPONSE_LENGTH / 2;
@@ -140,7 +141,7 @@ pub enum HumanControlRequest {
         /// Exact candidate selection for a new-Credential request.
         selection: Option<BrokerCredentialCandidateSelection>,
     },
-    /// Create one exact persistent Access Rule.
+    /// Create one exact Access Rule.
     CredentialAuthorize {
         /// Persisted field or credential-access approval identity.
         request_id: ApprovalRequestId,
@@ -148,6 +149,8 @@ pub enum HumanControlRequest {
         selection: Option<BrokerCredentialCandidateSelection>,
         /// Human-selected confirmation policy for the Access Rule.
         confirmation_policy: ConfirmationPolicy,
+        /// Human-selected persistent or absolute expiry boundary.
+        rule_lifetime: RuleLifetime,
     },
     /// Read one Vault's secret-free authorization summary.
     AuthorizationSnapshot {
@@ -1064,12 +1067,14 @@ where
                 request_id,
                 selection,
                 confirmation_policy,
+                rule_lifetime,
             } => {
                 let created = runtime
                     .configure_pending_request_access_rule(
                         request_id,
                         selection,
                         confirmation_policy,
+                        rule_lifetime,
                         observed_at,
                     )
                     .map_err(map_runtime_error)?;
@@ -1221,6 +1226,8 @@ fn map_authority_error(error: ControllerAuthorityError) -> HumanControlDispatchE
             HumanControlFailureCode::ControllerUnavailable
         }
         ControllerAuthorityError::CreationVerificationFailed
+        | ControllerAuthorityError::RemovalNotStarted
+        | ControllerAuthorityError::RemovalVerificationFailed
         | ControllerAuthorityError::Store { .. } => HumanControlFailureCode::OperationFailed,
     };
     HumanControlDispatchError::code(code)
@@ -1421,6 +1428,19 @@ mod tests {
                     && summary.use_grants_removed() == 1
         ));
         assert_eq!(pending_projection_limit(320), 256);
+        let expires_at = timestamp(10_000);
+        assert!(matches!(
+            HumanControlRequest::CredentialAuthorize {
+                request_id: ApprovalRequestId::generate(),
+                selection: None,
+                confirmation_policy: ConfirmationPolicy::EveryUse,
+                rule_lifetime: RuleLifetime::Until(expires_at),
+            },
+            HumanControlRequest::CredentialAuthorize {
+                rule_lifetime: RuleLifetime::Until(actual),
+                ..
+            } if actual == expires_at
+        ));
         assert!(validate_human_control_audit_limit(256).is_ok());
         assert_eq!(
             validate_human_control_audit_limit(257)
