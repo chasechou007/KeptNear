@@ -3354,7 +3354,7 @@ impl<'de> Visitor<'de> for UniqueJsonVisitor {
     }
 }
 
-fn parse_unique_json(payload: &[u8]) -> Result<Value, ()> {
+pub(crate) fn parse_unique_json(payload: &[u8]) -> Result<Value, ()> {
     serde_json::from_slice::<UniqueJsonValue>(payload)
         .map(|value| value.0)
         .map_err(|_| ())

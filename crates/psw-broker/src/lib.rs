@@ -12,7 +12,9 @@ mod audit;
 mod authentication;
 mod capability_protocol;
 mod component_metadata;
+mod controller_authentication;
 mod controller_authority_contract;
+mod controller_key;
 mod credential_matching;
 mod credential_search;
 mod device_key;
@@ -20,7 +22,10 @@ mod dispatcher;
 mod grant_invalidation;
 mod http_request;
 mod human_control;
+mod human_control_dispatcher;
 mod human_control_protocol;
+mod human_control_types;
+mod human_control_wire;
 #[cfg(all(test, unix))]
 mod integration_tests;
 mod local_data;
@@ -35,9 +40,11 @@ mod outbound_operation;
 mod pairing;
 mod paths;
 mod process;
+mod process_lock;
 #[allow(unsafe_code)]
 mod process_run;
 mod protocol;
+mod readiness;
 mod revocation;
 mod runtime;
 #[allow(unsafe_code)]
@@ -84,6 +91,12 @@ pub use component_metadata::{
     ComponentBrokerProtocol, ComponentMetadata, ComponentMetadataError, PackagedComponent,
     COMPONENT_METADATA_SCHEMA,
 };
+pub use controller_authentication::{
+    ControllerAuthenticationChallenge, ControllerAuthenticationCompletion,
+    ControllerAuthenticationConnection, ControllerAuthenticationError,
+    ControllerAuthenticationMode, ControllerAuthenticationProof, ControllerAuthenticationService,
+    ControllerChallengeRequest,
+};
 pub use controller_authority_contract::{
     controller_authentication_transcript, controller_bootstrap_transcript,
     controller_enable_disposition, derive_controller_id, ControllerAuthorityContractError,
@@ -100,6 +113,12 @@ pub use controller_authority_contract::{
     CONTROLLER_SIGNING_ALGORITHM, CONTROLLER_SIGNING_PREFIX_LENGTH, CONTROLLER_SIGNING_SEED_LENGTH,
     MAX_CONTROLLER_FAILURES_GLOBALLY, MAX_CONTROLLER_FAILURES_PER_IDENTITY,
     MAX_OUTSTANDING_CONTROLLER_CHALLENGES_PER_CONNECTION,
+};
+pub use controller_key::{
+    is_controller_removal_marker, ControllerAuthorityError, ControllerAuthorityManager,
+    ControllerAuthorityRecord, ControllerBootstrapMode, ControllerKeyStore,
+    ControllerKeyStoreError, ControllerKeyStoreOperation, ControllerSignature,
+    ControllerSigningKey, PreparedControllerAuthority,
 };
 pub use credential_matching::{
     BrokerAdmittedCredentialRequest, BrokerApprovedCredentialSelection,
@@ -135,6 +154,13 @@ pub use human_control::{
     BrokerPendingRequestKind, BrokerPendingRequestQueue, BrokerUsageProfileSummary,
     MAX_CONSUMER_DETAIL_AUDIT_EVENTS,
 };
+pub use human_control_dispatcher::{
+    HumanControlConnectionPhase, HumanControlConnectionState, HumanControlCredentialCandidate,
+    HumanControlCredentialReview, HumanControlDispatchError, HumanControlDispatcher,
+    HumanControlPendingRequest, HumanControlRequest, HumanControlResponse,
+    HumanControlSecretFieldCandidate, HumanControlUsageProfileCatalog,
+    HumanControlVaultUnlockCredential,
+};
 pub use human_control_protocol::{
     HumanControlAuthenticationRequirement, HumanControlFailureCode, HumanControlOperation,
     HumanControlOperationContract, HumanControlProtocolFailure,
@@ -150,6 +176,14 @@ pub use human_control_protocol::{
     MAX_HUMAN_CONTROL_UNLOCK_CREDENTIAL_BYTES, MAX_HUMAN_CONTROL_UNLOCK_LENGTH,
     MAX_HUMAN_CONTROL_VERSION_RANGES,
 };
+pub use human_control_types::{
+    ControllerDeadline, ControllerId, ControllerNonce, ControllerSessionId, HumanControlRequestId,
+    HumanControlTypeParseError,
+};
+pub use human_control_wire::{
+    decode_human_control_wire_envelope, read_human_control_frame, write_human_control_frame,
+    HumanControlWireEnvelope, HumanControlWireError,
+};
 pub use local_data::{
     BrokerLocalDataClearConfirmation, BrokerLocalDataClearSummary, BrokerLocalDataError,
     BrokerLocalDataManager,
@@ -158,7 +192,7 @@ pub use machine_access::{
     BrokerMachineAccessError, BrokerMachineAccessGate, BrokerMachineAccessTransition,
 };
 #[cfg(target_os = "macos")]
-pub use macos_keychain::MacOsDeviceKeyStore;
+pub use macos_keychain::{MacOsControllerKeyStore, MacOsDeviceKeyStore};
 pub use outbound_operation::{
     BrokerOutboundOperationAuthorization, BrokerOutboundOperationError,
     BrokerOutboundOperationOutcome,
@@ -173,6 +207,10 @@ pub use pairing::{
 };
 pub use paths::{DevicePathEntry, DevicePathError, DevicePathOperation, DevicePaths};
 pub use process::{BrokerConnectionExit, BrokerProcess, BrokerProcessError};
+pub use process_lock::{
+    BrokerProcessLock, BrokerProcessLockError, BrokerProcessLockOperation, BrokerServiceRuntime,
+    BrokerServiceStartupError,
+};
 pub use process_run::{
     BrokerProcessEnvironment, BrokerProcessRunCancellation, BrokerProcessRunError,
     BrokerProcessRunRequest, BrokerProcessRunResponse, MAX_PROCESS_ARGUMENTS,
@@ -197,6 +235,9 @@ pub use protocol::{
     BROKER_PROTOCOL_NAME, MAX_BROKER_FRAME_LENGTH, MAX_BROKER_HELLO_LENGTH,
 };
 pub use psw_core::{CredentialId, SecretFieldId, SecretFieldKind, VaultId};
+pub use readiness::{
+    BrokerProtectedStateCategory, BrokerReadinessError, BrokerReadinessProjection,
+};
 pub use revocation::{BrokerRevocationError, BrokerRevocationKind, BrokerRevocationSummary};
 pub use runtime::{BrokerRuntime, BrokerRuntimeError};
 pub use state_model::{

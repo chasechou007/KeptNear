@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
 /// Canonical identity of the App-to-Broker human-control protocol.
 pub const HUMAN_CONTROL_PROTOCOL_NAME: &str = "keptnear.human-control";
 /// Current human-control protocol major version.
@@ -96,6 +98,58 @@ impl HumanControlProtocolVersion {
     #[must_use]
     pub const fn minor(self) -> u16 {
         self.minor
+    }
+}
+
+impl Display for HumanControlProtocolVersion {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}.{}", self.major, self.minor)
+    }
+}
+
+impl FromStr for HumanControlProtocolVersion {
+    type Err = HumanControlProtocolValidationError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (major, minor) = value
+            .split_once('.')
+            .ok_or(HumanControlProtocolValidationError::InvalidProtocolVersion)?;
+        if major.is_empty()
+            || minor.is_empty()
+            || (major.len() > 1 && major.starts_with('0'))
+            || (minor.len() > 1 && minor.starts_with('0'))
+            || !major.bytes().all(|byte| byte.is_ascii_digit())
+            || !minor.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(HumanControlProtocolValidationError::InvalidProtocolVersion);
+        }
+        Self::new(
+            major
+                .parse()
+                .map_err(|_| HumanControlProtocolValidationError::InvalidProtocolVersion)?,
+            minor
+                .parse()
+                .map_err(|_| HumanControlProtocolValidationError::InvalidProtocolVersion)?,
+        )
+    }
+}
+
+impl Serialize for HumanControlProtocolVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for HumanControlProtocolVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -1032,7 +1086,33 @@ impl HumanControlProtocolFailure {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use serde::Deserialize;
+
     use super::*;
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct HumanControlFixture {
+        schema: String,
+        protocol: HumanControlFixtureProtocol,
+        operations: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct HumanControlFixtureProtocol {
+        name: String,
+        major: u16,
+        minor: u16,
+    }
+
+    fn machine_access_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/machine-access")
+            .join(name)
+    }
 
     #[test]
     fn version_offer_is_canonical_bounded_and_negotiates_only_current_major() {
@@ -1064,6 +1144,58 @@ mod tests {
             HumanControlProtocolVersionRange::new(1, 2, 1),
             Err(HumanControlProtocolValidationError::InvalidProtocolVersion)
         );
+    }
+
+    #[test]
+    fn protocol_version_string_is_strict_and_canonical() {
+        assert_eq!(HumanControlProtocolVersion::current().to_string(), "1.0");
+        assert_eq!("1.0".parse(), Ok(HumanControlProtocolVersion::current()));
+        for invalid in ["", "1", "1.", ".0", "01.0", "1.00", "0.1", "1.-1"] {
+            assert!(invalid.parse::<HumanControlProtocolVersion>().is_err());
+        }
+    }
+
+    #[test]
+    fn sanitized_protocol_fixture_accepts_v1_and_rejects_future_major() {
+        let read = |name| {
+            serde_json::from_slice::<HumanControlFixture>(
+                &std::fs::read(machine_access_fixture(name)).expect("read protocol fixture"),
+            )
+            .expect("parse protocol fixture")
+        };
+        let current = read("human-control-v1.json");
+        assert_eq!(current.schema, "keptnear.fixture.human-control.v1");
+        assert_eq!(current.protocol.name, HUMAN_CONTROL_PROTOCOL_NAME);
+        assert_eq!(
+            HumanControlProtocolVersion::new(current.protocol.major, current.protocol.minor),
+            Ok(HumanControlProtocolVersion::current())
+        );
+        let fixture_operations = current
+            .operations
+            .iter()
+            .map(|value| {
+                value
+                    .parse::<HumanControlOperation>()
+                    .expect("known operation")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fixture_operations,
+            HUMAN_CONTROL_OPERATION_CONTRACTS
+                .iter()
+                .map(|contract| contract.operation())
+                .collect::<Vec<_>>()
+        );
+
+        let future = read("human-control-future.json");
+        let offer = HumanControlVersionOffer::new([HumanControlProtocolVersionRange::new(
+            future.protocol.major,
+            future.protocol.minor,
+            future.protocol.minor,
+        )
+        .expect("future range")])
+        .expect("future offer");
+        assert_eq!(offer.negotiate_current(), None);
     }
 
     #[test]

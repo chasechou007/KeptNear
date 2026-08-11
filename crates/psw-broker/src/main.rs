@@ -30,27 +30,27 @@ fn print_component_metadata() {
 
 #[cfg(target_os = "macos")]
 fn run_broker() {
-    let mut runtime = match psw_broker::BrokerRuntime::open_or_initialize_for_current_user(
+    let mut service = match psw_broker::BrokerServiceRuntime::start_for_current_user(
         psw_broker::MacOsDeviceKeyStore::new(),
     ) {
-        Ok(runtime) => runtime,
+        Ok(service) => service,
         Err(_) => {
-            eprintln!("KeptNear Broker could not open its protected local state.");
+            eprintln!("KeptNear Broker could not acquire its protected runtime.");
             std::process::exit(1);
         }
     };
-    let listener = match psw_broker::UnixBrokerListener::bind(runtime.paths()) {
+    let listener = match psw_broker::UnixBrokerListener::bind(service.runtime().paths()) {
         Ok(listener) => listener,
         Err(_) => {
-            let _ = runtime.shutdown();
+            let _ = service.runtime_mut().shutdown();
             eprintln!("KeptNear Broker could not bind its owner-only local transport.");
             std::process::exit(1);
         }
     };
 
     loop {
-        if listener.serve_one_runtime(&runtime).is_err() {
-            let _ = runtime.shutdown();
+        if listener.serve_one_runtime(service.runtime()).is_err() {
+            let _ = service.runtime_mut().shutdown();
             eprintln!("KeptNear Broker stopped after a local transport failure.");
             std::process::exit(1);
         }

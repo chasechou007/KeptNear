@@ -1,0 +1,12 @@
+{
+  "schema": "keptnear.fixture.controller-auth.v1",
+  "contract": "keptnear.controller-authority.v1",
+  "protocol": "1.0",
+  "role": "human-controller",
+  "controller_id": "controller_95f5397299481e28f6f0f547bf86765dde13d2b10424cf1dfe78054e379068a5",
+  "public_key_hex": "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+  "session_id": "controller_session_11111111111111111111111111111111",
+  "client_nonce": "controller_nonce_2222222222222222222222222222222222222222222222222222222222222222",
+  "broker_nonce": "controller_nonce_3333333333333333333333333333333333333333333333333333333333333333",
+  "deadline": "controller_deadline_30000000000"
+}

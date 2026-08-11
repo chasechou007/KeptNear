@@ -569,6 +569,7 @@ dependencies = [
  "base64",
  "core-foundation",
  "ed25519-dalek",
+ "fs2",
  "hex",
  "hkdf",
  "idna",

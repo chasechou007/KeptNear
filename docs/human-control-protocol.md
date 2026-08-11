@@ -3,11 +3,15 @@
 This document freezes the source-level version 1 contract for the authenticated
 App-to-Broker management channel. It does not mean the installed Broker service
 or end-user machine access is active. The current App still uses its in-process
-Apps & Tools bridge until the external controller client and dispatcher are
-implemented and accepted.
+Apps & Tools bridge until the external controller client and service lifecycle
+are implemented and accepted. The Broker-side typed dispatcher, strict wire
+envelope validator, controller authentication, process ownership, and readiness
+projection are implemented and tested in source but are not connected to an
+installed App client.
 
 The executable contract is defined in
-`crates/psw-broker/src/human_control_protocol.rs`.
+`crates/psw-broker/src/human_control_protocol.rs`,
+`human_control_wire.rs`, and `human_control_dispatcher.rs`.
 
 ## Boundary
 
@@ -159,8 +163,8 @@ the unlock attempt. The controller algorithm, Keychain identity, transcript
 encoding, nonce sizes, proof size, deadline semantics, replay bounds, and
 authority lifecycle are frozen separately in
 `docs/controller-authority-contract.md`. These fields keep their closed wire
-positions; the runtime challenge manager and Keychain adapter remain
-unimplemented.
+positions. The runtime challenge manager and access-group Keychain adapter are
+implemented in source; entitlement-qualified App integration remains later work.
 
 ## Operation Catalog
 

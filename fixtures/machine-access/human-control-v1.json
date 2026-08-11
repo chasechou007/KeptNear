@@ -1,0 +1,39 @@
+{
+  "schema": "keptnear.fixture.human-control.v1",
+  "protocol": {
+    "name": "keptnear.human-control",
+    "major": 1,
+    "minor": 0
+  },
+  "operations": [
+    "hello",
+    "controller.challenge",
+    "controller.authenticate",
+    "controller.lease.renew",
+    "readiness.get",
+    "machine-access.pause.set",
+    "vault.unlock",
+    "vault.lock",
+    "pending.list",
+    "pending.deny",
+    "pairing.approve",
+    "unlock.approve",
+    "credential.review",
+    "credential.allow-once",
+    "credential.authorize",
+    "authorization.snapshot",
+    "consumer.detail",
+    "usage-profile.catalog",
+    "usage-profile.create",
+    "usage-profile.remove",
+    "access.field.revoke",
+    "grant.revoke",
+    "consumer.revoke",
+    "access.all.revoke",
+    "audit.list",
+    "audit.clear",
+    "audit.export",
+    "repair.prepare",
+    "shutdown"
+  ]
+}

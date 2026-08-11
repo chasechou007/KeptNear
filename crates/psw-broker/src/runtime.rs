@@ -228,6 +228,17 @@ pub struct BrokerRuntime {
 }
 
 impl BrokerRuntime {
+    pub(crate) fn open_or_initialize_with_prepared_paths<S>(
+        paths: DevicePaths,
+        store: S,
+    ) -> Result<Self, BrokerRuntimeError>
+    where
+        S: DeviceKeyStore,
+    {
+        let observed_at = current_state_timestamp()?;
+        Self::open_or_initialize_with_paths_at(paths, store, observed_at)
+    }
+
     /// Opens or initializes the current user's device-local Broker state.
     ///
     /// Initialization occurs only when both the device key and every managed
@@ -382,6 +393,34 @@ impl BrokerRuntime {
         &self.state
     }
 
+    pub(crate) fn controller_authority_record(
+        &self,
+    ) -> Result<Option<crate::ControllerAuthorityRecord>, BrokerRuntimeError> {
+        self.state
+            .controller_authority_record()
+            .map_err(BrokerHumanControlError::from)
+            .map_err(BrokerRuntimeError::HumanControl)
+    }
+
+    pub(crate) fn insert_controller_authority_record(
+        &self,
+        record: crate::ControllerAuthorityRecord,
+    ) -> Result<(), BrokerRuntimeError> {
+        self.state
+            .insert_controller_authority_record(record)
+            .map_err(BrokerHumanControlError::from)
+            .map_err(BrokerRuntimeError::HumanControl)
+    }
+
+    pub(crate) fn revoke_use_grant_for_human(
+        &self,
+        consumer_id: ConsumerId,
+        use_grant_id: UseGrantId,
+    ) -> Result<bool, BrokerRuntimeError> {
+        BrokerUseGrantManager::revoke_for_consumer(&self.state, consumer_id, use_grant_id)
+            .map_err(BrokerRuntimeError::UseGrant)
+    }
+
     /// Returns the process-local Apps & Tools gate.
     #[must_use]
     pub const fn machine_access(&self) -> &BrokerMachineAccessGate {
@@ -404,6 +443,22 @@ impl BrokerRuntime {
     #[must_use]
     pub const fn approval_restore_summary(&self) -> BrokerApprovalRestoreSummary {
         self.approval_restore_summary
+    }
+
+    /// Returns authenticated component, protocol, pause, and machine Vault lock state.
+    pub fn readiness_projection(
+        &self,
+    ) -> Result<crate::BrokerReadinessProjection, BrokerRuntimeError> {
+        let paused = self
+            .machine_access
+            .is_paused()
+            .map_err(BrokerRuntimeError::MachineAccess)?;
+        let vaults = self
+            .process
+            .vault_sessions()
+            .snapshots()
+            .map_err(BrokerRuntimeError::VaultSession)?;
+        Ok(crate::BrokerReadinessProjection::new(paused, vaults))
     }
 
     /// Returns secret-free Apps & Tools state for one trusted human Vault view.

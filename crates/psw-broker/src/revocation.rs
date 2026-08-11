@@ -688,7 +688,7 @@ mod tests {
         assert!(pairing.pending_requests().expect("pairings").is_empty());
         assert_eq!(state.recent_audit_events(10).expect("audit"), vec![audit]);
         assert!(state.apps_tools_paused().expect("pause retained"));
-        assert_eq!(state.schema_version().expect("schema"), 1);
+        assert_eq!(state.schema_version().expect("schema"), 2);
 
         let repeated = BrokerRevocationManager::revoke_global(&mut state, &manager, &pairing)
             .expect("repeat global revoke");

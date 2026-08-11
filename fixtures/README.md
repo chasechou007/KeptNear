@@ -13,5 +13,8 @@ This directory holds sanitized test data.
   separate: `supported-source-versions.json` inventories migration sources
   while `released-format-fixtures.json` inventories current public format
   evidence.
+- `machine-access/`: synthetic human-control, controller-authentication,
+  LaunchAgent, and component-manifest compatibility fixtures. Each contract has
+  one accepted version 1 sample and one unsupported future-version sample.
 
 Real user vaults, real passwords, and real export files must not be committed.

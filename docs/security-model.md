@@ -584,7 +584,9 @@ SQLCipher raw-key semantics and supplies it directly through
 `sqlite3_key_v2`; the temporary derived and encoded buffers are zeroized.
 `device-v1.db` uses an encrypted header, SQLCipher page HMACs, WAL mode,
 full synchronous writes, secure delete, foreign keys, memory sanitization,
-disabled SQLCipher diagnostic logging, and schema version 1.
+disabled SQLCipher diagnostic logging, and schema version 2. Version 2 adds
+only the controller authority contract, algorithm, derived public identity,
+public key, and creation timestamp; it never stores the controller seed.
 
 Initialization pre-creates the database with mode `0600`, refuses existing
 database or sidecar entries, keys the empty connection before its first schema

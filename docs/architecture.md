@@ -97,8 +97,11 @@ result is secret-free. The related `keptnear.controller-authority.v1` source
 contract freezes Ed25519, the shared App-and-Broker Data Protection Keychain
 access group, bootstrap and authentication transcripts, replay bounds, and a
 marker-backed fail-closed removal lifecycle. The external dispatcher, runtime
-Keychain adapter, controller trust record, and App client remain unimplemented, so
-installation still does not activate the service. See `docs/human-control-protocol.md`.
+Keychain adapter, SQLCipher public trust record, challenge manager, closed wire
+validator, process lock, and readiness projection are implemented and tested in
+source. The App human-control client and ServiceManagement lifecycle remain
+unimplemented, so installation still does not activate the service.
+See `docs/human-control-protocol.md`.
 The controller authority details are in
 `docs/controller-authority-contract.md`.
 
@@ -387,8 +390,12 @@ recreate or modify device-local trust. Plaintext export separately serializes
 only the closed authenticated credential snapshot described above.
 
 `~/.keptnear/state/device-v1.db` is an implemented SQLCipher 4 database with
-encrypted headers, page HMAC authentication, WAL mode, schema version 1, and
-owner-only database, WAL, and shared-memory files. The Broker derives its raw
+encrypted headers, page HMAC authentication, WAL mode, schema version 2, and
+owner-only database, WAL, and shared-memory files. Schema version 2 adds one
+singleton controller-authority table containing only the contract, algorithm,
+derived controller identity, public key, and creation time. Authenticated
+version 1 state migrates transactionally; future versions fail closed. The
+Broker derives its raw
 database key from the device root with HKDF-SHA-256 and the domain
 `KeptNear device state SQLCipher v1`, then calls `sqlite3_key_v2` through one
 narrow audited FFI module. The key is never placed in SQL, a command line, an
@@ -396,7 +403,8 @@ environment variable, a preference, or a file.
 
 The schema stores strong typed identities and bounded non-secret state for
 Consumers, Access Rules, Use Grants, Usage Profiles, approvals, device pause
-settings, and audit events. It has no columns for vault keys, master passwords,
+settings, audit events, and the singleton public controller authority. It has
+no columns for vault keys, controller seeds, master passwords,
 recovery keys, Consumer private keys, raw credential fields, request or
 response bodies, URLs, command arguments, standard streams, or full paths.
 
@@ -774,7 +782,11 @@ Implemented:
   approvals with encrypted status persistence, Consumer-scoped polling and
   resumption, monotonic waiting, exact expiry, coalescing, and restart
   reconciliation, plus exact Consumer-field, Consumer-wide, and global
-  transactional revocation with process-local cleanup.
+  transactional revocation with process-local cleanup, plus typed
+  human-controller identities, restricted Keychain seed loading, SQLCipher
+  public-record bootstrap, single-use challenge authentication, closed
+  human-control wire and request dispatch, path-free readiness, and a
+  process-lifetime single-Broker lock acquired before protected state or IPC.
 - `crates/psw-core`: Rust vault core.
 - `crates/psw-ffi`: macOS bridge.
 - `crates/keptnear-client`: shared first-party Consumer identity, Keychain,
