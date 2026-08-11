@@ -19,12 +19,13 @@ use crate::{
     ControllerAuthenticationError, ControllerAuthenticationMode, ControllerAuthenticationProof,
     ControllerAuthenticationService, ControllerAuthorityError, ControllerAuthorityManager,
     ControllerBootstrapMode, ControllerChallengeRequest, ControllerId, ControllerKeyStore,
-    ControllerSessionId, CredentialFieldScope, CredentialId, HumanControlFailureCode,
-    HumanControlOperation, HumanControlProtocolFailure, HumanControlProtocolVersion,
-    HumanControlRequiredAction, HumanControlVersionOffer, PackagedComponent, PairingComparisonCode,
-    PairingRequestId, RuleLifetime, SecretFieldId, SecretFieldKind, StateTimestamp, UsageProfile,
-    UsageProfileDefinition, UsageProfileId, UseGrantId, CONTROLLER_ROLE,
-    HUMAN_CONTROL_DENY_DECISION, HUMAN_CONTROL_SCHEMA_ID, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+    ControllerSessionId, CredentialFieldScope, CredentialId, HumanControlAuditConfirmationId,
+    HumanControlFailureCode, HumanControlOperation, HumanControlProtocolFailure,
+    HumanControlProtocolVersion, HumanControlRequiredAction, HumanControlVersionOffer,
+    PackagedComponent, PairingComparisonCode, PairingRequestId, RuleLifetime, SecretFieldId,
+    SecretFieldKind, StateTimestamp, UsageProfile, UsageProfileDefinition, UsageProfileId,
+    UseGrantId, CONTROLLER_ROLE, HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE, HUMAN_CONTROL_DENY_DECISION,
+    HUMAN_CONTROL_SCHEMA_ID, HUMAN_CONTROL_SHUTDOWN_REASON, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
     MAX_HUMAN_CONTROL_COLLECTION_ITEMS, MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
 };
 
@@ -90,7 +91,12 @@ pub enum HumanControlRequest {
     /// Submit one single-use controller proof.
     ControllerAuthenticate(ControllerAuthenticationProof),
     /// Confirm the current connection lease remains active.
-    ControllerLeaseRenew,
+    ControllerLeaseRenew {
+        /// Exact authenticated controller session being renewed.
+        controller_session_id: ControllerSessionId,
+        /// Exact running Broker process instance being renewed.
+        broker_instance_id: BrokerInstanceId,
+    },
     /// Read Broker service readiness.
     ReadinessGet,
     /// Persist Machine Access Pause independently from service health.
@@ -209,6 +215,8 @@ pub enum HumanControlRequest {
     ConsumerRevoke {
         /// Stable paired Consumer identity.
         consumer_id: ConsumerId,
+        /// Fixed destructive revocation scope retained from the wire body.
+        scope: String,
     },
     /// Revoke every Consumer authorization without changing human Vault data.
     AllAccessRevoke,
@@ -225,6 +233,8 @@ pub enum HumanControlRequest {
     AuditClear {
         /// Exact non-secret audit selection.
         filter: BrokerAuditFilter,
+        /// Exact identity issued with the confirmed audit selection.
+        confirmation_id: HumanControlAuditConfirmationId,
         /// Capability token proving explicit local confirmation.
         confirmation: BrokerAuditClearConfirmation,
     },
@@ -243,7 +253,10 @@ pub enum HumanControlRequest {
         expected_protocol: HumanControlProtocolVersion,
     },
     /// Gracefully stop process-owned sessions and grants.
-    Shutdown,
+    Shutdown {
+        /// Fixed shutdown reason retained from the wire body.
+        reason: String,
+    },
 }
 
 impl HumanControlRequest {
@@ -254,7 +267,7 @@ impl HumanControlRequest {
             Self::Hello(_) => HumanControlOperation::Hello,
             Self::ControllerChallenge(_) => HumanControlOperation::ControllerChallenge,
             Self::ControllerAuthenticate(_) => HumanControlOperation::ControllerAuthenticate,
-            Self::ControllerLeaseRenew => HumanControlOperation::ControllerLeaseRenew,
+            Self::ControllerLeaseRenew { .. } => HumanControlOperation::ControllerLeaseRenew,
             Self::ReadinessGet => HumanControlOperation::ReadinessGet,
             Self::MachineAccessPauseSet { .. } => HumanControlOperation::MachineAccessPauseSet,
             Self::VaultUnlock { .. } => HumanControlOperation::VaultUnlock,
@@ -279,7 +292,7 @@ impl HumanControlRequest {
             Self::AuditClear { .. } => HumanControlOperation::AuditClear,
             Self::AuditExport { .. } => HumanControlOperation::AuditExport,
             Self::RepairPrepare { .. } => HumanControlOperation::RepairPrepare,
-            Self::Shutdown => HumanControlOperation::Shutdown,
+            Self::Shutdown { .. } => HumanControlOperation::Shutdown,
         }
     }
 }
@@ -1012,7 +1025,16 @@ where
         observed_at: StateTimestamp,
     ) -> Result<HumanControlResponse, HumanControlDispatchError> {
         match request {
-            HumanControlRequest::ControllerLeaseRenew => {
+            HumanControlRequest::ControllerLeaseRenew {
+                controller_session_id,
+                broker_instance_id,
+            } => {
+                validate_controller_lease(
+                    session_id,
+                    self.broker_instance_id,
+                    controller_session_id,
+                    broker_instance_id,
+                )?;
                 Ok(HumanControlResponse::ControllerLease { session_id })
             }
             HumanControlRequest::ReadinessGet => runtime
@@ -1191,10 +1213,13 @@ where
                 .revoke_use_grant_for_human(consumer_id, use_grant_id)
                 .map(grant_revoke_response)
                 .map_err(map_runtime_error),
-            HumanControlRequest::ConsumerRevoke { consumer_id } => runtime
-                .revoke_consumer_access(consumer_id)
-                .map(HumanControlResponse::RevocationSummary)
-                .map_err(map_runtime_error),
+            HumanControlRequest::ConsumerRevoke { consumer_id, scope } => {
+                validate_fixed_value(&scope, HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE)?;
+                runtime
+                    .revoke_consumer_access(consumer_id)
+                    .map(HumanControlResponse::RevocationSummary)
+                    .map_err(map_runtime_error)
+            }
             HumanControlRequest::AllAccessRevoke => runtime
                 .revoke_all_apps_and_tools_access()
                 .map(HumanControlResponse::RevocationSummary)
@@ -1212,11 +1237,15 @@ where
             }
             HumanControlRequest::AuditClear {
                 filter,
+                confirmation_id,
                 confirmation,
-            } => runtime
-                .clear_audit(filter, confirmation)
-                .map(HumanControlResponse::AuditClearSummary)
-                .map_err(map_runtime_error),
+            } => {
+                validate_audit_clear_confirmation(&confirmation, confirmation_id, filter)?;
+                runtime
+                    .clear_audit(filter, confirmation)
+                    .map(HumanControlResponse::AuditClearSummary)
+                    .map_err(map_runtime_error)
+            }
             HumanControlRequest::AuditExport { filter, limit } => {
                 validate_human_control_audit_limit(limit)?;
                 runtime
@@ -1239,10 +1268,13 @@ where
                     .map(HumanControlResponse::RepairReadiness)
                     .map_err(map_runtime_error)
             }
-            HumanControlRequest::Shutdown => runtime
-                .shutdown_at(observed_at)
-                .map(HumanControlResponse::ShutdownReceipt)
-                .map_err(map_runtime_error),
+            HumanControlRequest::Shutdown { reason } => {
+                validate_fixed_value(&reason, HUMAN_CONTROL_SHUTDOWN_REASON)?;
+                runtime
+                    .shutdown_at(observed_at)
+                    .map(HumanControlResponse::ShutdownReceipt)
+                    .map_err(map_runtime_error)
+            }
             HumanControlRequest::Hello(_)
             | HumanControlRequest::ControllerChallenge(_)
             | HumanControlRequest::ControllerAuthenticate(_) => Err(
@@ -1271,7 +1303,42 @@ fn validate_repair_target(
 }
 
 fn validate_pending_deny_decision(decision: &str) -> Result<(), HumanControlDispatchError> {
-    if decision == HUMAN_CONTROL_DENY_DECISION {
+    validate_fixed_value(decision, HUMAN_CONTROL_DENY_DECISION)
+}
+
+fn validate_fixed_value(value: &str, expected: &str) -> Result<(), HumanControlDispatchError> {
+    if value == expected {
+        Ok(())
+    } else {
+        Err(HumanControlDispatchError::code(
+            HumanControlFailureCode::InvalidRequest,
+        ))
+    }
+}
+
+fn validate_controller_lease(
+    authenticated_session_id: ControllerSessionId,
+    running_broker_instance_id: BrokerInstanceId,
+    requested_session_id: ControllerSessionId,
+    requested_broker_instance_id: BrokerInstanceId,
+) -> Result<(), HumanControlDispatchError> {
+    if authenticated_session_id == requested_session_id
+        && running_broker_instance_id == requested_broker_instance_id
+    {
+        Ok(())
+    } else {
+        Err(HumanControlDispatchError::code(
+            HumanControlFailureCode::InvalidRequest,
+        ))
+    }
+}
+
+fn validate_audit_clear_confirmation(
+    confirmation: &BrokerAuditClearConfirmation,
+    confirmation_id: HumanControlAuditConfirmationId,
+    filter: BrokerAuditFilter,
+) -> Result<(), HumanControlDispatchError> {
+    if confirmation.matches(confirmation_id, filter) {
         Ok(())
     } else {
         Err(HumanControlDispatchError::code(
@@ -1544,6 +1611,15 @@ mod tests {
         ));
         assert!(validate_human_control_audit_limit(256).is_ok());
         assert!(validate_pending_deny_decision(HUMAN_CONTROL_DENY_DECISION).is_ok());
+        assert!(validate_fixed_value(
+            HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE,
+            HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE,
+        )
+        .is_ok());
+        assert!(
+            validate_fixed_value(HUMAN_CONTROL_SHUTDOWN_REASON, HUMAN_CONTROL_SHUTDOWN_REASON,)
+                .is_ok()
+        );
         assert_eq!(
             validate_pending_deny_decision("approve")
                 .expect_err("reject contradictory decision")
@@ -1551,6 +1627,36 @@ mod tests {
                 .code(),
             HumanControlFailureCode::InvalidRequest
         );
+        let session_id = ControllerSessionId::generate();
+        let broker_instance_id = BrokerInstanceId::generate();
+        assert!(validate_controller_lease(
+            session_id,
+            broker_instance_id,
+            session_id,
+            broker_instance_id,
+        )
+        .is_ok());
+        assert!(validate_controller_lease(
+            session_id,
+            broker_instance_id,
+            ControllerSessionId::generate(),
+            broker_instance_id,
+        )
+        .is_err());
+        let filter = BrokerAuditFilter::all();
+        let confirmation = BrokerAuditClearConfirmation::after_user_confirmation(filter);
+        assert!(validate_audit_clear_confirmation(
+            &confirmation,
+            confirmation.confirmation_id(),
+            filter,
+        )
+        .is_ok());
+        assert!(validate_audit_clear_confirmation(
+            &confirmation,
+            HumanControlAuditConfirmationId::generate(),
+            filter,
+        )
+        .is_err());
         assert_eq!(
             validate_human_control_audit_limit(257)
                 .expect_err("reject oversized audit page")
@@ -1800,19 +1906,62 @@ mod tests {
             HumanControlResponse::ControllerChallenge(challenge) => challenge,
             other => panic!("unexpected response {other:?}"),
         };
-        assert!(matches!(
-            dispatcher.dispatch(
+        let authenticated = dispatcher
+            .dispatch(
                 &mut runtime,
                 &mut state,
                 HumanControlRequest::ControllerAuthenticate(challenge.prove(&seed)),
                 now,
                 timestamp(113),
-            ),
-            Ok(HumanControlResponse::ControllerAuthenticated { .. })
-        ));
-        assert!(matches!(
+            )
+            .expect("authenticate");
+        let (controller_id, session_id) = match authenticated {
+            HumanControlResponse::ControllerAuthenticated {
+                controller_id,
+                session_id,
+            } => (controller_id, session_id),
+            other => panic!("unexpected response {other:?}"),
+        };
+        assert_eq!(
             state.phase(),
-            HumanControlConnectionPhase::Authenticated { .. }
+            HumanControlConnectionPhase::Authenticated {
+                controller_id,
+                session_id,
+            }
+        );
+        let broker_instance_id = runtime.process().broker_instance_id();
+        for request in [
+            HumanControlRequest::ControllerLeaseRenew {
+                controller_session_id: ControllerSessionId::generate(),
+                broker_instance_id,
+            },
+            HumanControlRequest::ControllerLeaseRenew {
+                controller_session_id: session_id,
+                broker_instance_id: BrokerInstanceId::generate(),
+            },
+        ] {
+            let error = dispatcher
+                .dispatch(&mut runtime, &mut state, request, now, timestamp(113))
+                .expect_err("reject stale lease identity");
+            assert_eq!(
+                error.failure().code(),
+                HumanControlFailureCode::InvalidRequest
+            );
+        }
+        assert!(matches!(
+            dispatcher.dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::ControllerLeaseRenew {
+                    controller_session_id: session_id,
+                    broker_instance_id,
+                },
+                now,
+                timestamp(113),
+            ),
+            Ok(HumanControlResponse::ControllerLease {
+                session_id: renewed
+            }) if renewed == session_id
         ));
 
         assert!(matches!(
@@ -1889,6 +2038,83 @@ mod tests {
             export,
             HumanControlResponse::AuditExport(export) if export.event_count() == 1
         ));
+        let clear_filter = BrokerAuditFilter::all();
+        let wrong_id_confirmation =
+            BrokerAuditClearConfirmation::after_user_confirmation(clear_filter);
+        let wrong_id_error = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::AuditClear {
+                    filter: clear_filter,
+                    confirmation_id: HumanControlAuditConfirmationId::generate(),
+                    confirmation: wrong_id_confirmation,
+                },
+                now,
+                timestamp(118),
+            )
+            .expect_err("reject mismatched audit confirmation identity");
+        assert_eq!(
+            wrong_id_error.failure().code(),
+            HumanControlFailureCode::InvalidRequest
+        );
+        let wrong_selection_confirmation =
+            BrokerAuditClearConfirmation::after_user_confirmation(clear_filter);
+        let wrong_selection_id = wrong_selection_confirmation.confirmation_id();
+        let wrong_selection_error = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::AuditClear {
+                    filter: BrokerAuditFilter::all().with_consumer(ConsumerId::generate()),
+                    confirmation_id: wrong_selection_id,
+                    confirmation: wrong_selection_confirmation,
+                },
+                now,
+                timestamp(118),
+            )
+            .expect_err("reject mismatched audit confirmation selection");
+        assert_eq!(
+            wrong_selection_error.failure().code(),
+            HumanControlFailureCode::InvalidRequest
+        );
+        let clear_confirmation =
+            BrokerAuditClearConfirmation::after_user_confirmation(clear_filter);
+        let clear_confirmation_id = clear_confirmation.confirmation_id();
+        let clear = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::AuditClear {
+                    filter: clear_filter,
+                    confirmation_id: clear_confirmation_id,
+                    confirmation: clear_confirmation,
+                },
+                now,
+                timestamp(118),
+            )
+            .expect("clear exact confirmed audit selection");
+        assert!(matches!(
+            clear,
+            HumanControlResponse::AuditClearSummary(summary)
+                if summary.removed_events() == 2 && summary.remaining_events() == 0
+        ));
+        let revoke_error = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::ConsumerRevoke {
+                    consumer_id: ConsumerId::generate(),
+                    scope: "credential-only".to_owned(),
+                },
+                now,
+                timestamp(118),
+            )
+            .expect_err("reject contradictory Consumer scope");
+        assert_eq!(
+            revoke_error.failure().code(),
+            HumanControlFailureCode::InvalidRequest
+        );
         let secret_marker = "seeded-human-control-secret-marker";
         let unlock_error = dispatcher
             .dispatch(
@@ -1911,7 +2137,38 @@ mod tests {
         assert!(!unlock_error.to_string().contains(secret_marker));
         assert!(!format!("{unlock_error:?}").contains(secret_marker));
 
-        runtime.shutdown_at(timestamp(120)).expect("shutdown");
+        let shutdown_error = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::Shutdown {
+                    reason: "repair".to_owned(),
+                },
+                now,
+                timestamp(120),
+            )
+            .expect_err("reject contradictory shutdown reason");
+        assert_eq!(
+            shutdown_error.failure().code(),
+            HumanControlFailureCode::InvalidRequest
+        );
+        assert!(!runtime
+            .process()
+            .vault_sessions()
+            .is_shutdown()
+            .expect("runtime remains active"));
+        assert!(matches!(
+            dispatcher.dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::Shutdown {
+                    reason: HUMAN_CONTROL_SHUTDOWN_REASON.to_owned(),
+                },
+                now,
+                timestamp(120),
+            ),
+            Ok(HumanControlResponse::ShutdownReceipt(_))
+        ));
         drop(runtime);
         fs::remove_dir_all(home).expect("cleanup");
     }

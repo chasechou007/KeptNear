@@ -159,6 +159,11 @@ rather than labels or paths.
 | `RepairPrepare` | `expectedComponent`, `expectedProtocol` |
 | `Shutdown` | fixed `reason` |
 
+The fixed `ConsumerRevoke.scope` value is `consumer-and-authorization`, and the
+fixed graceful `Shutdown.reason` value is `controller-request`. A controller
+lease renewal must echo both the authenticated `controllerSessionId` and the
+running `brokerInstanceId`; either mismatch is rejected.
+
 The `credential` union accepts either a Base64 master-password byte string or a
 fixed-length Base64 local-unlock value. It accepts no file path, Keychain query,
 environment variable, command argument, or credential reference. The decoded
@@ -228,6 +233,11 @@ submitted Credential and Secret Field identities. Existing-field approvals
 compare those identities with the immutable pending target, while
 new-Credential approvals compare them with the current human-reviewed
 candidate. A mismatch leaves the request pending.
+
+Audit-clear confirmation is issued for one exact non-secret selection. The
+typed confirmation retains both its fresh `confirmationId` and that selection;
+the dispatcher rejects a changed identity or selection before deleting any
+audit event.
 
 Credential-review metadata uses a shared half-response byte budget in addition
 to the candidate-count bound. Individual titles, template identities, tags,

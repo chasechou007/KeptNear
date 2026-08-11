@@ -11,6 +11,7 @@ use crate::controller_authority_contract::{
 const CONTROLLER_ID_PREFIX: &str = "controller_";
 const CONTROLLER_SESSION_ID_PREFIX: &str = "controller_session_";
 const HUMAN_CONTROL_REQUEST_ID_PREFIX: &str = "control_request_";
+const HUMAN_CONTROL_AUDIT_CONFIRMATION_ID_PREFIX: &str = "audit_confirmation_";
 const CONTROLLER_NONCE_PREFIX: &str = "controller_nonce_";
 const CONTROLLER_DEADLINE_PREFIX: &str = "controller_deadline_";
 
@@ -136,8 +137,25 @@ define_public_hex_type!(
     "Immutable correlation identity of one human-control request."
 );
 
+define_public_hex_type!(
+    HumanControlAuditConfirmationId,
+    CONTROLLER_PROTOCOL_ID_LENGTH,
+    HUMAN_CONTROL_AUDIT_CONFIRMATION_ID_PREFIX,
+    "Identity of one explicitly confirmed audit selection."
+);
+
 impl HumanControlRequestId {
     /// Generates a fresh request identity from the operating-system CSPRNG.
+    #[must_use]
+    pub fn generate() -> Self {
+        let mut bytes = [0_u8; CONTROLLER_PROTOCOL_ID_LENGTH];
+        OsRng.fill_bytes(&mut bytes);
+        Self(bytes)
+    }
+}
+
+impl HumanControlAuditConfirmationId {
+    /// Generates a fresh confirmation identity from the operating-system CSPRNG.
     #[must_use]
     pub fn generate() -> Self {
         let mut bytes = [0_u8; CONTROLLER_PROTOCOL_ID_LENGTH];

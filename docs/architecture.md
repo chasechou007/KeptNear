@@ -651,6 +651,10 @@ version in addition to the selected field, confirmation policy, and lifetime.
 Allow Once and long-term authorization both compare submitted Credential and
 Secret Field identities with the immutable pending target, and denial requires
 the fixed `deny` decision before mutation.
+Lease renewal echoes the authenticated Controller session and Broker instance;
+Consumer revocation and shutdown retain and validate their fixed scope and
+reason. Audit-clear confirmations bind a fresh identity to one exact selection
+before deletion.
 Negotiation preserves and validates the controller role and schema identities,
 and repair validates the expected Broker component and Human Control protocol
 before it can quiesce sessions or grants. Mismatches fail without resolving the

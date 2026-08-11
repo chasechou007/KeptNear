@@ -790,7 +790,7 @@ fn trusted_audit_view_export_and_confirmed_clear_never_modify_the_portable_vault
     let cleared = runtime
         .clear_audit(
             filter,
-            BrokerAuditClearConfirmation::after_user_confirmation(),
+            BrokerAuditClearConfirmation::after_user_confirmation(filter),
         )
         .expect("clear audit");
     assert_eq!(cleared.removed_events(), 1);

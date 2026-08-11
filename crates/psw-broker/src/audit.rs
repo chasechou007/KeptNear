@@ -8,6 +8,7 @@ use crate::state_model::{
     CredentialFieldScope, StateTimestamp,
 };
 use crate::state_store::{DeviceStateError, DeviceStateStore, MAX_RETAINED_AUDIT_EVENTS};
+use crate::HumanControlAuditConfirmationId;
 
 /// Maximum number of audit events returned by one trusted local view request.
 pub const MAX_AUDIT_VIEW_EVENTS: usize = 500;
@@ -198,16 +199,38 @@ impl BrokerAuditPage {
 }
 
 /// Capability token created only after an explicit local user confirmation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct BrokerAuditClearConfirmation {
-    _private: (),
+    confirmation_id: HumanControlAuditConfirmationId,
+    filter: BrokerAuditFilter,
 }
 
 impl BrokerAuditClearConfirmation {
-    /// Records that the trusted local control plane obtained user confirmation.
+    /// Records that the trusted local control plane confirmed one exact selection.
     #[must_use]
-    pub const fn after_user_confirmation() -> Self {
-        Self { _private: () }
+    pub fn after_user_confirmation(filter: BrokerAuditFilter) -> Self {
+        Self {
+            confirmation_id: HumanControlAuditConfirmationId::generate(),
+            filter,
+        }
+    }
+
+    /// Returns the single-use identity shown with the confirmed selection.
+    #[must_use]
+    pub const fn confirmation_id(&self) -> HumanControlAuditConfirmationId {
+        self.confirmation_id
+    }
+
+    pub(crate) fn matches(
+        &self,
+        confirmation_id: HumanControlAuditConfirmationId,
+        filter: BrokerAuditFilter,
+    ) -> bool {
+        self.confirmation_id == confirmation_id && self.filter == filter
+    }
+
+    fn matches_filter(&self, filter: BrokerAuditFilter) -> bool {
+        self.filter == filter
     }
 }
 
@@ -278,6 +301,8 @@ pub enum BrokerAuditError {
     InvalidTimeWindow,
     /// A Vault filter disagreed with the exact field scope.
     InconsistentScope,
+    /// The explicit confirmation was issued for another audit selection.
+    ConfirmationMismatch,
     /// Authenticated encrypted device state could not be read or changed.
     DeviceState(DeviceStateError),
     /// The fixed non-secret JSON projection could not be encoded.
@@ -292,6 +317,9 @@ impl Display for BrokerAuditError {
             Self::InvalidViewLimit => formatter.write_str("audit view limit is invalid"),
             Self::InvalidTimeWindow => formatter.write_str("audit time window is invalid"),
             Self::InconsistentScope => formatter.write_str("audit scope is inconsistent"),
+            Self::ConfirmationMismatch => {
+                formatter.write_str("audit clear confirmation does not match the selection")
+            }
             Self::DeviceState(source) => write!(formatter, "audit state failed: {source}"),
             Self::Serialization => formatter.write_str("audit export encoding failed"),
             Self::ExportTooLarge => formatter.write_str("audit export exceeds its fixed bound"),
@@ -306,6 +334,7 @@ impl std::error::Error for BrokerAuditError {
             Self::InvalidViewLimit
             | Self::InvalidTimeWindow
             | Self::InconsistentScope
+            | Self::ConfirmationMismatch
             | Self::Serialization
             | Self::ExportTooLarge => None,
         }
@@ -339,9 +368,12 @@ impl BrokerAuditManager {
     pub(crate) fn clear(
         state: &DeviceStateStore,
         filter: BrokerAuditFilter,
-        _confirmation: BrokerAuditClearConfirmation,
+        confirmation: BrokerAuditClearConfirmation,
     ) -> Result<BrokerAuditClearSummary, BrokerAuditError> {
         filter.validate()?;
+        if !confirmation.matches_filter(filter) {
+            return Err(BrokerAuditError::ConfirmationMismatch);
+        }
         let (removed_events, remaining_events) = state.clear_audit_events_matching(filter)?;
         Ok(BrokerAuditClearSummary {
             removed_events,
@@ -815,14 +847,23 @@ mod tests {
             state.append_audit_event(event).expect("append event");
         }
 
-        let summary = BrokerAuditManager::clear(
-            &state,
-            BrokerAuditFilter::all()
-                .with_consumer(first_consumer)
-                .with_event_kind(AuditEventKind::CredentialUse),
-            BrokerAuditClearConfirmation::after_user_confirmation(),
-        )
-        .expect("clear selection");
+        let filter = BrokerAuditFilter::all()
+            .with_consumer(first_consumer)
+            .with_event_kind(AuditEventKind::CredentialUse);
+        let mismatched_confirmation = BrokerAuditClearConfirmation::after_user_confirmation(filter);
+        assert!(matches!(
+            BrokerAuditManager::clear(
+                &state,
+                BrokerAuditFilter::all().with_consumer(second_consumer),
+                mismatched_confirmation,
+            ),
+            Err(BrokerAuditError::ConfirmationMismatch)
+        ));
+        assert_eq!(state.recent_audit_events(10).expect("preserved").len(), 3);
+
+        let confirmation = BrokerAuditClearConfirmation::after_user_confirmation(filter);
+        let summary =
+            BrokerAuditManager::clear(&state, filter, confirmation).expect("clear selection");
 
         assert_eq!(summary.removed_events(), 1);
         assert_eq!(summary.remaining_events(), 2);
