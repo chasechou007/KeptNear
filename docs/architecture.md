@@ -93,9 +93,14 @@ session negotiation, readiness, pause, machine Vault lock state, pending human
 decisions, authorization inventory, Usage Profiles, revocation, audit, repair,
 and shutdown. It contains none of the six Consumer machine capabilities. Only
 the Vault unlock request can carry a bounded unlock credential, while every
-result is secret-free. The external dispatcher, controller Keychain authority,
-and App client are not implemented by this contract freeze, so installation
-still does not activate the service. See `docs/human-control-protocol.md`.
+result is secret-free. The related `keptnear.controller-authority.v1` source
+contract freezes Ed25519, the shared App-and-Broker Data Protection Keychain
+access group, bootstrap and authentication transcripts, replay bounds, and a
+marker-backed fail-closed removal lifecycle. The external dispatcher, runtime
+Keychain adapter, controller trust record, and App client remain unimplemented, so
+installation still does not activate the service. See `docs/human-control-protocol.md`.
+The controller authority details are in
+`docs/controller-authority-contract.md`.
 
 `keptnear-client` holds the shared first-party Ed25519 identity, Data Protection
 Keychain, protocol negotiation, pairing, connection authentication, and framed

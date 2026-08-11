@@ -549,6 +549,25 @@ same-named MCP and CLI profile therefore has a separate signing key and
 Consumer permission set. Neither profile label enters Broker protocol or
 authorization state.
 
+The separate human-controller authority is frozen as source contract
+`keptnear.controller-authority.v1`. It uses one 32-byte Ed25519 seed under the
+stable `app.keptnear.human-controller-key.v1` / `primary-v1` Data Protection
+Keychain identity. An activation-qualified build must place that item in the
+exact `<signing-prefix>.app.keptnear.human-controller` access group declared
+only by the signed App and packaged Broker, name the group in every Keychain
+query, disable synchronization, and use
+`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`. Bootstrap and ordinary
+authentication have separate fixed-order, length-prefixed domains, 30-second
+single-use challenges, and bounded failure windows. Disable, update, and
+reinstall preserve complete authority; v1 supports rotation only through a
+confirmed device-access clear followed by a later explicit enable. A
+`removal-pending-v1` item in the same restricted access group is created before
+either authority side is removed and deleted last, so an interrupted clear
+cannot be mistaken for resumable bootstrap. The runtime
+Keychain adapter and Broker controller record are not yet implemented, so this
+contract does not activate machine access. See
+`docs/controller-authority-contract.md`.
+
 Pairing protocol messages carry a fresh client nonce, Broker nonce, comparison
 code, and strict Ed25519 proof. Repeating pairing start with the same public key
 resumes the exact pending request rather than creating another identity. After

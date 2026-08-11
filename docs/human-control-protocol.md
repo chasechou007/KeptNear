@@ -155,10 +155,12 @@ The `credential` union accepts either a Base64 master-password byte string or a
 fixed-length Base64 local-unlock value. It accepts no file path, Keychain query,
 environment variable, command argument, or credential reference. The decoded
 value is bounded before secret-handling allocation and must be zeroized after
-the unlock attempt. The exact controller algorithm, transcript, nonce, proof,
-deadline, Keychain identity, and replay bounds are a separate cryptographic
-contract; these fields reserve their closed wire positions without choosing
-those values here.
+the unlock attempt. The controller algorithm, Keychain identity, transcript
+encoding, nonce sizes, proof size, deadline semantics, replay bounds, and
+authority lifecycle are frozen separately in
+`docs/controller-authority-contract.md`. These fields keep their closed wire
+positions; the runtime challenge manager and Keychain adapter remain
+unimplemented.
 
 ## Operation Catalog
 
