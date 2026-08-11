@@ -22,7 +22,10 @@ use crate::{
     HumanControlProtocolFailure, HumanControlProtocolVersion, HumanControlRequiredAction,
     HumanControlVersionOffer, PairingRequestId, SecretFieldId, SecretFieldKind, StateTimestamp,
     UsageProfile, UsageProfileDefinition, UsageProfileId, UseGrantId, HUMAN_CONTROL_SCHEMA_ID,
+    MAX_HUMAN_CONTROL_AUDIT_EVENTS, MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
 };
+
+const MAX_HUMAN_CONTROL_AUDIT_EXPORT_BYTES: usize = MAX_HUMAN_CONTROL_RESPONSE_LENGTH / 2;
 
 const HUMAN_CONTROL_DISPATCH_OPERATIONS: [HumanControlOperation; 29] = [
     HumanControlOperation::Hello,
@@ -672,6 +675,10 @@ where
                 HumanControlFailureCode::NegotiationRequired,
             ));
         }
+        state
+            .authentication
+            .check_challenge_budget(request.controller_id(), now)
+            .map_err(map_authentication_error)?;
         let record = runtime
             .controller_authority_record()
             .map_err(map_runtime_error)?;
@@ -688,8 +695,10 @@ where
             }
         };
         if request.mode() != expected_mode || !request.matches_key(prepared.key()) {
-            return Err(HumanControlDispatchError::code(
-                HumanControlFailureCode::AuthenticationFailed,
+            return Err(map_authentication_error(
+                state
+                    .authentication
+                    .reject_challenge(request.controller_id(), now),
             ));
         }
         let challenge = state
@@ -909,7 +918,7 @@ where
                 use_grant_id,
             } => runtime
                 .revoke_use_grant_for_human(consumer_id, use_grant_id)
-                .map(|removed| HumanControlResponse::RemovalReceipt { removed })
+                .map(grant_revoke_response)
                 .map_err(map_runtime_error),
             HumanControlRequest::ConsumerRevoke { consumer_id } => runtime
                 .revoke_consumer_access(consumer_id)
@@ -935,7 +944,12 @@ where
                 .map(HumanControlResponse::AuditClearSummary)
                 .map_err(map_runtime_error),
             HumanControlRequest::AuditExport { filter } => runtime
-                .export_audit_json_at(filter, observed_at)
+                .export_human_control_audit_json_at(
+                    filter,
+                    observed_at,
+                    MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+                    MAX_HUMAN_CONTROL_AUDIT_EXPORT_BYTES,
+                )
                 .map(HumanControlResponse::AuditExport)
                 .map_err(map_runtime_error),
             HumanControlRequest::RepairPrepare => runtime
@@ -953,6 +967,10 @@ where
             ),
         }
     }
+}
+
+fn grant_revoke_response(removed: bool) -> HumanControlResponse {
+    HumanControlResponse::RevocationSummary(BrokerRevocationSummary::for_use_grant(removed))
 }
 
 fn map_authentication_error(error: ControllerAuthenticationError) -> HumanControlDispatchError {
@@ -991,15 +1009,17 @@ mod tests {
     use std::collections::BTreeSet;
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::rc::Rc;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
     use crate::{
-        ControllerKeyStoreError, ControllerSigningKey, DeviceKeyStore, DeviceKeyStoreError,
-        DevicePaths, DeviceRootKey, HumanControlAuthenticationRequirement,
+        BrokerRevocationKind, ControllerKeyStoreError, ControllerSigningKey, DeviceKeyStore,
+        DeviceKeyStoreError, DevicePaths, DeviceRootKey, HumanControlAuthenticationRequirement,
         HumanControlProtocolVersionRange, HumanControlRequestSecretClass,
         HumanControlResultSecrecy, CONTROLLER_ROLE, HUMAN_CONTROL_OPERATION_CONTRACTS,
+        MAX_CONTROLLER_FAILURES_PER_IDENTITY,
     };
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
@@ -1035,6 +1055,7 @@ mod tests {
     struct MemoryControllerKeyStore {
         seed: RefCell<Option<Vec<u8>>>,
         marker: Cell<bool>,
+        loads: Rc<Cell<usize>>,
     }
 
     impl MemoryControllerKeyStore {
@@ -1042,12 +1063,20 @@ mod tests {
             Self {
                 seed: RefCell::new(Some(vec![byte; 32])),
                 marker: Cell::new(false),
+                loads: Rc::new(Cell::new(0)),
             }
+        }
+
+        fn seeded_with_load_counter(byte: u8) -> (Self, Rc<Cell<usize>>) {
+            let store = Self::seeded(byte);
+            let loads = Rc::clone(&store.loads);
+            (store, loads)
         }
     }
 
     impl ControllerKeyStore for MemoryControllerKeyStore {
         fn load_seed(&self) -> Result<Option<ControllerSigningKey>, ControllerKeyStoreError> {
+            self.loads.set(self.loads.get() + 1);
             self.seed
                 .borrow()
                 .as_ref()
@@ -1148,6 +1177,12 @@ mod tests {
         ] {
             assert!(!production.contains(&format!("\"{forbidden}\"")));
         }
+        assert!(matches!(
+            grant_revoke_response(true),
+            HumanControlResponse::RevocationSummary(summary)
+                if summary.kind() == BrokerRevocationKind::UseGrant
+                    && summary.use_grants_removed() == 1
+        ));
     }
 
     #[test]
@@ -1319,7 +1354,6 @@ mod tests {
             ),
             Ok(HumanControlResponse::AuditPage(_))
         ));
-
         let secret_marker = "seeded-human-control-secret-marker";
         let unlock_error = dispatcher
             .dispatch(
@@ -1357,26 +1391,50 @@ mod tests {
                 timestamp(120),
             ))
             .expect("record");
-        let dispatcher = HumanControlDispatcher::new(
-            runtime.process().broker_instance_id(),
-            MemoryControllerKeyStore::seeded(0x41),
-        );
+        let (store, load_count) = MemoryControllerKeyStore::seeded_with_load_counter(0x41);
+        let dispatcher = HumanControlDispatcher::new(runtime.process().broker_instance_id(), store);
         let mut state = dispatcher.connection();
         let now = Instant::now();
         dispatcher
             .dispatch(&mut runtime, &mut state, hello(), now, timestamp(121))
             .expect("hello");
         let impostor = ControllerSigningKey::from_stored_bytes(vec![0x42; 32]).expect("impostor");
+        for attempt in 0..MAX_CONTROLLER_FAILURES_PER_IDENTITY {
+            let session_byte = 0x43_u8.wrapping_add(u8::try_from(attempt).expect("attempt"));
+            let request = ControllerChallengeRequest::new(
+                ControllerAuthenticationMode::Authenticate,
+                HumanControlProtocolVersion::current(),
+                CONTROLLER_ROLE.to_owned(),
+                impostor.controller_id(),
+                impostor.public_key(),
+                ControllerSessionId::from_bytes([session_byte; 16]),
+                crate::ControllerNonce::from_bytes([session_byte.wrapping_add(1); 32]),
+            )
+            .expect("request");
+            let error = dispatcher
+                .dispatch(
+                    &mut runtime,
+                    &mut state,
+                    HumanControlRequest::ControllerChallenge(request),
+                    now,
+                    timestamp(122),
+                )
+                .expect_err("wrong key rejected");
+            assert_eq!(
+                error.failure().code(),
+                HumanControlFailureCode::AuthenticationFailed
+            );
+        }
         let request = ControllerChallengeRequest::new(
             ControllerAuthenticationMode::Authenticate,
             HumanControlProtocolVersion::current(),
             CONTROLLER_ROLE.to_owned(),
             impostor.controller_id(),
             impostor.public_key(),
-            ControllerSessionId::from_bytes([0x43; 16]),
-            crate::ControllerNonce::from_bytes([0x44; 32]),
+            ControllerSessionId::from_bytes([0x60; 16]),
+            crate::ControllerNonce::from_bytes([0x61; 32]),
         )
-        .expect("request");
+        .expect("limited request");
         let error = dispatcher
             .dispatch(
                 &mut runtime,
@@ -1385,11 +1443,9 @@ mod tests {
                 now,
                 timestamp(122),
             )
-            .expect_err("wrong key rejected");
-        assert_eq!(
-            error.failure().code(),
-            HumanControlFailureCode::AuthenticationFailed
-        );
+            .expect_err("wrong key rate limited");
+        assert_eq!(error.failure().code(), HumanControlFailureCode::RateLimited);
+        assert_eq!(load_count.get(), MAX_CONTROLLER_FAILURES_PER_IDENTITY);
         assert_eq!(
             runtime
                 .controller_authority_record()

@@ -553,6 +553,23 @@ impl BrokerRuntime {
             .map_err(BrokerRuntimeError::Audit)
     }
 
+    pub(crate) fn export_human_control_audit_json_at(
+        &self,
+        filter: BrokerAuditFilter,
+        generated_at: StateTimestamp,
+        max_events: usize,
+        max_bytes: usize,
+    ) -> Result<BrokerAuditExport, BrokerRuntimeError> {
+        BrokerAuditManager::export_json_limited(
+            &self.state,
+            filter,
+            generated_at,
+            max_events,
+            max_bytes,
+        )
+        .map_err(BrokerRuntimeError::Audit)
+    }
+
     /// Starts a bounded Consumer pairing without granting credential access.
     pub fn begin_pairing(
         &self,

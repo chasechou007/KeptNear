@@ -9,6 +9,8 @@ use crate::state_store::{AuthorizationRemovalCounts, DeviceStateError, DeviceSta
 /// Scope of one explicit Apps & Tools revocation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrokerRevocationKind {
+    /// One exact Consumer-owned Use Grant.
+    UseGrant,
     /// Every capability for one Consumer and one Secret Field.
     ConsumerField,
     /// One paired Consumer and all of its authorization state.
@@ -31,6 +33,19 @@ pub struct BrokerRevocationSummary {
 }
 
 impl BrokerRevocationSummary {
+    pub(crate) const fn for_use_grant(removed: bool) -> Self {
+        Self {
+            kind: BrokerRevocationKind::UseGrant,
+            consumers_removed: 0,
+            access_rules_removed: 0,
+            use_grants_removed: if removed { 1 } else { 0 },
+            usage_profiles_removed: 0,
+            approvals_removed: 0,
+            pending_pairings_cancelled: 0,
+            credential_contexts_discarded: 0,
+        }
+    }
+
     /// Returns the requested revocation scope.
     #[must_use]
     pub const fn kind(self) -> BrokerRevocationKind {

@@ -72,6 +72,12 @@ impl ControllerChallengeRequest {
         self.mode
     }
 
+    /// Returns the claimed public controller identity for bounded admission checks.
+    #[must_use]
+    pub const fn controller_id(&self) -> ControllerId {
+        self.controller_id
+    }
+
     /// Returns whether this request exactly names the loaded restricted seed.
     #[must_use]
     pub fn matches_key(&self, key: &ControllerSigningKey) -> bool {
@@ -406,6 +412,33 @@ pub struct ControllerAuthenticationConnection {
 }
 
 impl ControllerAuthenticationConnection {
+    /// Refuses challenge work before protected key access once a shared budget is exhausted.
+    pub fn check_challenge_budget(
+        &self,
+        controller_id: ControllerId,
+        now: Instant,
+    ) -> Result<(), ControllerAuthenticationError> {
+        if self.is_limited(controller_id, now)? {
+            Err(ControllerAuthenticationError::RateLimited)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Consumes challenge state and records a dispatcher-side authority mismatch.
+    pub fn reject_challenge(
+        &mut self,
+        controller_id: ControllerId,
+        now: Instant,
+    ) -> ControllerAuthenticationError {
+        self.outstanding.take();
+        self.record_failure(
+            controller_id,
+            now,
+            ControllerAuthenticationError::AuthenticationFailed,
+        )
+    }
+
     /// Replaces any prior challenge and issues a fresh process-bound challenge.
     pub fn challenge(
         &mut self,
@@ -558,16 +591,22 @@ impl ControllerAuthenticationConnection {
         now: Instant,
         error: ControllerAuthenticationError,
     ) -> Result<T, ControllerAuthenticationError> {
-        let recorded = self
-            .service
-            .failures
-            .lock()
-            .map_err(|_| ControllerAuthenticationError::OperationFailed)?
-            .record_if_allowed(controller_id, now);
-        if recorded {
-            Err(error)
+        Err(self.record_failure(controller_id, now, error))
+    }
+
+    fn record_failure(
+        &self,
+        controller_id: ControllerId,
+        now: Instant,
+        error: ControllerAuthenticationError,
+    ) -> ControllerAuthenticationError {
+        let Ok(mut failures) = self.service.failures.lock() else {
+            return ControllerAuthenticationError::OperationFailed;
+        };
+        if failures.record_if_allowed(controller_id, now) {
+            error
         } else {
-            Err(ControllerAuthenticationError::RateLimited)
+            ControllerAuthenticationError::RateLimited
         }
     }
 }
