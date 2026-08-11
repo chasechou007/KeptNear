@@ -12,6 +12,7 @@ mod audit;
 mod authentication;
 mod capability_protocol;
 mod component_metadata;
+mod controller_authority_contract;
 mod credential_matching;
 mod credential_search;
 mod device_key;
@@ -82,6 +83,22 @@ pub use capability_protocol::{
 pub use component_metadata::{
     ComponentBrokerProtocol, ComponentMetadata, ComponentMetadataError, PackagedComponent,
     COMPONENT_METADATA_SCHEMA,
+};
+pub use controller_authority_contract::{
+    controller_authentication_transcript, controller_bootstrap_transcript,
+    controller_enable_disposition, derive_controller_id, ControllerAuthorityContractError,
+    ControllerAuthorityPresence, ControllerEnableDisposition, ControllerKeychainAccessGroup,
+    ControllerKeychainContract, ControllerKeychainPrincipal, ControllerRemovalOrder,
+    ControllerRotationPolicy, ControllerTranscriptFields, CONTROLLER_AUTHENTICATION_DOMAIN,
+    CONTROLLER_AUTHORITY_CONTRACT_ID, CONTROLLER_BOOTSTRAP_DOMAIN, CONTROLLER_CHALLENGE_TTL,
+    CONTROLLER_FAILURE_WINDOW, CONTROLLER_ID_LENGTH, CONTROLLER_KEYCHAIN_ACCESS_GROUP_SUFFIX,
+    CONTROLLER_KEYCHAIN_ACCOUNT, CONTROLLER_KEYCHAIN_CONTRACT, CONTROLLER_KEYCHAIN_LABEL,
+    CONTROLLER_KEYCHAIN_PRINCIPALS, CONTROLLER_KEYCHAIN_SERVICE, CONTROLLER_NONCE_LENGTH,
+    CONTROLLER_PROTOCOL_ID_LENGTH, CONTROLLER_PUBLIC_KEY_LENGTH, CONTROLLER_REMOVAL_ORDER,
+    CONTROLLER_ROLE, CONTROLLER_ROTATION_POLICY, CONTROLLER_SIGNATURE_LENGTH,
+    CONTROLLER_SIGNING_ALGORITHM, CONTROLLER_SIGNING_PREFIX_LENGTH, CONTROLLER_SIGNING_SEED_LENGTH,
+    MAX_CONTROLLER_FAILURES_GLOBALLY, MAX_CONTROLLER_FAILURES_PER_IDENTITY,
+    MAX_OUTSTANDING_CONTROLLER_CHALLENGES_PER_CONNECTION,
 };
 pub use credential_matching::{
     BrokerAdmittedCredentialRequest, BrokerApprovedCredentialSelection,

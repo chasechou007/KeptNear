@@ -67,6 +67,7 @@ BUILD_PATH="$ROOT_DIR/docs/build.md"
 INSTALL_PATH="$ROOT_DIR/docs/macos-alpha-packaging.md"
 SERVICE_ACTIVATION_PATH="$ROOT_DIR/docs/macos-service-activation-feasibility.md"
 HUMAN_CONTROL_PROTOCOL_PATH="$ROOT_DIR/docs/human-control-protocol.md"
+CONTROLLER_AUTHORITY_PATH="$ROOT_DIR/docs/controller-authority-contract.md"
 RECOVERY_PATH="$ROOT_DIR/docs/backup.md"
 PRIVACY_PATH="$ROOT_DIR/docs/diagnostics.md"
 LOGGING_PATH="$ROOT_DIR/docs/logging-policy.md"
@@ -86,6 +87,7 @@ for path in \
   "$INSTALL_PATH" \
   "$SERVICE_ACTIVATION_PATH" \
   "$HUMAN_CONTROL_PROTOCOL_PATH" \
+  "$CONTROLLER_AUTHORITY_PATH" \
   "$RECOVERY_PATH" \
   "$PRIVACY_PATH" \
   "$LOGGING_PATH" \
@@ -121,7 +123,15 @@ require_literal "$HUMAN_CONTROL_PROTOCOL_PATH" 'Schema identity: `keptnear.human
 require_literal "$HUMAN_CONTROL_PROTOCOL_PATH" 'Maximum frame: 1 MiB.'
 require_literal "$HUMAN_CONTROL_PROTOCOL_PATH" '`secret.get`'
 require_literal "$HUMAN_CONTROL_PROTOCOL_PATH" 'No minor version may add a secret-returning result'
+require_literal "$HUMAN_CONTROL_PROTOCOL_PATH" 'docs/controller-authority-contract.md'
 require_literal "$ROOT_DIR/docs/architecture.md" 'See `docs/human-control-protocol.md`.'
+require_literal "$ROOT_DIR/docs/architecture.md" '`docs/controller-authority-contract.md`.'
+require_literal "$CONTROLLER_AUTHORITY_PATH" 'Contract: `keptnear.controller-authority.v1`'
+require_literal "$CONTROLLER_AUTHORITY_PATH" '`app.keptnear.human-controller-key.v1`'
+require_literal "$CONTROLLER_AUTHORITY_PATH" '`<signing-prefix>.app.keptnear.human-controller`'
+require_literal "$CONTROLLER_AUTHORITY_PATH" 'At most one challenge exists on a human-control connection.'
+require_literal "$CONTROLLER_AUTHORITY_PATH" 'Version 1 has no in-place, scheduled, age-based, or update-triggered controller'
+require_literal "$CONTROLLER_AUTHORITY_PATH" 'Bundled But Not Activated'
 
 require_literal "$RECOVERY_PATH" 'locked-vault'
 require_literal "$RECOVERY_PATH" 'valid recovery kit'
