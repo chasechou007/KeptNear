@@ -205,6 +205,10 @@ fresh controller session, echoed client nonce, fresh Broker nonce, and the
 opaque deadline token. The App signs the authentication transcript and returns
 the fixed 64-byte proof through `controller.authenticate`.
 
+The request cannot nominate a controller session identity. The Broker generates
+that identity independently for every challenge, including replacement
+challenges on the same connection.
+
 Successful proof authenticates only that connection and starts the separately
 bounded controller lease. It does not authenticate another connection, unlock
 a Vault, resume Machine Access Pause, grant credential scope, or survive a

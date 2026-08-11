@@ -10,25 +10,29 @@ use crate::{
     BrokerConsumerAuditSummary, BrokerConsumerDetail, BrokerConsumerIdentityEvidence,
     BrokerConsumerSummary, BrokerCredentialCandidateSelection, BrokerFieldGrantSummary,
     BrokerGrantInvalidationSummary, BrokerHumanCredentialCandidate, BrokerHumanCredentialReview,
-    BrokerHumanSecretFieldCandidate, BrokerInstanceId, BrokerPairingUserApproval,
-    BrokerPendingRequest, BrokerPendingRequestId, BrokerPendingRequestKind,
-    BrokerReadinessProjection, BrokerRevocationSummary, BrokerRuntime, BrokerRuntimeError,
-    BrokerUsageProfileSummary, BrokerVaultSessionSnapshot, BundledUsageProfileRecommendation,
-    BundledUsageProfileTemplate, Capability, ConfirmationPolicy, ConsumerEvidenceFingerprint,
-    ConsumerId, ControllerAuthenticationChallenge, ControllerAuthenticationCompletion,
-    ControllerAuthenticationConnection, ControllerAuthenticationError,
-    ControllerAuthenticationMode, ControllerAuthenticationProof, ControllerAuthenticationService,
-    ControllerAuthorityError, ControllerAuthorityManager, ControllerBootstrapMode,
-    ControllerChallengeRequest, ControllerId, ControllerKeyStore, ControllerSessionId,
-    CredentialFieldScope, CredentialId, HumanControlFailureCode, HumanControlOperation,
-    HumanControlProtocolFailure, HumanControlProtocolVersion, HumanControlRequiredAction,
-    HumanControlVersionOffer, PairingComparisonCode, PairingRequestId, SecretFieldId,
-    SecretFieldKind, StateTimestamp, UsageProfile, UsageProfileDefinition, UsageProfileId,
-    UseGrantId, HUMAN_CONTROL_SCHEMA_ID, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+    BrokerInstanceId, BrokerPairingUserApproval, BrokerPendingRequest, BrokerPendingRequestId,
+    BrokerPendingRequestKind, BrokerReadinessProjection, BrokerRevocationSummary, BrokerRuntime,
+    BrokerRuntimeError, BrokerUsageProfileSummary, BrokerVaultSessionSnapshot,
+    BundledUsageProfileRecommendation, BundledUsageProfileTemplate, Capability, ConfirmationPolicy,
+    ConsumerEvidenceFingerprint, ConsumerId, ControllerAuthenticationChallenge,
+    ControllerAuthenticationCompletion, ControllerAuthenticationConnection,
+    ControllerAuthenticationError, ControllerAuthenticationMode, ControllerAuthenticationProof,
+    ControllerAuthenticationService, ControllerAuthorityError, ControllerAuthorityManager,
+    ControllerBootstrapMode, ControllerChallengeRequest, ControllerId, ControllerKeyStore,
+    ControllerSessionId, CredentialFieldScope, CredentialId, HumanControlFailureCode,
+    HumanControlOperation, HumanControlProtocolFailure, HumanControlProtocolVersion,
+    HumanControlRequiredAction, HumanControlVersionOffer, PairingComparisonCode, PairingRequestId,
+    SecretFieldId, SecretFieldKind, StateTimestamp, UsageProfile, UsageProfileDefinition,
+    UsageProfileId, UseGrantId, HUMAN_CONTROL_SCHEMA_ID, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
     MAX_HUMAN_CONTROL_COLLECTION_ITEMS, MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
 };
 
 const MAX_HUMAN_CONTROL_AUDIT_EXPORT_BYTES: usize = MAX_HUMAN_CONTROL_RESPONSE_LENGTH / 2;
+const MAX_HUMAN_CONTROL_CREDENTIAL_REVIEW_BYTES: usize = MAX_HUMAN_CONTROL_RESPONSE_LENGTH / 2;
+const MAX_HUMAN_CONTROL_METADATA_TEXT_BYTES: usize = 1_024;
+const HUMAN_CONTROL_CREDENTIAL_CANDIDATE_OVERHEAD_BYTES: usize = 512;
+const HUMAN_CONTROL_SECRET_FIELD_OVERHEAD_BYTES: usize = 192;
+const HUMAN_CONTROL_TAG_OVERHEAD_BYTES: usize = 32;
 
 const HUMAN_CONTROL_DISPATCH_OPERATIONS: [HumanControlOperation; 29] = [
     HumanControlOperation::Hello,
@@ -219,6 +223,8 @@ pub enum HumanControlRequest {
     AuditExport {
         /// Exact non-secret audit selection.
         filter: BrokerAuditFilter,
+        /// Bounded maximum exported event count.
+        limit: usize,
     },
     /// Quiesce process state before App-managed repair.
     RepairPrepare,
@@ -358,17 +364,6 @@ pub struct HumanControlSecretFieldCandidate {
     pub kind: SecretFieldKind,
 }
 
-impl From<&BrokerHumanSecretFieldCandidate> for HumanControlSecretFieldCandidate {
-    fn from(field: &BrokerHumanSecretFieldCandidate) -> Self {
-        Self {
-            secret_field_id: field.secret_field_id(),
-            role: field.role().to_owned(),
-            label: field.label().map(str::to_owned),
-            kind: field.kind(),
-        }
-    }
-}
-
 /// One human-visible Credential candidate without any Secret Field value.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HumanControlCredentialCandidate {
@@ -388,24 +383,6 @@ pub struct HumanControlCredentialCandidate {
     pub secret_fields: Vec<HumanControlSecretFieldCandidate>,
 }
 
-impl From<&BrokerHumanCredentialCandidate> for HumanControlCredentialCandidate {
-    fn from(candidate: &BrokerHumanCredentialCandidate) -> Self {
-        Self {
-            vault_id: candidate.vault_id(),
-            credential_id: candidate.credential_id(),
-            title: candidate.title().to_owned(),
-            template_id: candidate.template_id().map(str::to_owned),
-            tags: candidate.tags().to_vec(),
-            favorite: candidate.favorite(),
-            secret_fields: candidate
-                .secret_fields()
-                .iter()
-                .map(HumanControlSecretFieldCandidate::from)
-                .collect(),
-        }
-    }
-}
-
 /// Human credential review without the Consumer-supplied private description.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HumanControlCredentialReview {
@@ -417,24 +394,139 @@ pub struct HumanControlCredentialReview {
     pub capability: Capability,
     /// Bounded metadata-only candidate list.
     pub candidates: Vec<HumanControlCredentialCandidate>,
-    /// Whether additional candidates were omitted.
+    /// Whether candidate metadata or additional candidates were omitted.
     pub truncated: bool,
 }
 
 impl From<&BrokerHumanCredentialReview> for HumanControlCredentialReview {
     fn from(review: &BrokerHumanCredentialReview) -> Self {
+        let mut remaining_bytes = MAX_HUMAN_CONTROL_CREDENTIAL_REVIEW_BYTES;
+        let mut candidates = Vec::new();
+        let mut truncated = review.truncated();
+
+        for candidate in review.candidates() {
+            let Some(projection) = project_credential_candidate(candidate, remaining_bytes) else {
+                truncated = true;
+                break;
+            };
+            remaining_bytes = remaining_bytes.saturating_sub(projection.estimated_bytes);
+            truncated |= projection.truncated;
+            candidates.push(projection.candidate);
+        }
+
         Self {
             consumer_id: review.consumer_id(),
             vault_id: review.vault_id(),
             capability: review.capability(),
-            candidates: review
-                .candidates()
-                .iter()
-                .map(HumanControlCredentialCandidate::from)
-                .collect(),
-            truncated: review.truncated(),
+            candidates,
+            truncated,
         }
     }
+}
+
+struct ProjectedCredentialCandidate {
+    candidate: HumanControlCredentialCandidate,
+    estimated_bytes: usize,
+    truncated: bool,
+}
+
+fn project_credential_candidate(
+    candidate: &BrokerHumanCredentialCandidate,
+    budget: usize,
+) -> Option<ProjectedCredentialCandidate> {
+    let (title, title_truncated) = bounded_metadata_text(candidate.title());
+    let (template_id, template_truncated) = match candidate.template_id() {
+        Some(template_id) => {
+            let (template_id, truncated) = bounded_metadata_text(template_id);
+            (Some(template_id), truncated)
+        }
+        None => (None, false),
+    };
+    let mut estimated_bytes = HUMAN_CONTROL_CREDENTIAL_CANDIDATE_OVERHEAD_BYTES
+        .saturating_add(metadata_wire_budget(&title))
+        .saturating_add(
+            template_id
+                .as_ref()
+                .map_or(0, |value| metadata_wire_budget(value)),
+        );
+    if estimated_bytes > budget {
+        return None;
+    }
+
+    let mut truncated = title_truncated || template_truncated;
+    let mut secret_fields = Vec::new();
+    for field in candidate.secret_fields() {
+        let (role, role_truncated) = bounded_metadata_text(field.role());
+        let (label, label_truncated) = match field.label() {
+            Some(label) => {
+                let (label, was_truncated) = bounded_metadata_text(label);
+                (Some(label), was_truncated)
+            }
+            None => (None, false),
+        };
+        let field_bytes = HUMAN_CONTROL_SECRET_FIELD_OVERHEAD_BYTES
+            .saturating_add(metadata_wire_budget(&role))
+            .saturating_add(
+                label
+                    .as_ref()
+                    .map_or(0, |value| metadata_wire_budget(value)),
+            );
+        if estimated_bytes.saturating_add(field_bytes) > budget {
+            truncated = true;
+            break;
+        }
+        estimated_bytes += field_bytes;
+        truncated |= role_truncated || label_truncated;
+        secret_fields.push(HumanControlSecretFieldCandidate {
+            secret_field_id: field.secret_field_id(),
+            role,
+            label,
+            kind: field.kind(),
+        });
+    }
+
+    let mut tags = Vec::new();
+    for tag in candidate.tags() {
+        let (tag, tag_truncated) = bounded_metadata_text(tag);
+        let tag_bytes = HUMAN_CONTROL_TAG_OVERHEAD_BYTES.saturating_add(metadata_wire_budget(&tag));
+        if estimated_bytes.saturating_add(tag_bytes) > budget {
+            truncated = true;
+            break;
+        }
+        estimated_bytes += tag_bytes;
+        truncated |= tag_truncated;
+        tags.push(tag);
+    }
+
+    Some(ProjectedCredentialCandidate {
+        candidate: HumanControlCredentialCandidate {
+            vault_id: candidate.vault_id(),
+            credential_id: candidate.credential_id(),
+            title,
+            template_id,
+            tags,
+            favorite: candidate.favorite(),
+            secret_fields,
+        },
+        estimated_bytes,
+        truncated,
+    })
+}
+
+fn bounded_metadata_text(value: &str) -> (String, bool) {
+    if value.len() <= MAX_HUMAN_CONTROL_METADATA_TEXT_BYTES {
+        return (value.to_owned(), false);
+    }
+    let mut end = MAX_HUMAN_CONTROL_METADATA_TEXT_BYTES;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    (value[..end].to_owned(), true)
+}
+
+const fn metadata_wire_budget(value: &str) -> usize {
+    // JSON-style control-character escaping can expand one UTF-8 byte to six bytes.
+    value.len().saturating_mul(6)
 }
 
 /// Provider-neutral offline Usage Profile catalog for one existing Consumer.
@@ -1067,15 +1159,18 @@ where
                 .clear_audit(filter, confirmation)
                 .map(HumanControlResponse::AuditClearSummary)
                 .map_err(map_runtime_error),
-            HumanControlRequest::AuditExport { filter } => runtime
-                .export_human_control_audit_json_at(
-                    filter,
-                    observed_at,
-                    MAX_HUMAN_CONTROL_AUDIT_EVENTS,
-                    MAX_HUMAN_CONTROL_AUDIT_EXPORT_BYTES,
-                )
-                .map(HumanControlResponse::AuditExport)
-                .map_err(map_runtime_error),
+            HumanControlRequest::AuditExport { filter, limit } => {
+                validate_human_control_audit_limit(limit)?;
+                runtime
+                    .export_human_control_audit_json_at(
+                        filter,
+                        observed_at,
+                        limit,
+                        MAX_HUMAN_CONTROL_AUDIT_EXPORT_BYTES,
+                    )
+                    .map(HumanControlResponse::AuditExport)
+                    .map_err(map_runtime_error)
+            }
             HumanControlRequest::RepairPrepare => runtime
                 .shutdown_at(observed_at)
                 .map(HumanControlResponse::RepairReadiness)
@@ -1337,6 +1432,20 @@ mod tests {
     }
 
     #[test]
+    fn metadata_text_bounds_preserve_utf8_and_reserve_escape_expansion() {
+        let source = "\u{754c}".repeat(MAX_HUMAN_CONTROL_METADATA_TEXT_BYTES);
+        let (bounded, truncated) = bounded_metadata_text(&source);
+        assert!(truncated);
+        assert!(bounded.len() <= MAX_HUMAN_CONTROL_METADATA_TEXT_BYTES);
+        assert!(bounded.is_char_boundary(bounded.len()));
+        assert_eq!(metadata_wire_budget("\0"), 6);
+        assert_eq!(
+            metadata_wire_budget(&bounded),
+            bounded.len().saturating_mul(6)
+        );
+    }
+
+    #[test]
     fn only_unlock_request_accepts_secret_and_every_result_is_secret_free() {
         for contract in HUMAN_CONTROL_OPERATION_CONTRACTS {
             assert_eq!(
@@ -1428,14 +1537,12 @@ mod tests {
             Ok(HumanControlResponse::Hello { .. })
         ));
 
-        let session_id = ControllerSessionId::from_bytes([0x72; 16]);
         let challenge_request = ControllerChallengeRequest::new(
             ControllerAuthenticationMode::Bootstrap,
             HumanControlProtocolVersion::current(),
             CONTROLLER_ROLE.to_owned(),
             seed.controller_id(),
             seed.public_key(),
-            session_id,
             crate::ControllerNonce::from_bytes([0x73; 32]),
         )
         .expect("challenge request");
@@ -1499,6 +1606,18 @@ mod tests {
         assert!(
             matches!(pending, HumanControlResponse::PendingQueue(requests) if requests.is_empty())
         );
+        for occurred_at in [timestamp(115), timestamp(116)] {
+            runtime
+                .device_state()
+                .append_audit_event(&crate::AuditEvent::new(
+                    occurred_at,
+                    crate::AuditEventKind::Authorization,
+                    crate::AuditScope::new(None, None, None, None),
+                    crate::AuditDecision::Allowed,
+                    crate::ConfirmationMethod::UserApproval,
+                ))
+                .expect("seed audit event");
+        }
         assert!(matches!(
             dispatcher.dispatch(
                 &mut runtime,
@@ -1513,6 +1632,22 @@ mod tests {
             ),
             Ok(HumanControlResponse::AuditPage(_))
         ));
+        let export = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::AuditExport {
+                    filter: BrokerAuditFilter::all(),
+                    limit: 1,
+                },
+                now,
+                timestamp(118),
+            )
+            .expect("bounded audit export");
+        assert!(matches!(
+            export,
+            HumanControlResponse::AuditExport(export) if export.event_count() == 1
+        ));
         let secret_marker = "seeded-human-control-secret-marker";
         let unlock_error = dispatcher
             .dispatch(
@@ -1525,7 +1660,7 @@ mod tests {
                     ),
                 },
                 now,
-                timestamp(118),
+                timestamp(119),
             )
             .expect_err("untracked Vault unlock must fail");
         assert_eq!(
@@ -1535,7 +1670,7 @@ mod tests {
         assert!(!unlock_error.to_string().contains(secret_marker));
         assert!(!format!("{unlock_error:?}").contains(secret_marker));
 
-        runtime.shutdown_at(timestamp(119)).expect("shutdown");
+        runtime.shutdown_at(timestamp(120)).expect("shutdown");
         drop(runtime);
         fs::remove_dir_all(home).expect("cleanup");
     }
@@ -1566,7 +1701,6 @@ mod tests {
                 CONTROLLER_ROLE.to_owned(),
                 impostor.controller_id(),
                 impostor.public_key(),
-                ControllerSessionId::from_bytes([session_byte; 16]),
                 crate::ControllerNonce::from_bytes([session_byte.wrapping_add(1); 32]),
             )
             .expect("request");
@@ -1590,7 +1724,6 @@ mod tests {
             CONTROLLER_ROLE.to_owned(),
             impostor.controller_id(),
             impostor.public_key(),
-            ControllerSessionId::from_bytes([0x60; 16]),
             crate::ControllerNonce::from_bytes([0x61; 32]),
         )
         .expect("limited request");

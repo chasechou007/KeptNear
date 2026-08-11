@@ -218,6 +218,12 @@ exposes any remainder on a subsequent read. Results never contain a Secret
 Field value or submitted unlock credential. Pairing approval establishes
 identity only and grants no credential access.
 
+Credential-review metadata uses a shared half-response byte budget in addition
+to the candidate-count bound. Individual titles, template identities, tags,
+field roles, and labels are UTF-8-safely bounded; Secret Field metadata is
+retained ahead of presentation tags. Omitted metadata or candidates set the
+review's `truncated` flag.
+
 ### Authorization And Usage Profiles
 
 | Operation | Request | Response |
@@ -251,8 +257,8 @@ already received by a compatible child or remote service.
 | `shutdown` | `Shutdown` | `ShutdownReceipt` |
 
 Audit results use only existing fixed audit fields and stable identities. Audit
-pages reject limits outside 1 through 256, and Human Control exports include at
-most 256 events.
+pages and exports reject limits outside 1 through 256. A Human Control export
+uses the exact accepted request limit and remains independently byte-bounded.
 `repair.prepare` and `shutdown` first lock machine Vault sessions and invalidate
 live Grants; neither operation clears protected device state, resumes pause,
 changes portable Vaults, removes host configuration, or edits Agent policy.

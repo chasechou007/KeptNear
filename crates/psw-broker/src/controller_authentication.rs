@@ -36,7 +36,6 @@ pub struct ControllerChallengeRequest {
     role: String,
     controller_id: ControllerId,
     public_key: [u8; 32],
-    session_id: ControllerSessionId,
     client_nonce: ControllerNonce,
 }
 
@@ -49,7 +48,6 @@ impl ControllerChallengeRequest {
         role: String,
         controller_id: ControllerId,
         public_key: [u8; 32],
-        session_id: ControllerSessionId,
         client_nonce: ControllerNonce,
     ) -> Result<Self, ControllerAuthenticationError> {
         if role.is_empty() || role.len() > 64 || !role.is_ascii() {
@@ -61,7 +59,6 @@ impl ControllerChallengeRequest {
             role,
             controller_id,
             public_key,
-            session_id,
             client_nonce,
         })
     }
@@ -480,7 +477,7 @@ impl ControllerAuthenticationConnection {
             broker_instance_id: self.service.broker_instance_id,
             controller_id: request.controller_id,
             public_key: request.public_key,
-            session_id: request.session_id,
+            session_id: ControllerSessionId::generate(),
             client_nonce: request.client_nonce,
             broker_nonce: ControllerNonce::generate(),
             deadline,
@@ -633,7 +630,7 @@ mod tests {
     fn request(
         key: &ControllerSigningKey,
         mode: ControllerAuthenticationMode,
-        session_byte: u8,
+        nonce_byte: u8,
         role: &str,
     ) -> ControllerChallengeRequest {
         ControllerChallengeRequest::new(
@@ -642,8 +639,7 @@ mod tests {
             role.to_owned(),
             key.controller_id(),
             key.public_key(),
-            ControllerSessionId::from_bytes([session_byte; 16]),
-            ControllerNonce::from_bytes([session_byte.wrapping_add(1); 32]),
+            ControllerNonce::from_bytes([nonce_byte; 32]),
         )
         .expect("request")
     }
@@ -826,6 +822,7 @@ mod tests {
                 now,
             )
             .expect("replacement");
+        assert_ne!(first.session_id(), second.session_id());
         assert_eq!(
             connection.complete(first.prove(&key), now, timestamp()),
             Err(ControllerAuthenticationError::ReplayRejected)
