@@ -94,6 +94,18 @@ impl ControllerAuthenticationChallenge {
         self.broker_instance_id
     }
 
+    /// Returns the public controller identity bound into the proof.
+    #[must_use]
+    pub const fn controller_id(&self) -> ControllerId {
+        self.controller_id
+    }
+
+    /// Returns the non-secret Ed25519 public key bound into the proof.
+    #[must_use]
+    pub const fn public_key(&self) -> [u8; 32] {
+        self.public_key
+    }
+
     /// Returns the controller session identity bound into the proof.
     #[must_use]
     pub const fn session_id(&self) -> ControllerSessionId {
@@ -677,6 +689,8 @@ mod tests {
             now,
         )
         .expect("bootstrap challenge");
+        assert_eq!(challenge.controller_id(), key.controller_id());
+        assert_eq!(challenge.public_key(), key.public_key());
         let auth_key = signing_key(7);
         let completion = bootstrap
             .complete(challenge.prove(&auth_key), now, timestamp())

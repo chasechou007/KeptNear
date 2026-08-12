@@ -173,6 +173,10 @@ the bootstrap or authentication purpose, selected protocol, controller role,
 and public key from the negotiated connection and protected Controller
 authority only after the shared failure-budget check. A decoder never invents
 those fields and never loads protected authority before dispatch admission.
+The successful challenge response projects the derived `controllerId` and
+non-secret Ed25519 `publicKey` together with the selected mode, protocol,
+Broker instance, session, nonces, and opaque deadline needed to construct the
+exact proof transcript; it never exposes the Controller seed.
 
 Every `ControllerProof` binding is retained by the typed request and compared
 exactly with the outstanding single-use challenge before signature
