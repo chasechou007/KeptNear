@@ -162,8 +162,8 @@ pub use human_control_dispatcher::{
     HumanControlVaultUnlockCredential,
 };
 pub use human_control_protocol::{
-    HumanControlAuthenticationRequirement, HumanControlFailureCode, HumanControlOperation,
-    HumanControlOperationContract, HumanControlProtocolFailure,
+    HumanControlAuthenticationRequirement, HumanControlFailureCode, HumanControlLimits,
+    HumanControlOperation, HumanControlOperationContract, HumanControlProtocolFailure,
     HumanControlProtocolValidationError, HumanControlProtocolVersion,
     HumanControlProtocolVersionRange, HumanControlRequestSchema, HumanControlRequestSecretClass,
     HumanControlRequiredAction, HumanControlResponseSchema, HumanControlResultSecrecy,

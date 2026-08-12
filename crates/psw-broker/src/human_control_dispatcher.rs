@@ -22,15 +22,15 @@ use crate::{
     ControllerAuthenticationService, ControllerAuthorityError, ControllerAuthorityManager,
     ControllerBootstrapMode, ControllerChallengeRequest, ControllerId, ControllerKeyStore,
     ControllerSessionId, CredentialFieldScope, CredentialId, HumanControlAuditConfirmationId,
-    HumanControlFailureCode, HumanControlOperation, HumanControlProtocolFailure,
-    HumanControlProtocolVersion, HumanControlRequiredAction, HumanControlVersionOffer,
-    PackagedComponent, PairingComparisonCode, PairingRequestId, RuleLifetime, SecretFieldId,
-    SecretFieldKind, StateTimestamp, UsageProfile, UsageProfileDefinition, UsageProfileId,
-    UseGrantId, CONTROLLER_ROLE, HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE,
-    HUMAN_CONTROL_CONTROLLER_LEASE_TTL, HUMAN_CONTROL_DENY_DECISION, HUMAN_CONTROL_SCHEMA_ID,
-    HUMAN_CONTROL_SHUTDOWN_REASON, MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS,
-    MAX_HUMAN_CONTROL_AUDIT_EVENTS, MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
-    MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
+    HumanControlFailureCode, HumanControlLimits, HumanControlOperation,
+    HumanControlProtocolFailure, HumanControlProtocolVersion, HumanControlRequiredAction,
+    HumanControlVersionOffer, PackagedComponent, PairingComparisonCode, PairingRequestId,
+    RuleLifetime, SecretFieldId, SecretFieldKind, StateTimestamp, UsageProfile,
+    UsageProfileDefinition, UsageProfileId, UseGrantId, CONTROLLER_ROLE,
+    HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE, HUMAN_CONTROL_CONTROLLER_LEASE_TTL,
+    HUMAN_CONTROL_DENY_DECISION, HUMAN_CONTROL_SCHEMA_ID, HUMAN_CONTROL_SHUTDOWN_REASON,
+    MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+    MAX_HUMAN_CONTROL_COLLECTION_ITEMS, MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
 };
 
 const MAX_HUMAN_CONTROL_AUDIT_EXPORT_BYTES: usize = MAX_HUMAN_CONTROL_RESPONSE_LENGTH / 2;
@@ -681,6 +681,8 @@ pub enum HumanControlResponse {
         schema: &'static str,
         /// Ephemeral Broker process identity.
         broker_instance_id: BrokerInstanceId,
+        /// Fixed global limits for the selected protocol version.
+        limits: HumanControlLimits,
         /// Complete operations available in the selected version.
         operations: Vec<HumanControlOperation>,
     },
@@ -981,6 +983,7 @@ where
             protocol,
             schema: HUMAN_CONTROL_SCHEMA_ID,
             broker_instance_id: self.broker_instance_id,
+            limits: HumanControlLimits::current(),
             operations: HUMAN_CONTROL_DISPATCH_OPERATIONS.to_vec(),
         })
     }
@@ -2095,10 +2098,24 @@ mod tests {
             error.failure().code(),
             HumanControlFailureCode::NegotiationRequired
         );
-        assert!(matches!(
-            dispatcher.dispatch(&mut runtime, &mut state, hello(), now, timestamp(111)),
-            Ok(HumanControlResponse::Hello { .. })
-        ));
+        let hello_response = dispatcher
+            .dispatch(&mut runtime, &mut state, hello(), now, timestamp(111))
+            .expect("hello");
+        let HumanControlResponse::Hello {
+            protocol,
+            schema,
+            broker_instance_id,
+            limits,
+            operations,
+        } = hello_response
+        else {
+            panic!("expected hello response");
+        };
+        assert_eq!(protocol, HumanControlProtocolVersion::current());
+        assert_eq!(schema, HUMAN_CONTROL_SCHEMA_ID);
+        assert_eq!(broker_instance_id, runtime.process().broker_instance_id());
+        assert_eq!(limits, HumanControlLimits::current());
+        assert_eq!(operations, HUMAN_CONTROL_DISPATCH_OPERATIONS);
 
         let challenge_request = ControllerChallengeRequest::new(
             seed.controller_id(),

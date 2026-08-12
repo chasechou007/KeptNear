@@ -5,6 +5,12 @@
     "major": 1,
     "minor": 0
   },
+  "limits": {
+    "maximumFrameLength": 1048576,
+    "maximumCollectionItems": 256,
+    "maximumAuditEvents": 256,
+    "maximumInputTextBytes": 128
+  },
   "operations": [
     "hello",
     "controller.challenge",

@@ -121,6 +121,10 @@ receives `protocol-incompatible` with `update-component`, not `malformed-frame`.
 
 A successful result contains only the selected version, schema identity,
 ephemeral Broker instance identity, global limits, and ordered operation names.
+The closed `limits` object contains `maximumFrameLength` (`1048576`),
+`maximumCollectionItems` (`256`), `maximumAuditEvents` (`256`), and
+`maximumInputTextBytes` (`128`). These values are fixed by the selected
+protocol version rather than supplied by the client.
 It does not expose protected device state. After negotiation, only
 `controller.challenge` and `controller.authenticate` are accepted until the
 dedicated controller proof succeeds. Every later operation requires a live

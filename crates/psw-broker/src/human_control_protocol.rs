@@ -56,6 +56,52 @@ const _: () = assert!(MAX_HUMAN_CONTROL_AUDIT_EVENTS <= MAX_HUMAN_CONTROL_COLLEC
 const _: () = assert!(MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS <= 16);
 const _: () = assert!(HUMAN_CONTROL_CONTROLLER_LEASE_TTL.as_secs() == 30);
 
+/// Fixed global limits returned by successful human-control negotiation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HumanControlLimits {
+    maximum_frame_length: usize,
+    maximum_collection_items: usize,
+    maximum_audit_events: usize,
+    maximum_input_text_bytes: usize,
+}
+
+impl HumanControlLimits {
+    /// Returns the limits frozen for the current protocol version.
+    #[must_use]
+    pub const fn current() -> Self {
+        Self {
+            maximum_frame_length: MAX_HUMAN_CONTROL_FRAME_LENGTH,
+            maximum_collection_items: MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
+            maximum_audit_events: MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+            maximum_input_text_bytes: MAX_HUMAN_CONTROL_INPUT_TEXT_BYTES,
+        }
+    }
+
+    /// Returns the maximum accepted or emitted framed payload length.
+    #[must_use]
+    pub const fn maximum_frame_length(self) -> usize {
+        self.maximum_frame_length
+    }
+
+    /// Returns the maximum entries in one collection response.
+    #[must_use]
+    pub const fn maximum_collection_items(self) -> usize {
+        self.maximum_collection_items
+    }
+
+    /// Returns the maximum audit events in one page or export.
+    #[must_use]
+    pub const fn maximum_audit_events(self) -> usize {
+        self.maximum_audit_events
+    }
+
+    /// Returns the maximum UTF-8 bytes in one human-supplied text field.
+    #[must_use]
+    pub const fn maximum_input_text_bytes(self) -> usize {
+        self.maximum_input_text_bytes
+    }
+}
+
 /// Sanitized validation failure for the frozen human-control contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HumanControlProtocolValidationError {
@@ -404,7 +450,7 @@ pub enum HumanControlRequestSchema {
 /// Closed response-body schema identifiers for version 1.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HumanControlResponseSchema {
-    /// Selected version, schema identity, Broker instance, and operation catalog.
+    /// Selected version, schema identity, Broker instance, limits, and operation catalog.
     Hello,
     /// Controller challenge transcript fields without a private key.
     ControllerChallenge,
@@ -1158,6 +1204,7 @@ mod tests {
     struct HumanControlFixture {
         schema: String,
         protocol: HumanControlFixtureProtocol,
+        limits: HumanControlFixtureLimits,
         operations: Vec<String>,
     }
 
@@ -1167,6 +1214,15 @@ mod tests {
         name: String,
         major: u16,
         minor: u16,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    struct HumanControlFixtureLimits {
+        maximum_frame_length: usize,
+        maximum_collection_items: usize,
+        maximum_audit_events: usize,
+        maximum_input_text_bytes: usize,
     }
 
     fn machine_access_fixture(name: &str) -> PathBuf {
@@ -1241,6 +1297,23 @@ mod tests {
         assert_eq!(
             HumanControlProtocolVersion::new(current.protocol.major, current.protocol.minor),
             Ok(HumanControlProtocolVersion::current())
+        );
+        let limits = HumanControlLimits::current();
+        assert_eq!(
+            current.limits.maximum_frame_length,
+            limits.maximum_frame_length()
+        );
+        assert_eq!(
+            current.limits.maximum_collection_items,
+            limits.maximum_collection_items()
+        );
+        assert_eq!(
+            current.limits.maximum_audit_events,
+            limits.maximum_audit_events()
+        );
+        assert_eq!(
+            current.limits.maximum_input_text_bytes,
+            limits.maximum_input_text_bytes()
         );
         let fixture_operations = current
             .operations
