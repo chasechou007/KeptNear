@@ -8,6 +8,7 @@ use crate::state_model::{
     CredentialFieldScope, StateTimestamp,
 };
 use crate::state_store::{DeviceStateError, DeviceStateStore, MAX_RETAINED_AUDIT_EVENTS};
+use crate::HumanControlAuditConfirmationId;
 
 /// Maximum number of audit events returned by one trusted local view request.
 pub const MAX_AUDIT_VIEW_EVENTS: usize = 500;
@@ -154,11 +155,20 @@ pub struct BrokerAuditCursor {
 }
 
 impl BrokerAuditCursor {
-    fn after(event: &AuditEvent) -> Self {
+    /// Reconstructs one continuation cursor from a validated closed wire body.
+    #[must_use]
+    pub const fn from_validated_wire_bindings(
+        occurred_at: StateTimestamp,
+        audit_event_id: AuditEventId,
+    ) -> Self {
         Self {
-            occurred_at: event.occurred_at(),
-            audit_event_id: event.audit_event_id(),
+            occurred_at,
+            audit_event_id,
         }
+    }
+
+    fn after(event: &AuditEvent) -> Self {
+        Self::from_validated_wire_bindings(event.occurred_at(), event.audit_event_id())
     }
 
     pub(crate) const fn occurred_at(self) -> StateTimestamp {
@@ -197,17 +207,44 @@ impl BrokerAuditPage {
     }
 }
 
-/// Capability token created only after an explicit local user confirmation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Single-use exact-selection token retained by a trusted local control plane.
+#[derive(Debug, Eq, PartialEq)]
 pub struct BrokerAuditClearConfirmation {
-    _private: (),
+    confirmation_id: HumanControlAuditConfirmationId,
+    filter: BrokerAuditFilter,
 }
 
 impl BrokerAuditClearConfirmation {
-    /// Records that the trusted local control plane obtained user confirmation.
+    /// Records that the trusted local control plane confirmed one exact selection.
     #[must_use]
-    pub const fn after_user_confirmation() -> Self {
-        Self { _private: () }
+    pub fn after_user_confirmation(filter: BrokerAuditFilter) -> Self {
+        Self::for_human_control_selection(filter)
+    }
+
+    /// Issues one token for a selection returned to the authenticated App.
+    pub(crate) fn for_human_control_selection(filter: BrokerAuditFilter) -> Self {
+        Self {
+            confirmation_id: HumanControlAuditConfirmationId::generate(),
+            filter,
+        }
+    }
+
+    /// Returns the single-use identity shown with the confirmed selection.
+    #[must_use]
+    pub const fn confirmation_id(&self) -> HumanControlAuditConfirmationId {
+        self.confirmation_id
+    }
+
+    pub(crate) fn matches(
+        &self,
+        confirmation_id: HumanControlAuditConfirmationId,
+        filter: BrokerAuditFilter,
+    ) -> bool {
+        self.confirmation_id == confirmation_id && self.filter == filter
+    }
+
+    fn matches_filter(&self, filter: BrokerAuditFilter) -> bool {
+        self.filter == filter
     }
 }
 
@@ -278,10 +315,14 @@ pub enum BrokerAuditError {
     InvalidTimeWindow,
     /// A Vault filter disagreed with the exact field scope.
     InconsistentScope,
+    /// The explicit confirmation was issued for another audit selection.
+    ConfirmationMismatch,
     /// Authenticated encrypted device state could not be read or changed.
     DeviceState(DeviceStateError),
     /// The fixed non-secret JSON projection could not be encoded.
     Serialization,
+    /// A bounded control-plane export exceeded its fixed byte budget.
+    ExportTooLarge,
 }
 
 impl Display for BrokerAuditError {
@@ -290,8 +331,12 @@ impl Display for BrokerAuditError {
             Self::InvalidViewLimit => formatter.write_str("audit view limit is invalid"),
             Self::InvalidTimeWindow => formatter.write_str("audit time window is invalid"),
             Self::InconsistentScope => formatter.write_str("audit scope is inconsistent"),
+            Self::ConfirmationMismatch => {
+                formatter.write_str("audit clear confirmation does not match the selection")
+            }
             Self::DeviceState(source) => write!(formatter, "audit state failed: {source}"),
             Self::Serialization => formatter.write_str("audit export encoding failed"),
+            Self::ExportTooLarge => formatter.write_str("audit export exceeds its fixed bound"),
         }
     }
 }
@@ -303,7 +348,9 @@ impl std::error::Error for BrokerAuditError {
             Self::InvalidViewLimit
             | Self::InvalidTimeWindow
             | Self::InconsistentScope
-            | Self::Serialization => None,
+            | Self::ConfirmationMismatch
+            | Self::Serialization
+            | Self::ExportTooLarge => None,
         }
     }
 }
@@ -335,9 +382,12 @@ impl BrokerAuditManager {
     pub(crate) fn clear(
         state: &DeviceStateStore,
         filter: BrokerAuditFilter,
-        _confirmation: BrokerAuditClearConfirmation,
+        confirmation: BrokerAuditClearConfirmation,
     ) -> Result<BrokerAuditClearSummary, BrokerAuditError> {
         filter.validate()?;
+        if !confirmation.matches_filter(filter) {
+            return Err(BrokerAuditError::ConfirmationMismatch);
+        }
         let (removed_events, remaining_events) = state.clear_audit_events_matching(filter)?;
         Ok(BrokerAuditClearSummary {
             removed_events,
@@ -369,6 +419,31 @@ impl BrokerAuditManager {
             }
         }
 
+        Self::encode_export(events, generated_at, usize::MAX)
+    }
+
+    pub(crate) fn export_json_limited(
+        state: &DeviceStateStore,
+        filter: BrokerAuditFilter,
+        generated_at: StateTimestamp,
+        max_events: usize,
+        max_bytes: usize,
+    ) -> Result<BrokerAuditExport, BrokerAuditError> {
+        filter.validate()?;
+        if max_events == 0 || max_events > MAX_AUDIT_VIEW_EVENTS || max_bytes == 0 {
+            return Err(BrokerAuditError::InvalidViewLimit);
+        }
+        state.enforce_audit_retention(generated_at)?;
+        let page = Self::view_without_retention(state, filter, None, max_events)?;
+        let events = page.events.iter().map(AuditExportEvent::from).collect();
+        Self::encode_export(events, generated_at, max_bytes)
+    }
+
+    fn encode_export(
+        events: Vec<AuditExportEvent>,
+        generated_at: StateTimestamp,
+        max_bytes: usize,
+    ) -> Result<BrokerAuditExport, BrokerAuditError> {
         let document = AuditExportDocument {
             format: "keptnear-audit-export",
             version: 1,
@@ -379,6 +454,9 @@ impl BrokerAuditManager {
         let mut json =
             serde_json::to_string_pretty(&document).map_err(|_| BrokerAuditError::Serialization)?;
         json.push('\n');
+        if json.len() > max_bytes {
+            return Err(BrokerAuditError::ExportTooLarge);
+        }
         Ok(BrokerAuditExport { json, event_count })
     }
 
@@ -696,6 +774,13 @@ mod tests {
             }
         }
         assert_eq!(actual, expected);
+
+        let cursor = BrokerAuditCursor::from_validated_wire_bindings(
+            expected[0].occurred_at(),
+            expected[0].audit_event_id(),
+        );
+        assert_eq!(cursor.occurred_at(), expected[0].occurred_at());
+        assert_eq!(cursor.audit_event_id(), expected[0].audit_event_id());
     }
 
     #[test]
@@ -783,14 +868,23 @@ mod tests {
             state.append_audit_event(event).expect("append event");
         }
 
-        let summary = BrokerAuditManager::clear(
-            &state,
-            BrokerAuditFilter::all()
-                .with_consumer(first_consumer)
-                .with_event_kind(AuditEventKind::CredentialUse),
-            BrokerAuditClearConfirmation::after_user_confirmation(),
-        )
-        .expect("clear selection");
+        let filter = BrokerAuditFilter::all()
+            .with_consumer(first_consumer)
+            .with_event_kind(AuditEventKind::CredentialUse);
+        let mismatched_confirmation = BrokerAuditClearConfirmation::after_user_confirmation(filter);
+        assert!(matches!(
+            BrokerAuditManager::clear(
+                &state,
+                BrokerAuditFilter::all().with_consumer(second_consumer),
+                mismatched_confirmation,
+            ),
+            Err(BrokerAuditError::ConfirmationMismatch)
+        ));
+        assert_eq!(state.recent_audit_events(10).expect("preserved").len(), 3);
+
+        let confirmation = BrokerAuditClearConfirmation::after_user_confirmation(filter);
+        let summary =
+            BrokerAuditManager::clear(&state, filter, confirmation).expect("clear selection");
 
         assert_eq!(summary.removed_events(), 1);
         assert_eq!(summary.remaining_events(), 2);
@@ -873,5 +967,47 @@ mod tests {
             events[0]["audit_event_id"],
             event.audit_event_id().to_string()
         );
+    }
+
+    #[test]
+    fn limited_export_caps_event_count_and_encoded_bytes() {
+        let directory = TestStateDirectory::new("bounded-export");
+        let state = directory.initialize(87);
+        let consumer_id = ConsumerId::generate();
+        let field = field_scope(VaultId::generate());
+        let capability = Capability::v1(CapabilityName::CredentialSearch);
+        for occurred_at in 1..=300 {
+            state
+                .append_audit_event(&scoped_event(
+                    occurred_at,
+                    AuditEventKind::Authorization,
+                    AuditDecision::Allowed,
+                    consumer_id,
+                    field,
+                    capability,
+                ))
+                .expect("append event");
+        }
+
+        let export = BrokerAuditManager::export_json_limited(
+            &state,
+            BrokerAuditFilter::all(),
+            timestamp(301),
+            crate::MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+            crate::MAX_HUMAN_CONTROL_RESPONSE_LENGTH / 2,
+        )
+        .expect("bounded export");
+        assert_eq!(export.event_count(), crate::MAX_HUMAN_CONTROL_AUDIT_EVENTS);
+        assert!(export.as_bytes().len() <= crate::MAX_HUMAN_CONTROL_RESPONSE_LENGTH / 2);
+        assert!(matches!(
+            BrokerAuditManager::export_json_limited(
+                &state,
+                BrokerAuditFilter::all(),
+                timestamp(301),
+                crate::MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+                1,
+            ),
+            Err(BrokerAuditError::ExportTooLarge)
+        ));
     }
 }

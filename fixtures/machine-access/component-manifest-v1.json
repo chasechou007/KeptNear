@@ -1,0 +1,33 @@
+{
+  "schema": "keptnear.protocol-manifest.v1",
+  "component_metadata_schema": "keptnear.component-metadata.v1",
+  "product": {
+    "name": "KeptNear",
+    "version": "0.1.0-fixture",
+    "architecture": "arm64",
+    "git_revision": "fixture",
+    "source_worktree": "clean",
+    "generated_at_utc": "2026-01-01T00:00:00Z"
+  },
+  "shared_protocol": {
+    "name": "keptnear.broker",
+    "major": 1,
+    "minor": 0
+  },
+  "installation": {
+    "app": "/Applications/KeptNear.app",
+    "broker": "/Applications/KeptNear.app/Contents/Helpers/keptnear-broker",
+    "mcp_adapter": "/Applications/KeptNear.app/Contents/Helpers/keptnear-mcp",
+    "cli": "/Applications/KeptNear.app/Contents/Helpers/keptnear"
+  },
+  "components": [
+    {"id":"macos-app","version":"0.1.0-fixture","path":"KeptNear.app/Contents/MacOS/KeptNear","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"id":"broker","version":"0.1.0-fixture","path":"KeptNear.app/Contents/Helpers/keptnear-broker","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+    {"id":"mcp-adapter","version":"0.1.0-fixture","path":"KeptNear.app/Contents/Helpers/keptnear-mcp","sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},
+    {"id":"cli","version":"0.1.0-fixture","path":"KeptNear.app/Contents/Helpers/keptnear","sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}
+  ],
+  "supporting_files": [
+    {"id":"rust-ffi","path":"KeptNear.app/Contents/Frameworks/libpsw_ffi.dylib","sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+    {"id":"app-component-metadata","path":"KeptNear.app/Contents/Resources/KeptNear-App-Component.json","sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}
+  ]
+}

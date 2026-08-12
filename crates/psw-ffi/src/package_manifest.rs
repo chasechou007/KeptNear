@@ -739,6 +739,12 @@ impl std::error::Error for PackageManifestError {}
 mod tests {
     use super::*;
 
+    fn machine_access_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/machine-access")
+            .join(name)
+    }
+
     fn generate_arguments() -> Vec<OsString> {
         [
             "--product-version",
@@ -922,6 +928,29 @@ mod tests {
         manifest.installation.cli = "/usr/local/bin/keptnear".to_owned();
         assert_eq!(
             validate_manifest_contract(&manifest, "0.1.0-alpha", "arm64"),
+            Err(PackageManifestError::InvalidProtocolManifest)
+        );
+    }
+
+    #[test]
+    fn sanitized_component_manifest_accepts_v1_and_rejects_future_schema() {
+        let current: ProtocolManifest = serde_json::from_slice(
+            &fs::read(machine_access_fixture("component-manifest-v1.json"))
+                .expect("read current component manifest fixture"),
+        )
+        .expect("parse current component manifest fixture");
+        assert_eq!(
+            validate_manifest_contract(&current, "0.1.0-fixture", "arm64"),
+            Ok(())
+        );
+
+        let future: ProtocolManifest = serde_json::from_slice(
+            &fs::read(machine_access_fixture("component-manifest-future.json"))
+                .expect("read future component manifest fixture"),
+        )
+        .expect("parse future component manifest fixture");
+        assert_eq!(
+            validate_manifest_contract(&future, "0.2.0-fixture", "arm64"),
             Err(PackageManifestError::InvalidProtocolManifest)
         );
     }

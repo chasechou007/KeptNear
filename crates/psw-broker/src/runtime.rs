@@ -65,7 +65,7 @@ use crate::protocol::{BrokerProtocolVersion, BrokerSessionId};
 use crate::revocation::{BrokerRevocationError, BrokerRevocationManager, BrokerRevocationSummary};
 use crate::state_model::{
     ApprovalRequestId, ApprovalStatus, ApprovalSubject, AuditDecision, AuditEventId,
-    AuthorizationTarget, ConfirmationPolicy, ConsumerId, CredentialFieldScope,
+    AuthorizationTarget, Capability, ConfirmationPolicy, ConsumerId, CredentialFieldScope,
     ObservedConsumerIdentity, PairingRequestId, RuleLifetime, StateTimestamp, UsageProfile,
     UsageProfileDefinition, UsageProfileId, UseGrantId, VaultSessionId,
 };
@@ -228,6 +228,17 @@ pub struct BrokerRuntime {
 }
 
 impl BrokerRuntime {
+    pub(crate) fn open_or_initialize_with_prepared_paths<S>(
+        paths: DevicePaths,
+        store: S,
+    ) -> Result<Self, BrokerRuntimeError>
+    where
+        S: DeviceKeyStore,
+    {
+        let observed_at = current_state_timestamp()?;
+        Self::open_or_initialize_with_paths_at(paths, store, observed_at)
+    }
+
     /// Opens or initializes the current user's device-local Broker state.
     ///
     /// Initialization occurs only when both the device key and every managed
@@ -382,6 +393,34 @@ impl BrokerRuntime {
         &self.state
     }
 
+    pub(crate) fn controller_authority_record(
+        &self,
+    ) -> Result<Option<crate::ControllerAuthorityRecord>, BrokerRuntimeError> {
+        self.state
+            .controller_authority_record()
+            .map_err(BrokerHumanControlError::from)
+            .map_err(BrokerRuntimeError::HumanControl)
+    }
+
+    pub(crate) fn insert_controller_authority_record(
+        &self,
+        record: crate::ControllerAuthorityRecord,
+    ) -> Result<(), BrokerRuntimeError> {
+        self.state
+            .insert_controller_authority_record(record)
+            .map_err(BrokerHumanControlError::from)
+            .map_err(BrokerRuntimeError::HumanControl)
+    }
+
+    pub(crate) fn revoke_use_grant_for_human(
+        &self,
+        consumer_id: ConsumerId,
+        use_grant_id: UseGrantId,
+    ) -> Result<bool, BrokerRuntimeError> {
+        BrokerUseGrantManager::revoke_for_consumer(&self.state, consumer_id, use_grant_id)
+            .map_err(BrokerRuntimeError::UseGrant)
+    }
+
     /// Returns the process-local Apps & Tools gate.
     #[must_use]
     pub const fn machine_access(&self) -> &BrokerMachineAccessGate {
@@ -404,6 +443,29 @@ impl BrokerRuntime {
     #[must_use]
     pub const fn approval_restore_summary(&self) -> BrokerApprovalRestoreSummary {
         self.approval_restore_summary
+    }
+
+    /// Returns authenticated component, negotiated compatibility, pause, and Vault lock state.
+    pub fn readiness_projection(
+        &self,
+        human_control_protocol: crate::HumanControlProtocolVersion,
+        human_control_schema: &'static str,
+    ) -> Result<crate::BrokerReadinessProjection, BrokerRuntimeError> {
+        let paused = self
+            .machine_access
+            .is_paused()
+            .map_err(BrokerRuntimeError::MachineAccess)?;
+        let vaults = self
+            .process
+            .vault_sessions()
+            .snapshots()
+            .map_err(BrokerRuntimeError::VaultSession)?;
+        Ok(crate::BrokerReadinessProjection::new(
+            human_control_protocol,
+            human_control_schema,
+            paused,
+            vaults,
+        ))
     }
 
     /// Returns secret-free Apps & Tools state for one trusted human Vault view.
@@ -496,6 +558,23 @@ impl BrokerRuntime {
     ) -> Result<BrokerAuditExport, BrokerRuntimeError> {
         BrokerAuditManager::export_json(&self.state, filter, generated_at)
             .map_err(BrokerRuntimeError::Audit)
+    }
+
+    pub(crate) fn export_human_control_audit_json_at(
+        &self,
+        filter: BrokerAuditFilter,
+        generated_at: StateTimestamp,
+        max_events: usize,
+        max_bytes: usize,
+    ) -> Result<BrokerAuditExport, BrokerRuntimeError> {
+        BrokerAuditManager::export_json_limited(
+            &self.state,
+            filter,
+            generated_at,
+            max_events,
+            max_bytes,
+        )
+        .map_err(BrokerRuntimeError::Audit)
     }
 
     /// Starts a bounded Consumer pairing without granting credential access.
@@ -1486,6 +1565,7 @@ impl BrokerRuntime {
     pub fn approve_pending_unlock(
         &self,
         approval_request_id: ApprovalRequestId,
+        expected_vault_id: VaultId,
         approved_at: StateTimestamp,
     ) -> Result<(), BrokerRuntimeError> {
         let pending = self.pending_approval_snapshot(approval_request_id, approved_at)?;
@@ -1494,6 +1574,11 @@ impl BrokerRuntime {
                 BrokerApprovalError::ApprovalUnavailable,
             ));
         };
+        if *vault_id != expected_vault_id {
+            return Err(BrokerRuntimeError::Approval(
+                BrokerApprovalError::ApprovalUnavailable,
+            ));
+        }
         self.current_vault_session_id(*vault_id)?;
         let receipt = self.resolve_approval(
             approval_request_id,
@@ -1569,7 +1654,7 @@ impl BrokerRuntime {
         self.verify_issued_grant_session(issuance, target, vault_session_id)
     }
 
-    /// Creates one exact persistent rule while approving its first request.
+    /// Creates one exact bounded-lifetime rule while approving its first request.
     ///
     /// The selected policy never creates a Use Grant here. The original
     /// operation must pass through the normal policy-specific grant boundary.
@@ -1577,18 +1662,34 @@ impl BrokerRuntime {
         &mut self,
         approval_request_id: ApprovalRequestId,
         selection: Option<BrokerCredentialCandidateSelection>,
+        expected_capability: Capability,
         confirmation_policy: ConfirmationPolicy,
+        rule_lifetime: RuleLifetime,
         approved_at: StateTimestamp,
     ) -> Result<BrokerAccessRuleCreation, BrokerRuntimeError> {
         let pending = self.pending_approval_snapshot(approval_request_id, approved_at)?;
         let expected_subject = pending.subject().clone();
+        let pending_capability = match pending.subject() {
+            ApprovalSubject::Access { target } => target.capability(),
+            ApprovalSubject::CredentialAccess { capability, .. } => *capability,
+            ApprovalSubject::Pairing { .. } | ApprovalSubject::Unlock { .. } => {
+                return Err(BrokerRuntimeError::Approval(
+                    BrokerApprovalError::ApprovalUnavailable,
+                ));
+            }
+        };
+        if pending_capability != expected_capability {
+            return Err(BrokerRuntimeError::Approval(
+                BrokerApprovalError::ApprovalUnavailable,
+            ));
+        }
         let (target, secret_kind, _) =
             self.pending_access_target(approval_request_id, &pending, selection, approved_at)?;
         let approval = BrokerAccessRuleApproval::after_user_approval(
             target,
             secret_kind,
             confirmation_policy,
-            RuleLifetime::Persistent,
+            rule_lifetime,
             approved_at,
         )
         .map_err(BrokerRuntimeError::AccessRule)?;
@@ -1645,10 +1746,15 @@ impl BrokerRuntime {
     ) -> Result<(AuthorizationTarget, SecretFieldKind, VaultSessionId), BrokerRuntimeError> {
         match pending.subject() {
             ApprovalSubject::Access { target } => {
-                if selection.is_some() {
-                    return Err(BrokerRuntimeError::Approval(
-                        BrokerApprovalError::ApprovalUnavailable,
-                    ));
+                if let Some(selection) = selection {
+                    let field_scope = target.field_scope();
+                    if selection.credential_id() != field_scope.credential_id()
+                        || selection.secret_field_id() != field_scope.secret_field_id()
+                    {
+                        return Err(BrokerRuntimeError::Approval(
+                            BrokerApprovalError::ApprovalUnavailable,
+                        ));
+                    }
                 }
                 let vault_session_id =
                     self.current_vault_session_id(target.field_scope().vault_id())?;

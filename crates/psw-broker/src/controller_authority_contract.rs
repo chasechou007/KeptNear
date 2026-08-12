@@ -370,9 +370,35 @@ fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+    use std::str::FromStr;
+
     use ed25519_dalek::{Signer, SigningKey};
+    use serde::Deserialize;
 
     use super::*;
+    use crate::{ControllerDeadline, ControllerId, ControllerNonce, ControllerSessionId};
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct ControllerAuthFixture {
+        schema: String,
+        contract: String,
+        protocol: HumanControlProtocolVersion,
+        role: String,
+        controller_id: ControllerId,
+        public_key_hex: String,
+        session_id: ControllerSessionId,
+        client_nonce: ControllerNonce,
+        broker_nonce: ControllerNonce,
+        deadline: ControllerDeadline,
+    }
+
+    fn machine_access_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/machine-access")
+            .join(name)
+    }
 
     fn transcript_fields(seed: u8) -> ControllerTranscriptFields {
         let public_key = SigningKey::from_bytes(&[seed; CONTROLLER_SIGNING_SEED_LENGTH])
@@ -389,6 +415,42 @@ mod tests {
             9_876_543_210,
         )
         .expect("transcript fields")
+    }
+
+    #[test]
+    fn sanitized_controller_fixture_matches_v1_and_rejects_future_contract() {
+        let read = |name| {
+            serde_json::from_slice::<ControllerAuthFixture>(
+                &std::fs::read(machine_access_fixture(name)).expect("read controller fixture"),
+            )
+            .expect("parse controller fixture")
+        };
+        let current = read("controller-auth-v1.json");
+        assert_eq!(current.schema, "keptnear.fixture.controller-auth.v1");
+        assert_eq!(current.contract, CONTROLLER_AUTHORITY_CONTRACT_ID);
+        assert_eq!(current.protocol, HumanControlProtocolVersion::current());
+        assert_eq!(current.role, CONTROLLER_ROLE);
+        let public_key: [u8; CONTROLLER_PUBLIC_KEY_LENGTH] = hex::decode(&current.public_key_hex)
+            .expect("public key hex")
+            .try_into()
+            .expect("public key length");
+        assert_eq!(
+            current.controller_id,
+            ControllerId::from_bytes(derive_controller_id(&public_key))
+        );
+        assert_eq!(
+            ControllerSessionId::from_str(&current.session_id.to_string()),
+            Ok(current.session_id)
+        );
+        assert_ne!(current.client_nonce, current.broker_nonce);
+        assert_ne!(current.deadline.token(), 0);
+
+        let future = read("controller-auth-future.json");
+        assert_ne!(future.contract, CONTROLLER_AUTHORITY_CONTRACT_ID);
+        assert_ne!(
+            future.protocol.major(),
+            HumanControlProtocolVersion::current().major()
+        );
     }
 
     fn decode_length_prefixed(mut transcript: &[u8]) -> Vec<Vec<u8>> {

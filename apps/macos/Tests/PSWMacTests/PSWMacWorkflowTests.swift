@@ -4,6 +4,41 @@ import XCTest
 
 @MainActor
 final class PSWMacWorkflowTests: XCTestCase {
+    private func machineAccessFixtureURL(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("fixtures/machine-access/\(name)")
+    }
+
+    func testSanitizedLaunchAgentFixtureAcceptsV1AndRejectsFutureSchema() throws {
+        func load(_ name: String) throws -> [String: Any] {
+            let data = try Data(contentsOf: machineAccessFixtureURL(name))
+            let value = try PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+            )
+            return try XCTUnwrap(value as? [String: Any])
+        }
+
+        let current = try load("launch-agent-v1.plist")
+        XCTAssertEqual(current["KeptNearMachineAccessSchema"] as? String, "keptnear.launch-agent.v1")
+        XCTAssertEqual(current["KeptNearHumanControlProtocol"] as? String, "keptnear.human-control/1.0")
+        XCTAssertEqual(current["Label"] as? String, "app.keptnear.broker")
+        XCTAssertEqual(
+            current["ProgramArguments"] as? [String],
+            ["/Applications/KeptNear.app/Contents/Helpers/keptnear-broker"]
+        )
+
+        let future = try load("launch-agent-future.plist")
+        XCTAssertNotEqual(future["KeptNearMachineAccessSchema"] as? String, "keptnear.launch-agent.v1")
+        XCTAssertNotEqual(future["KeptNearHumanControlProtocol"] as? String, "keptnear.human-control/1.0")
+    }
+
     private func makeIsolatedDefaults() -> UserDefaults {
         let defaultsName = "PSWMacWorkflowTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: defaultsName)!

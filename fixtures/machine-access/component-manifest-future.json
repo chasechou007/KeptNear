@@ -1,0 +1,21 @@
+{
+  "schema": "keptnear.protocol-manifest.v2",
+  "component_metadata_schema": "keptnear.component-metadata.v2",
+  "product": {
+    "name": "KeptNear",
+    "version": "0.2.0-fixture",
+    "architecture": "arm64",
+    "git_revision": "fixture",
+    "source_worktree": "clean",
+    "generated_at_utc": "2026-01-01T00:00:00Z"
+  },
+  "shared_protocol": {"name":"keptnear.broker","major":2,"minor":0},
+  "installation": {
+    "app": "/Applications/KeptNear.app",
+    "broker": "/Applications/KeptNear.app/Contents/Helpers/keptnear-broker",
+    "mcp_adapter": "/Applications/KeptNear.app/Contents/Helpers/keptnear-mcp",
+    "cli": "/Applications/KeptNear.app/Contents/Helpers/keptnear"
+  },
+  "components": [],
+  "supporting_files": []
+}

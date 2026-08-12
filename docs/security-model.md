@@ -563,9 +563,14 @@ reinstall preserve complete authority; v1 supports rotation only through a
 confirmed device-access clear followed by a later explicit enable. A
 `removal-pending-v1` item in the same restricted access group is created before
 either authority side is removed and deleted last, so an interrupted clear
-cannot be mistaken for resumable bootstrap. The runtime
-Keychain adapter and Broker controller record are not yet implemented, so this
-contract does not activate machine access. See
+cannot be mistaken for resumable bootstrap. The runtime Keychain adapter,
+Broker controller record, challenge manager, and strict wire boundary are
+implemented in source. Successful proof starts a 30-second monotonic
+connection lease; every authenticated operation rejects the exact expiry
+boundary, closes the connection, and requires reauthentication. Only an exact
+session-and-Broker-bound renewal advances that deadline. Lease-loss-driven
+Vault locking, the App human-control client, and service activation are not
+implemented, so this contract does not activate machine access. See
 `docs/controller-authority-contract.md`.
 
 Pairing protocol messages carry a fresh client nonce, Broker nonce, comparison
@@ -584,7 +589,9 @@ SQLCipher raw-key semantics and supplies it directly through
 `sqlite3_key_v2`; the temporary derived and encoded buffers are zeroized.
 `device-v1.db` uses an encrypted header, SQLCipher page HMACs, WAL mode,
 full synchronous writes, secure delete, foreign keys, memory sanitization,
-disabled SQLCipher diagnostic logging, and schema version 1.
+disabled SQLCipher diagnostic logging, and schema version 2. Version 2 adds
+only the controller authority contract, algorithm, derived public identity,
+public key, and creation timestamp; it never stores the controller seed.
 
 Initialization pre-creates the database with mode `0600`, refuses existing
 database or sidecar entries, keys the empty connection before its first schema

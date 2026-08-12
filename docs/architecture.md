@@ -68,7 +68,10 @@ preserved Keychain and SQLCipher state after reinstall without implicit
 initialization, or perform an explicitly confirmed, ordered, verified clear of
 the managed database files and device root key. It never removes portable
 vaults. The macOS App now exposes the local Apps & Tools control plane through
-the in-process FFI boundary.
+the in-process FFI boundary. That bridge retains the same
+`BrokerServiceRuntime` process-ownership container as the standalone Broker,
+so the App and external executable cannot concurrently open protected state.
+This does not activate or register the external service.
 
 That FFI boundary synchronizes each successful human unlock by presenting both
 the selected path and the authenticated stable `vault_id` to the Broker. It
@@ -97,8 +100,20 @@ result is secret-free. The related `keptnear.controller-authority.v1` source
 contract freezes Ed25519, the shared App-and-Broker Data Protection Keychain
 access group, bootstrap and authentication transcripts, replay bounds, and a
 marker-backed fail-closed removal lifecycle. The external dispatcher, runtime
-Keychain adapter, controller trust record, and App client remain unimplemented, so
-installation still does not activate the service. See `docs/human-control-protocol.md`.
+Keychain adapter, SQLCipher public trust record, challenge manager, strict wire
+validator, connection-local bounded single-use audit-clear tickets, process
+lock, readiness projection, and 30-second monotonic connection lease are
+implemented and tested in source. Lease expiry closes authorization and
+requires a fresh authenticated connection; App-associated Vault locking on
+lease loss remains part of the later external-client lifecycle. The App
+human-control client and ServiceManagement lifecycle remain
+unimplemented, so installation still does not activate the service.
+The process-lifetime singleton uses an advisory kernel lock on the canonical
+operating-system account home directory inode and requires that entry to be
+anchored by a non-user-owned, non-writable system parent. Its owner-only runtime
+PID file is diagnostic only, so unlinking or replacing that writable file
+cannot admit a second Broker before protected state opens.
+See `docs/human-control-protocol.md`.
 The controller authority details are in
 `docs/controller-authority-contract.md`.
 
@@ -373,10 +388,13 @@ Device-local `~/.keptnear` state:
 - runtime IPC and a reserved private logs directory
 
 Device-local trust does not sync with `.pswvault`. App removal or reinstall does
-not delete `~/.keptnear` unless the user explicitly clears local data.
-The root key that encrypts this state is not stored in that directory. It uses
-a separate `ThisDeviceOnly` Keychain item and is exposed only as an opaque,
-zeroizing type inside `psw-broker`.
+not delete `~/.keptnear` unless the user explicitly clears local data. Confirmed
+clearing also rotates the separate human-controller authority using its durable
+removal marker; a residual controller seed can never be treated as resumable
+bootstrap after protected state has been deleted. The root key that encrypts
+this state is not stored in that directory. It uses a separate `ThisDeviceOnly`
+Keychain item and is exposed only as an opaque, zeroizing type inside
+`psw-broker`.
 
 Portable backup copies an exact allowlist from `.pswvault`: `vault.json`,
 `keys.enc`, optional `recovery.enc`, `items/`, `attachments/`, and
@@ -387,8 +405,12 @@ recreate or modify device-local trust. Plaintext export separately serializes
 only the closed authenticated credential snapshot described above.
 
 `~/.keptnear/state/device-v1.db` is an implemented SQLCipher 4 database with
-encrypted headers, page HMAC authentication, WAL mode, schema version 1, and
-owner-only database, WAL, and shared-memory files. The Broker derives its raw
+encrypted headers, page HMAC authentication, WAL mode, schema version 2, and
+owner-only database, WAL, and shared-memory files. Schema version 2 adds one
+singleton controller-authority table containing only the contract, algorithm,
+derived controller identity, public key, and creation time. Authenticated
+version 1 state migrates transactionally; future versions fail closed. The
+Broker derives its raw
 database key from the device root with HKDF-SHA-256 and the domain
 `KeptNear device state SQLCipher v1`, then calls `sqlite3_key_v2` through one
 narrow audited FFI module. The key is never placed in SQL, a command line, an
@@ -396,7 +418,8 @@ environment variable, a preference, or a file.
 
 The schema stores strong typed identities and bounded non-secret state for
 Consumers, Access Rules, Use Grants, Usage Profiles, approvals, device pause
-settings, and audit events. It has no columns for vault keys, master passwords,
+settings, audit events, and the singleton public controller authority. It has
+no columns for vault keys, controller seeds, master passwords,
 recovery keys, Consumer private keys, raw credential fields, request or
 response bodies, URLs, command arguments, standard streams, or full paths.
 
@@ -633,6 +656,22 @@ instant up to, but not including, their expiry. An expired rule can be removed
 and replaced by a fresh explicit approval, with insertion failure leaving the
 target denied.
 
+Human Control decision requests retain their comparison inputs through typed
+dispatch. Unlock approval must match both the pending request identity and its
+Vault identity. Access Rule creation must match the pending capability name and
+version in addition to the selected field, confirmation policy, and lifetime.
+Allow Once and long-term authorization both compare submitted Credential and
+Secret Field identities with the immutable pending target, and denial requires
+the fixed `deny` decision before mutation.
+Lease renewal echoes the authenticated Controller session and Broker instance;
+Consumer revocation and shutdown retain and validate their fixed scope and
+reason. Audit-clear confirmations bind a fresh identity to one exact selection
+before deletion.
+Negotiation preserves and validates the controller role and schema identities,
+and repair validates the expected Broker component and Human Control protocol
+before it can quiesce sessions or grants. Mismatches fail without resolving the
+pending request or changing runtime state.
+
 Evaluation requires the Secret Field kind obtained by trusted Broker code from
 authenticated vault content, never a Consumer assertion. It matches every
 target identity and the capability version exactly, then returns either no
@@ -774,7 +813,12 @@ Implemented:
   approvals with encrypted status persistence, Consumer-scoped polling and
   resumption, monotonic waiting, exact expiry, coalescing, and restart
   reconciliation, plus exact Consumer-field, Consumer-wide, and global
-  transactional revocation with process-local cleanup.
+  transactional revocation with process-local cleanup, plus typed
+  human-controller identities, restricted Keychain seed loading, SQLCipher
+  public-record bootstrap, single-use challenge authentication, closed
+  human-control wire and request dispatch, bounded authenticated connection
+  leases, path-free readiness, and a
+  process-lifetime single-Broker lock acquired before protected state or IPC.
 - `crates/psw-core`: Rust vault core.
 - `crates/psw-ffi`: macOS bridge.
 - `crates/keptnear-client`: shared first-party Consumer identity, Keychain,

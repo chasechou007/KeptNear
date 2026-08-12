@@ -1,6 +1,9 @@
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use std::time::Duration;
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Canonical identity of the App-to-Broker human-control protocol.
 pub const HUMAN_CONTROL_PROTOCOL_NAME: &str = "keptnear.human-control";
@@ -10,6 +13,12 @@ pub const HUMAN_CONTROL_PROTOCOL_MAJOR: u16 = 1;
 pub const HUMAN_CONTROL_PROTOCOL_MINOR: u16 = 0;
 /// Immutable schema identity for the complete version 1 operation catalog.
 pub const HUMAN_CONTROL_SCHEMA_ID: &str = "keptnear.human-control.schema.v1";
+/// Fixed decision accepted by `pending.deny`.
+pub const HUMAN_CONTROL_DENY_DECISION: &str = "deny";
+/// Fixed destructive scope accepted by `consumer.revoke`.
+pub const HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE: &str = "consumer-and-authorization";
+/// Fixed reason accepted by the graceful `shutdown` operation.
+pub const HUMAN_CONTROL_SHUTDOWN_REASON: &str = "controller-request";
 /// Maximum accepted or emitted framed human-control payload.
 pub const MAX_HUMAN_CONTROL_FRAME_LENGTH: usize = 1024 * 1024;
 /// Maximum unauthenticated negotiation request or response.
@@ -30,10 +39,68 @@ pub const MAX_HUMAN_CONTROL_COLLECTION_ITEMS: usize = 256;
 pub const MAX_HUMAN_CONTROL_AUDIT_EVENTS: usize = 256;
 /// Maximum protocol version ranges accepted during negotiation.
 pub const MAX_HUMAN_CONTROL_VERSION_RANGES: usize = 8;
+/// Maximum schema identities accepted during negotiation.
+pub const MAX_HUMAN_CONTROL_SCHEMA_IDS: usize = 8;
+/// Maximum bytes accepted for one negotiation role or schema identity.
+pub const MAX_HUMAN_CONTROL_NEGOTIATION_ID_BYTES: usize = 128;
+/// Maximum UTF-8 bytes accepted for one human-control label or technical name.
+pub const MAX_HUMAN_CONTROL_INPUT_TEXT_BYTES: usize = 128;
+/// Maximum outstanding audit-clear tickets retained on one controller connection.
+pub const MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS: usize = 16;
+/// Maximum lifetime of one authenticated human-control connection lease.
+pub const HUMAN_CONTROL_CONTROLLER_LEASE_TTL: Duration = Duration::from_secs(30);
 
 const _: () = assert!(MAX_HUMAN_CONTROL_UNLOCK_CREDENTIAL_BYTES < MAX_HUMAN_CONTROL_UNLOCK_LENGTH);
 const _: () = assert!(MAX_HUMAN_CONTROL_COLLECTION_ITEMS <= 256);
 const _: () = assert!(MAX_HUMAN_CONTROL_AUDIT_EVENTS <= MAX_HUMAN_CONTROL_COLLECTION_ITEMS);
+const _: () = assert!(MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS <= 16);
+const _: () = assert!(HUMAN_CONTROL_CONTROLLER_LEASE_TTL.as_secs() == 30);
+
+/// Fixed global limits returned by successful human-control negotiation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HumanControlLimits {
+    maximum_frame_length: usize,
+    maximum_collection_items: usize,
+    maximum_audit_events: usize,
+    maximum_input_text_bytes: usize,
+}
+
+impl HumanControlLimits {
+    /// Returns the limits frozen for the current protocol version.
+    #[must_use]
+    pub const fn current() -> Self {
+        Self {
+            maximum_frame_length: MAX_HUMAN_CONTROL_FRAME_LENGTH,
+            maximum_collection_items: MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
+            maximum_audit_events: MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+            maximum_input_text_bytes: MAX_HUMAN_CONTROL_INPUT_TEXT_BYTES,
+        }
+    }
+
+    /// Returns the maximum accepted or emitted framed payload length.
+    #[must_use]
+    pub const fn maximum_frame_length(self) -> usize {
+        self.maximum_frame_length
+    }
+
+    /// Returns the maximum entries in one collection response.
+    #[must_use]
+    pub const fn maximum_collection_items(self) -> usize {
+        self.maximum_collection_items
+    }
+
+    /// Returns the maximum audit events in one page or export.
+    #[must_use]
+    pub const fn maximum_audit_events(self) -> usize {
+        self.maximum_audit_events
+    }
+
+    /// Returns the maximum UTF-8 bytes in one human-supplied text field.
+    #[must_use]
+    pub const fn maximum_input_text_bytes(self) -> usize {
+        self.maximum_input_text_bytes
+    }
+}
 
 /// Sanitized validation failure for the frozen human-control contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -97,6 +164,64 @@ impl HumanControlProtocolVersion {
     pub const fn minor(self) -> u16 {
         self.minor
     }
+
+    /// Returns whether this selected or offered version can run on the named Broker version.
+    #[must_use]
+    pub const fn is_supported_by(self, broker: Self) -> bool {
+        self.major == broker.major && self.minor <= broker.minor
+    }
+}
+
+impl Display for HumanControlProtocolVersion {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}.{}", self.major, self.minor)
+    }
+}
+
+impl FromStr for HumanControlProtocolVersion {
+    type Err = HumanControlProtocolValidationError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        let (major, minor) = value
+            .split_once('.')
+            .ok_or(HumanControlProtocolValidationError::InvalidProtocolVersion)?;
+        if major.is_empty()
+            || minor.is_empty()
+            || (major.len() > 1 && major.starts_with('0'))
+            || (minor.len() > 1 && minor.starts_with('0'))
+            || !major.bytes().all(|byte| byte.is_ascii_digit())
+            || !minor.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(HumanControlProtocolValidationError::InvalidProtocolVersion);
+        }
+        Self::new(
+            major
+                .parse()
+                .map_err(|_| HumanControlProtocolValidationError::InvalidProtocolVersion)?,
+            minor
+                .parse()
+                .map_err(|_| HumanControlProtocolValidationError::InvalidProtocolVersion)?,
+        )
+    }
+}
+
+impl Serialize for HumanControlProtocolVersion {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for HumanControlProtocolVersion {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        value.parse().map_err(serde::de::Error::custom)
+    }
 }
 
 /// Inclusive client-supported minor range for one human-control major version.
@@ -159,16 +284,30 @@ impl HumanControlProtocolVersionRange {
 /// Canonical bounded protocol ranges offered by one App controller.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HumanControlVersionOffer {
+    role: String,
     ranges: Vec<HumanControlProtocolVersionRange>,
+    schema_ids: Vec<String>,
 }
 
 impl HumanControlVersionOffer {
-    /// Creates a non-empty offer with at most one range for each major version.
+    /// Creates a bounded offer that retains every compatibility constraint.
     pub fn new(
+        role: impl Into<String>,
         ranges: impl IntoIterator<Item = HumanControlProtocolVersionRange>,
+        schema_ids: impl IntoIterator<Item = String>,
     ) -> Result<Self, HumanControlProtocolValidationError> {
+        let role = role.into();
         let mut ranges = ranges.into_iter().collect::<Vec<_>>();
-        if ranges.is_empty() || ranges.len() > MAX_HUMAN_CONTROL_VERSION_RANGES {
+        let schema_ids = schema_ids.into_iter().collect::<Vec<_>>();
+        if !valid_negotiation_identity(&role)
+            || ranges.is_empty()
+            || ranges.len() > MAX_HUMAN_CONTROL_VERSION_RANGES
+            || schema_ids.is_empty()
+            || schema_ids.len() > MAX_HUMAN_CONTROL_SCHEMA_IDS
+            || schema_ids
+                .iter()
+                .any(|schema_id| !valid_negotiation_identity(schema_id))
+        {
             return Err(HumanControlProtocolValidationError::InvalidVersionOffer);
         }
         let majors = ranges
@@ -178,14 +317,33 @@ impl HumanControlVersionOffer {
         if majors.len() != ranges.len() {
             return Err(HumanControlProtocolValidationError::InvalidVersionOffer);
         }
+        if schema_ids.iter().collect::<BTreeSet<_>>().len() != schema_ids.len() {
+            return Err(HumanControlProtocolValidationError::InvalidVersionOffer);
+        }
         ranges.sort_by_key(|range| range.major);
-        Ok(Self { ranges })
+        Ok(Self {
+            role,
+            ranges,
+            schema_ids,
+        })
+    }
+
+    /// Returns the exact offered controller role.
+    #[must_use]
+    pub fn role(&self) -> &str {
+        &self.role
     }
 
     /// Returns offered ranges in ascending major-version order.
     #[must_use]
     pub fn ranges(&self) -> &[HumanControlProtocolVersionRange] {
         &self.ranges
+    }
+
+    /// Returns the bounded schema identities offered by the controller.
+    #[must_use]
+    pub fn schema_ids(&self) -> &[String] {
+        &self.schema_ids
     }
 
     /// Selects the highest compatible version implemented by this Broker.
@@ -196,6 +354,15 @@ impl HumanControlVersionOffer {
             .filter_map(|range| range.highest_compatible(HumanControlProtocolVersion::current()))
             .max()
     }
+}
+
+fn valid_negotiation_identity(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_HUMAN_CONTROL_NEGOTIATION_ID_BYTES
+        && value.is_ascii()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
 }
 
 /// Authentication state required before one operation may be dispatched.
@@ -289,7 +456,7 @@ pub enum HumanControlRequestSchema {
 /// Closed response-body schema identifiers for version 1.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HumanControlResponseSchema {
-    /// Selected version, schema identity, Broker instance, and operation catalog.
+    /// Selected version, schema identity, Broker instance, limits, and operation catalog.
     Hello,
     /// Controller challenge transcript fields without a private key.
     ControllerChallenge,
@@ -1032,38 +1199,158 @@ impl HumanControlProtocolFailure {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use serde::Deserialize;
+
     use super::*;
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct HumanControlFixture {
+        schema: String,
+        protocol: HumanControlFixtureProtocol,
+        limits: HumanControlFixtureLimits,
+        operations: Vec<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct HumanControlFixtureProtocol {
+        name: String,
+        major: u16,
+        minor: u16,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields, rename_all = "camelCase")]
+    struct HumanControlFixtureLimits {
+        maximum_frame_length: usize,
+        maximum_collection_items: usize,
+        maximum_audit_events: usize,
+        maximum_input_text_bytes: usize,
+    }
+
+    fn machine_access_fixture(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/machine-access")
+            .join(name)
+    }
 
     #[test]
     fn version_offer_is_canonical_bounded_and_negotiates_only_current_major() {
-        let offer = HumanControlVersionOffer::new([
-            HumanControlProtocolVersionRange::new(2, 0, 4).expect("future range"),
-            HumanControlProtocolVersionRange::new(1, 0, 7).expect("current range"),
-        ])
+        let offer = HumanControlVersionOffer::new(
+            "human-controller",
+            [
+                HumanControlProtocolVersionRange::new(2, 0, 4).expect("future range"),
+                HumanControlProtocolVersionRange::new(1, 0, 7).expect("current range"),
+            ],
+            [HUMAN_CONTROL_SCHEMA_ID.to_owned()],
+        )
         .expect("canonical offer");
+        assert_eq!(offer.role(), "human-controller");
+        assert_eq!(offer.schema_ids(), [HUMAN_CONTROL_SCHEMA_ID]);
         assert_eq!(offer.ranges()[0].major(), 1);
         assert_eq!(
             offer.negotiate_current(),
             Some(HumanControlProtocolVersion::current())
         );
 
-        let future_only =
-            HumanControlVersionOffer::new([
-                HumanControlProtocolVersionRange::new(2, 0, 0).expect("future range")
-            ])
-            .expect("bounded offer");
+        let future_only = HumanControlVersionOffer::new(
+            "human-controller",
+            [HumanControlProtocolVersionRange::new(2, 0, 0).expect("future range")],
+            [HUMAN_CONTROL_SCHEMA_ID.to_owned()],
+        )
+        .expect("bounded offer");
         assert_eq!(future_only.negotiate_current(), None);
         assert_eq!(
-            HumanControlVersionOffer::new([
-                HumanControlProtocolVersionRange::new(1, 0, 0).expect("range"),
-                HumanControlProtocolVersionRange::new(1, 1, 1).expect("duplicate major"),
-            ]),
+            HumanControlVersionOffer::new(
+                "human-controller",
+                [
+                    HumanControlProtocolVersionRange::new(1, 0, 0).expect("range"),
+                    HumanControlProtocolVersionRange::new(1, 1, 1).expect("duplicate major"),
+                ],
+                [HUMAN_CONTROL_SCHEMA_ID.to_owned()],
+            ),
             Err(HumanControlProtocolValidationError::InvalidVersionOffer)
         );
         assert_eq!(
             HumanControlProtocolVersionRange::new(1, 2, 1),
             Err(HumanControlProtocolValidationError::InvalidProtocolVersion)
         );
+    }
+
+    #[test]
+    fn protocol_version_string_is_strict_and_canonical() {
+        assert_eq!(HumanControlProtocolVersion::current().to_string(), "1.0");
+        assert_eq!("1.0".parse(), Ok(HumanControlProtocolVersion::current()));
+        for invalid in ["", "1", "1.", ".0", "01.0", "1.00", "0.1", "1.-1"] {
+            assert!(invalid.parse::<HumanControlProtocolVersion>().is_err());
+        }
+    }
+
+    #[test]
+    fn sanitized_protocol_fixture_accepts_v1_and_rejects_future_major() {
+        let read = |name| {
+            serde_json::from_slice::<HumanControlFixture>(
+                &std::fs::read(machine_access_fixture(name)).expect("read protocol fixture"),
+            )
+            .expect("parse protocol fixture")
+        };
+        let current = read("human-control-v1.json");
+        assert_eq!(current.schema, "keptnear.fixture.human-control.v1");
+        assert_eq!(current.protocol.name, HUMAN_CONTROL_PROTOCOL_NAME);
+        assert_eq!(
+            HumanControlProtocolVersion::new(current.protocol.major, current.protocol.minor),
+            Ok(HumanControlProtocolVersion::current())
+        );
+        let limits = HumanControlLimits::current();
+        assert_eq!(
+            current.limits.maximum_frame_length,
+            limits.maximum_frame_length()
+        );
+        assert_eq!(
+            current.limits.maximum_collection_items,
+            limits.maximum_collection_items()
+        );
+        assert_eq!(
+            current.limits.maximum_audit_events,
+            limits.maximum_audit_events()
+        );
+        assert_eq!(
+            current.limits.maximum_input_text_bytes,
+            limits.maximum_input_text_bytes()
+        );
+        let fixture_operations = current
+            .operations
+            .iter()
+            .map(|value| {
+                value
+                    .parse::<HumanControlOperation>()
+                    .expect("known operation")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            fixture_operations,
+            HUMAN_CONTROL_OPERATION_CONTRACTS
+                .iter()
+                .map(|contract| contract.operation())
+                .collect::<Vec<_>>()
+        );
+
+        let future = read("human-control-future.json");
+        let offer = HumanControlVersionOffer::new(
+            "human-controller",
+            [HumanControlProtocolVersionRange::new(
+                future.protocol.major,
+                future.protocol.minor,
+                future.protocol.minor,
+            )
+            .expect("future range")],
+            ["keptnear.human-control.schema.v2".to_owned()],
+        )
+        .expect("future offer");
+        assert_eq!(offer.negotiate_current(), None);
     }
 
     #[test]

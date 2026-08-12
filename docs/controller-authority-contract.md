@@ -1,12 +1,14 @@
 # Controller Authority Contract
 
 This document freezes the version 1 cryptographic and macOS Keychain contract
-for the KeptNear App's human-control authority. It does not implement the
-Keychain adapter, Broker trust record, challenge manager, dispatcher, or App
-client, and it does not activate the installed Broker service.
+for the KeptNear App's human-control authority. The Broker-side Keychain
+adapter, public trust record, challenge manager, and dispatcher are implemented
+and tested in source. The App client, final entitlement-qualified packaging,
+and installed service activation are not implemented.
 
 The executable source contract is defined in
-`crates/psw-broker/src/controller_authority_contract.rs`.
+`crates/psw-broker/src/controller_authority_contract.rs`, `controller_key.rs`,
+and `controller_authentication.rs`.
 
 ## Contract Identity
 
@@ -24,6 +26,11 @@ The controller authority is separate from every Consumer identity, Pairing,
 Access Rule, Use Grant, and Usage Profile. Possessing this key permits only the
 closed human-control catalog. It never grants a Consumer capability or returns
 a Secret Field.
+
+Negotiation accepts a compatible version only when the typed offer also
+retains and supplies the exact `human-controller` role and the current schema
+identity. An unknown role or schema closes the connection before a controller
+challenge can be issued.
 
 The controller identity is:
 
@@ -183,6 +190,11 @@ The fail-closed sequence is:
    transaction;
 9. only after commit may the connection become an authenticated controller.
 
+Seed creation in step 3 is available only through the non-Wire trusted App
+enablement boundary after step 1. An unauthenticated `controller.challenge`
+never creates or replaces Keychain state; it can only load authority already
+prepared by explicit enablement or resume a permitted key-only bootstrap.
+
 There is no cross-store claim of atomicity between Keychain and SQLCipher. A
 crash after Keychain creation leaves `key-only`, which is not ready but may
 resume the signed bootstrap only when the removal marker is absent. Marker
@@ -202,6 +214,18 @@ For complete matching authority, `controller.challenge` returns purpose
 fresh controller session, echoed client nonce, fresh Broker nonce, and the
 opaque deadline token. The App signs the authentication transcript and returns
 the fixed 64-byte proof through `controller.authenticate`.
+
+The challenge request carries only the stable controller identity and a fresh
+client nonce. After negotiation and bounded admission, the Broker derives the
+purpose, protocol, role, and public key from the selected connection contract
+and the exact protected authority state; none is nominated by the requester.
+
+The request cannot nominate a controller session identity. The Broker generates
+that identity independently for every challenge, including replacement
+challenges on the same connection. The submitted proof retains the echoed
+controller identity and the Broker compares it exactly with the outstanding
+challenge before signature verification; changing only that wire field cannot
+authenticate the original challenge identity.
 
 Successful proof authenticates only that connection and starts the separately
 bounded controller lease. It does not authenticate another connection, unlock
@@ -262,8 +286,15 @@ a new record or seed. Every `.pswvault` remains untouched.
 
 The constants, transcript construction, controller-ID derivation, presence
 matrix, removal provenance, rotation policy, and removal order are frozen and
-tested in source.
-Runtime Keychain access, entitlement packaging, Broker persistence,
-challenge consumption, rate limiting, App signing, and service activation are
-subsequent implementation work. Public capability status therefore remains
-Bundled But Not Activated.
+tested in source. Runtime Keychain queries always name the Data Protection
+Keychain, exact account, synchronization policy, and verified access group.
+The non-cloneable seed is cleared on drop; SQLCipher schema version 2 stores
+only the matching public record. Key-only bootstrap resumes without rotation;
+record-only, mismatch, malformed seed, and removal-pending states fail closed.
+Challenges are single-use, expire by retained monotonic `Instant`, bind the
+Broker instance and controller session, use strict Ed25519 verification, and
+enforce process-local per-controller and global failure budgets.
+
+Entitlement-qualified App integration, timed controller lease behavior, final
+signing, and service activation are subsequent work. Public capability status
+therefore remains Bundled But Not Activated.

@@ -643,11 +643,12 @@ generic-password item with
 Reinstall recovery loads that existing Keychain item and authenticates the
 existing SQLCipher database without initializing either one. Explicit local
 device-state clearing requires confirmation, revokes sessions and grants when
-state is readable, removes and verifies only `device-v1.db` plus its WAL and
-shared-memory files, and then deletes and verifies the Keychain root. A state
-removal failure retains the root key; a later Keychain failure is reported as
-partial completion and can be retried. Corrupt or missing-key state has a
-separate confirmed recovery path. These operations preserve the directory
+state is readable, creates or resumes the controller-removal marker, removes
+the controller public record with `device-v1.db` plus its WAL and shared-memory
+files, verifies controller-seed deletion, removes the marker last, and only
+then deletes and verifies the device Keychain root. A state or Keychain failure
+retains the remaining keys and marker needed for an explicit retry. Corrupt or
+missing-key state has a separate confirmed recovery path. These operations preserve the directory
 layout and do not delete any `.pswvault`.
 
 ### Audit

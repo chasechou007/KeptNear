@@ -17,6 +17,10 @@ use sha2::Sha256;
 use zeroize::Zeroize;
 
 use crate::audit::{BrokerAuditCursor, BrokerAuditFilter};
+use crate::controller_authority_contract::{
+    derive_controller_id, CONTROLLER_AUTHORITY_CONTRACT_ID, CONTROLLER_SIGNING_ALGORITHM,
+};
+use crate::controller_key::ControllerAuthorityRecord;
 use crate::device_key::DeviceRootKey;
 use crate::paths::DevicePaths;
 use crate::sqlcipher_ffi;
@@ -28,7 +32,11 @@ use crate::state_model::{
     UsageProfile, UsageProfileId, UseGrant, UseGrantId, VaultSessionId,
     CURRENT_USAGE_PROFILE_DEFINITION_VERSION,
 };
-use crate::state_schema::{CREATE_SCHEMA_V1, CURRENT_DEVICE_SCHEMA_VERSION, REQUIRED_TABLES};
+use crate::state_schema::{
+    CREATE_SCHEMA_V1, CURRENT_DEVICE_SCHEMA_VERSION, MIGRATE_SCHEMA_V1_TO_V2, REQUIRED_TABLES,
+    REQUIRED_TABLES_V1,
+};
+use crate::ControllerId;
 
 /// Stable filename of the encrypted device-state database.
 pub const DEVICE_STATE_DATABASE_FILENAME: &str = "device-v1.db";
@@ -574,6 +582,98 @@ impl DeviceStateStore {
     /// Returns the authenticated KeptNear device-state schema version.
     pub fn schema_version(&self) -> Result<i64, DeviceStateError> {
         read_schema_version(&self.connection)
+    }
+
+    /// Loads the one approved public controller record, if bootstrap has completed.
+    pub fn controller_authority_record(
+        &self,
+    ) -> Result<Option<ControllerAuthorityRecord>, DeviceStateError> {
+        let row = self
+            .connection
+            .query_row(
+                "SELECT contract_id, signing_algorithm, controller_id, public_key, created_at_ms
+                 FROM controller_authority
+                 WHERE singleton = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                        row.get::<_, Vec<u8>>(3)?,
+                        row.get::<_, i64>(4)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|error| map_database_error(DeviceStateDatabaseOperation::Read, error))?;
+        let Some((contract, algorithm, controller_id, public_key, created_at_ms)) = row else {
+            return Ok(None);
+        };
+        if contract != CONTROLLER_AUTHORITY_CONTRACT_ID
+            || algorithm != CONTROLLER_SIGNING_ALGORITHM
+            || controller_id.len() != 32
+            || public_key.len() != 32
+        {
+            return Err(DeviceStateError::CorruptRecord);
+        }
+        let public_key: [u8; 32] = public_key
+            .try_into()
+            .map_err(|_| DeviceStateError::CorruptRecord)?;
+        let controller_id: [u8; 32] = controller_id
+            .try_into()
+            .map_err(|_| DeviceStateError::CorruptRecord)?;
+        if controller_id != derive_controller_id(&public_key) {
+            return Err(DeviceStateError::CorruptRecord);
+        }
+        let created_at = StateTimestamp::from_unix_millis(created_at_ms)
+            .map_err(|_| DeviceStateError::CorruptRecord)?;
+        let record = ControllerAuthorityRecord::new(public_key, created_at);
+        if record.controller_id() != ControllerId::from_bytes(controller_id) {
+            return Err(DeviceStateError::CorruptRecord);
+        }
+        Ok(Some(record))
+    }
+
+    /// Inserts the first approved public controller record without replacement.
+    pub fn insert_controller_authority_record(
+        &self,
+        record: ControllerAuthorityRecord,
+    ) -> Result<(), DeviceStateError> {
+        let inserted = self
+            .connection
+            .execute(
+                "INSERT INTO controller_authority (
+                    singleton,
+                    contract_id,
+                    signing_algorithm,
+                    controller_id,
+                    public_key,
+                    created_at_ms
+                 ) VALUES (1, ?1, ?2, ?3, ?4, ?5)",
+                params![
+                    CONTROLLER_AUTHORITY_CONTRACT_ID,
+                    CONTROLLER_SIGNING_ALGORITHM,
+                    record.controller_id().as_bytes().as_slice(),
+                    record.public_key().as_slice(),
+                    record.created_at().unix_millis(),
+                ],
+            )
+            .map_err(map_write_error)?;
+        if inserted != 1 {
+            return Err(DeviceStateError::Conflict);
+        }
+        self.verify_managed_files()
+    }
+
+    /// Removes only the public controller record during ordered local-data clearing.
+    pub fn remove_controller_authority_record(&self) -> Result<bool, DeviceStateError> {
+        let removed = self
+            .connection
+            .execute("DELETE FROM controller_authority WHERE singleton = 1", [])
+            .map_err(map_write_error)?;
+        self.verify_managed_files()?;
+        Ok(removed == 1)
     }
 
     pub(crate) fn approval_coalescing_digest(
@@ -1998,9 +2098,11 @@ impl DeviceStateStore {
         validate_existing_database_paths(&database_path)?;
         verify_database_header(&database_path)?;
 
-        let connection = open_connection(&database_path)?;
+        let mut connection = open_connection(&database_path)?;
         let sqlcipher_version = key_and_configure(&connection, root_key)?;
         authenticate_existing_database(&connection)?;
+        verify_database_integrity(&connection)?;
+        migrate_schema(&mut connection)?;
         verify_schema(&connection)?;
         configure_authenticated_connection(&connection)?;
         verify_authenticated_database(&connection)?;
@@ -2342,6 +2444,11 @@ fn initialize_schema(
             map_database_error(DeviceStateDatabaseOperation::InitializeSchema, error)
         })?;
     transaction
+        .execute_batch(MIGRATE_SCHEMA_V1_TO_V2)
+        .map_err(|error| {
+            map_database_error(DeviceStateDatabaseOperation::InitializeSchema, error)
+        })?;
+    transaction
         .execute(
             "INSERT INTO device_settings (
                 singleton,
@@ -2448,7 +2555,14 @@ fn verify_schema(connection: &Connection) -> Result<(), DeviceStateError> {
         });
     }
 
-    for required in REQUIRED_TABLES {
+    verify_required_tables(connection, REQUIRED_TABLES)
+}
+
+fn verify_required_tables(
+    connection: &Connection,
+    required_tables: &[&str],
+) -> Result<(), DeviceStateError> {
+    for required in required_tables {
         let exists: bool = connection
             .query_row(
                 "SELECT EXISTS(
@@ -2469,6 +2583,33 @@ fn verify_schema(connection: &Connection) -> Result<(), DeviceStateError> {
     Ok(())
 }
 
+fn migrate_schema(connection: &mut Connection) -> Result<(), DeviceStateError> {
+    let version = read_schema_version(connection)?;
+    match version {
+        CURRENT_DEVICE_SCHEMA_VERSION => Ok(()),
+        1 => {
+            let transaction = connection
+                .transaction_with_behavior(TransactionBehavior::Exclusive)
+                .map_err(|error| {
+                    map_database_error(DeviceStateDatabaseOperation::InitializeSchema, error)
+                })?;
+            verify_required_tables(&transaction, REQUIRED_TABLES_V1)?;
+            transaction
+                .execute_batch(MIGRATE_SCHEMA_V1_TO_V2)
+                .map_err(|error| {
+                    map_database_error(DeviceStateDatabaseOperation::InitializeSchema, error)
+                })?;
+            transaction.commit().map_err(|error| {
+                map_database_error(DeviceStateDatabaseOperation::InitializeSchema, error)
+            })
+        }
+        found => Err(DeviceStateError::UnsupportedSchema {
+            found,
+            supported: CURRENT_DEVICE_SCHEMA_VERSION,
+        }),
+    }
+}
+
 fn read_schema_version(connection: &Connection) -> Result<i64, DeviceStateError> {
     connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -2478,6 +2619,10 @@ fn read_schema_version(connection: &Connection) -> Result<i64, DeviceStateError>
 fn verify_authenticated_database(connection: &Connection) -> Result<(), DeviceStateError> {
     verify_schema(connection)?;
 
+    verify_database_integrity(connection)
+}
+
+fn verify_database_integrity(connection: &Connection) -> Result<(), DeviceStateError> {
     let mut statement = connection
         .prepare("PRAGMA cipher_integrity_check")
         .map_err(|_| DeviceStateError::AuthenticationFailed)?;
@@ -3660,6 +3805,7 @@ mod tests {
     use crate::vault_session::{
         BrokerVaultLockState, BrokerVaultSessionError, BrokerVaultSessionManager,
     };
+    use crate::ControllerSigningKey;
 
     static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -3810,7 +3956,7 @@ mod tests {
         let store = DeviceStateStore::initialize_at(&state.path, &key, timestamp(100))
             .expect("initialize encrypted state");
 
-        assert_eq!(store.schema_version().expect("schema"), 1);
+        assert_eq!(store.schema_version().expect("schema"), 2);
         assert_eq!(store.sqlcipher_version().major(), 4);
         assert!(!store.apps_tools_paused().expect("pause"));
         assert_eq!(
@@ -3827,8 +3973,127 @@ mod tests {
         drop(store);
         let reopened =
             DeviceStateStore::open_at(&state.path, &key).expect("reopen encrypted state");
-        assert_eq!(reopened.schema_version().expect("schema"), 1);
+        assert_eq!(reopened.schema_version().expect("schema"), 2);
         assert_eq!(reopened.sqlcipher_version().major(), 4);
+    }
+
+    #[test]
+    fn migrates_authenticated_v1_state_and_rejects_future_schema() {
+        let state = TestStateDirectory::new("schema-migration");
+        let key = root_key(31);
+        let store = DeviceStateStore::initialize_at(&state.path, &key, timestamp(100))
+            .expect("initialize encrypted state");
+        store
+            .connection
+            .execute_batch("DROP TABLE controller_authority; PRAGMA user_version = 1;")
+            .expect("construct authenticated v1 fixture");
+        drop(store);
+
+        let migrated = DeviceStateStore::open_at(&state.path, &key).expect("migrate v1 state");
+        assert_eq!(migrated.schema_version().expect("schema"), 2);
+        assert_eq!(
+            migrated
+                .controller_authority_record()
+                .expect("controller record"),
+            None
+        );
+        migrated
+            .connection
+            .execute_batch("PRAGMA user_version = 3;")
+            .expect("seed future version");
+        drop(migrated);
+        assert_eq!(
+            DeviceStateStore::open_at(&state.path, &key).unwrap_err(),
+            DeviceStateError::UnsupportedSchema {
+                found: 3,
+                supported: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn corrupt_v1_state_is_not_migrated_before_integrity_check() {
+        let state = TestStateDirectory::new("corrupt-v1-migration");
+        let key = root_key(33);
+        let store = DeviceStateStore::initialize_at(&state.path, &key, timestamp(100))
+            .expect("initialize encrypted state");
+        store
+            .connection
+            .execute_batch(
+                "CREATE TABLE corruption_target(payload BLOB) STRICT;
+                 INSERT INTO corruption_target(payload) VALUES(zeroblob(32768));
+                 DROP TABLE controller_authority;
+                 PRAGMA user_version = 1;
+                 PRAGMA wal_checkpoint(TRUNCATE);",
+            )
+            .expect("construct multi-page authenticated v1 fixture");
+        let read_pragma = |pragma| {
+            store
+                .connection
+                .query_row(pragma, [], |row| match row.get_ref(0)? {
+                    ValueRef::Integer(value) => Ok(value),
+                    ValueRef::Text(value) => std::str::from_utf8(value)
+                        .ok()
+                        .and_then(|value| value.parse::<i64>().ok())
+                        .ok_or(rusqlite::Error::InvalidQuery),
+                    _ => Err(rusqlite::Error::InvalidQuery),
+                })
+                .expect("integer pragma")
+        };
+        let page_size = read_pragma("PRAGMA page_size");
+        let page_count = read_pragma("PRAGMA page_count");
+        assert!(page_count > 1);
+        let tamper_offset =
+            u64::try_from((page_count - 1) * page_size + 100).expect("positive database offset");
+        drop(store);
+
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(state.database_path())
+            .expect("open database for tamper");
+        file.seek(SeekFrom::Start(tamper_offset))
+            .expect("seek non-schema page");
+        file.write_all(&[0xff]).expect("tamper non-schema page");
+        file.sync_all().expect("sync tamper");
+        drop(file);
+
+        assert_eq!(
+            DeviceStateStore::open_at(&state.path, &key).expect_err("reject corrupt v1 state"),
+            DeviceStateError::AuthenticationFailed
+        );
+
+        let connection = open_connection(&state.database_path()).expect("reopen page one");
+        key_and_configure(&connection, &key).expect("key database");
+        authenticate_existing_database(&connection).expect("authenticate schema page");
+        assert_eq!(read_schema_version(&connection).expect("schema version"), 1);
+    }
+
+    #[test]
+    fn controller_public_record_round_trips_without_private_material() {
+        let state = TestStateDirectory::new("controller-record");
+        let key = root_key(32);
+        let store = DeviceStateStore::initialize_at(&state.path, &key, timestamp(100))
+            .expect("initialize encrypted state");
+        let signing_key = ControllerSigningKey::from_stored_bytes(vec![0x44; 32])
+            .expect("controller signing key");
+        let record = ControllerAuthorityRecord::new(signing_key.public_key(), timestamp(110));
+
+        assert_eq!(store.controller_authority_record().expect("empty"), None);
+        store
+            .insert_controller_authority_record(record)
+            .expect("insert record");
+        assert_eq!(
+            store.controller_authority_record().expect("record"),
+            Some(record)
+        );
+        assert!(store.insert_controller_authority_record(record).is_err());
+        assert!(store
+            .remove_controller_authority_record()
+            .expect("remove record"));
+        assert!(!store
+            .remove_controller_authority_record()
+            .expect("already absent"));
     }
 
     #[test]

@@ -20,10 +20,10 @@ use psw_broker::{
 #[cfg(target_os = "macos")]
 use psw_broker::{
     ApprovalRequestId, BrokerCredentialCandidateSelection, BrokerHumanCredentialReview,
-    BrokerPairingUserApproval, BrokerRuntime, BrokerRuntimeError, BrokerVaultLockState,
-    BrokerVaultSessionError, ConfirmationPolicy, DeviceKeyError, DeviceKeyManager, DevicePaths,
-    DeviceStateStore, MacOsDeviceKeyStore, PairingRequestId, StateTimestamp,
-    DEVICE_STATE_DATABASE_FILENAME,
+    BrokerPairingUserApproval, BrokerRuntime, BrokerRuntimeError, BrokerServiceRuntime,
+    BrokerVaultLockState, BrokerVaultSessionError, Capability, ConfirmationPolicy, DeviceKeyError,
+    DeviceKeyManager, DevicePaths, DeviceStateStore, MacOsDeviceKeyStore, PairingRequestId,
+    StateTimestamp, DEVICE_STATE_DATABASE_FILENAME,
 };
 use psw_core::{
     built_in_credential_template, normalize_totp_secret, ConflictFieldSelection, ConflictId,
@@ -46,7 +46,7 @@ static NEXT_RECOVERY_WORKFLOW_ID: AtomicU64 = AtomicU64::new(1);
 static RECOVERY_WORKFLOWS: OnceLock<Mutex<BTreeMap<u64, PendingRecoveryWorkflow>>> =
     OnceLock::new();
 #[cfg(target_os = "macos")]
-static BROKER_RUNTIME: OnceLock<Mutex<Option<BrokerRuntime>>> = OnceLock::new();
+static BROKER_RUNTIME: OnceLock<Mutex<Option<BrokerServiceRuntime>>> = OnceLock::new();
 
 enum PendingRecoveryWorkflow {
     Setup {
@@ -1923,13 +1923,14 @@ fn with_broker_runtime<T>(
     operation(
         runtime
             .as_mut()
-            .ok_or_else(|| "Apps & Tools runtime unavailable".to_owned())?,
+            .ok_or_else(|| "Apps & Tools runtime unavailable".to_owned())?
+            .runtime_mut(),
     )
 }
 
 #[cfg(target_os = "macos")]
-fn open_or_initialize_broker_runtime() -> Result<BrokerRuntime, String> {
-    BrokerRuntime::open_or_initialize_for_current_user(MacOsDeviceKeyStore::new())
+fn open_or_initialize_broker_runtime() -> Result<BrokerServiceRuntime, String> {
+    BrokerServiceRuntime::start_for_current_user(MacOsDeviceKeyStore::new())
         .map_err(|error| format!("Apps & Tools runtime unavailable: {error}"))
 }
 
@@ -2002,10 +2003,14 @@ fn approve_apps_tools_pending_unlock(
 ) -> Result<AppsToolsPendingRequestDecisionView, String> {
     let request_id = parse_approval_request_id(request_id)?;
     let approved_at = current_state_timestamp()?;
+    let vault_id = vault
+        .metadata
+        .vault_id
+        .ok_or_else(|| "Apps & Tools request requires a current Vault identity".to_owned())?;
     with_broker_runtime(|runtime| {
         ensure_pending_request_matches_vault(runtime, request_id, vault)?;
         runtime
-            .approve_pending_unlock(request_id, approved_at)
+            .approve_pending_unlock(request_id, vault_id, approved_at)
             .map_err(|error| format!("Apps & Tools unlock approval failed: {error}"))
     })?;
     Ok(AppsToolsPendingRequestDecisionView::new(
@@ -2068,11 +2073,14 @@ fn configure_apps_tools_long_term_access(
     let approved_at = current_state_timestamp()?;
     let access_rule_id = with_broker_runtime(|runtime| {
         ensure_pending_request_matches_vault(runtime, request_id, vault)?;
+        let capability = pending_request_capability_for_vault(runtime, request_id, vault)?;
         runtime
             .configure_pending_request_access_rule(
                 request_id,
                 selection,
+                capability,
                 confirmation_policy,
+                RuleLifetime::Persistent,
                 approved_at,
             )
             .map(|creation| creation.rule().access_rule_id().to_string())
@@ -2153,6 +2161,29 @@ fn ensure_pending_request_matches_vault(
         return Err("Apps & Tools request is unavailable for the current Vault".to_owned());
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn pending_request_capability_for_vault(
+    runtime: &BrokerRuntime,
+    approval_request_id: ApprovalRequestId,
+    vault: &UnlockedVault,
+) -> Result<Capability, String> {
+    let current_vault_id = vault
+        .metadata
+        .vault_id
+        .ok_or_else(|| "Apps & Tools request requires a current Vault identity".to_owned())?;
+    runtime
+        .pending_requests_for_human()
+        .map_err(|error| format!("Apps & Tools pending request unavailable: {error}"))?
+        .requests()
+        .iter()
+        .find(|request| {
+            request.request_id() == BrokerPendingRequestId::Approval(approval_request_id)
+                && request.vault_id() == Some(current_vault_id)
+        })
+        .and_then(|request| request.capability())
+        .ok_or_else(|| "Apps & Tools capability is unavailable for this request".to_owned())
 }
 
 #[cfg(target_os = "macos")]

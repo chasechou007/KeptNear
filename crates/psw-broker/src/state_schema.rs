@@ -1,10 +1,21 @@
-pub(crate) const CURRENT_DEVICE_SCHEMA_VERSION: i64 = 1;
+pub(crate) const CURRENT_DEVICE_SCHEMA_VERSION: i64 = 2;
+
+pub(crate) const REQUIRED_TABLES_V1: &[&str] = &[
+    "access_rules",
+    "approvals",
+    "audit_events",
+    "consumers",
+    "device_settings",
+    "usage_profiles",
+    "use_grants",
+];
 
 pub(crate) const REQUIRED_TABLES: &[&str] = &[
     "access_rules",
     "approvals",
     "audit_events",
     "consumers",
+    "controller_authority",
     "device_settings",
     "usage_profiles",
     "use_grants",
@@ -250,6 +261,19 @@ ON audit_events(occurred_at_ms DESC, audit_event_id);
 PRAGMA user_version = 1;
 "#;
 
+pub(crate) const MIGRATE_SCHEMA_V1_TO_V2: &str = r#"
+CREATE TABLE controller_authority (
+    singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+    contract_id TEXT NOT NULL CHECK(contract_id = 'keptnear.controller-authority.v1'),
+    signing_algorithm TEXT NOT NULL CHECK(signing_algorithm = 'ed25519'),
+    controller_id BLOB NOT NULL UNIQUE CHECK(length(controller_id) = 32),
+    public_key BLOB NOT NULL UNIQUE CHECK(length(public_key) = 32),
+    created_at_ms INTEGER NOT NULL CHECK(created_at_ms >= 0)
+) STRICT;
+
+PRAGMA user_version = 2;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,7 +300,8 @@ mod tests {
             "url ",
         ] {
             assert!(
-                !CREATE_SCHEMA_V1.contains(forbidden),
+                !CREATE_SCHEMA_V1.contains(forbidden)
+                    && !MIGRATE_SCHEMA_V1_TO_V2.contains(forbidden),
                 "device schema contains forbidden column category {forbidden}"
             );
         }
@@ -284,7 +309,7 @@ mod tests {
 
     #[test]
     fn every_required_table_is_declared_once() {
-        for table in REQUIRED_TABLES {
+        for table in REQUIRED_TABLES_V1 {
             assert_eq!(
                 CREATE_SCHEMA_V1
                     .matches(&format!("CREATE TABLE {table} "))
@@ -293,5 +318,11 @@ mod tests {
                 "unexpected declaration count for {table}"
             );
         }
+        assert_eq!(
+            MIGRATE_SCHEMA_V1_TO_V2
+                .matches("CREATE TABLE controller_authority ")
+                .count(),
+            1
+        );
     }
 }

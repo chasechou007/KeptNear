@@ -1,0 +1,150 @@
+use std::fmt::{Display, Formatter};
+
+use crate::{
+    BrokerVaultSessionError, BrokerVaultSessionSnapshot, ComponentMetadata,
+    HumanControlProtocolVersion, PackagedComponent, MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
+};
+
+/// Fixed protected-state category exposed after authenticated runtime startup.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrokerProtectedStateCategory {
+    /// SQLCipher state was authenticated and its current schema verified.
+    Authenticated,
+}
+
+/// Path-free readiness projection for an authenticated human controller.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BrokerReadinessProjection {
+    component: ComponentMetadata,
+    human_control_protocol: HumanControlProtocolVersion,
+    human_control_schema: &'static str,
+    protected_state: BrokerProtectedStateCategory,
+    machine_access_paused: bool,
+    vaults: Vec<BrokerVaultSessionSnapshot>,
+    vaults_truncated: bool,
+}
+
+impl BrokerReadinessProjection {
+    pub(crate) fn new(
+        human_control_protocol: HumanControlProtocolVersion,
+        human_control_schema: &'static str,
+        machine_access_paused: bool,
+        mut vaults: Vec<BrokerVaultSessionSnapshot>,
+    ) -> Self {
+        vaults.sort_by_key(|snapshot| snapshot.vault_id());
+        let vaults_truncated = vaults.len() > MAX_HUMAN_CONTROL_COLLECTION_ITEMS;
+        vaults.truncate(MAX_HUMAN_CONTROL_COLLECTION_ITEMS);
+        Self {
+            component: ComponentMetadata::current(
+                PackagedComponent::Broker,
+                env!("CARGO_PKG_VERSION"),
+            )
+            .expect("Cargo package version is valid component metadata"),
+            human_control_protocol,
+            human_control_schema,
+            protected_state: BrokerProtectedStateCategory::Authenticated,
+            machine_access_paused,
+            vaults,
+            vaults_truncated,
+        }
+    }
+
+    /// Returns the exact packaged Broker identity and Consumer protocol version.
+    #[must_use]
+    pub const fn component(&self) -> &ComponentMetadata {
+        &self.component
+    }
+
+    /// Returns the authenticated App-to-Broker protocol version.
+    #[must_use]
+    pub const fn human_control_protocol(&self) -> HumanControlProtocolVersion {
+        self.human_control_protocol
+    }
+
+    /// Returns the exact schema selected for this authenticated connection.
+    #[must_use]
+    pub const fn human_control_schema(&self) -> &'static str {
+        self.human_control_schema
+    }
+
+    /// Returns the fixed protected-state category without a path or SQL detail.
+    #[must_use]
+    pub const fn protected_state(&self) -> BrokerProtectedStateCategory {
+        self.protected_state
+    }
+
+    /// Returns the independent persisted Machine Access Pause state.
+    #[must_use]
+    pub const fn machine_access_paused(&self) -> bool {
+        self.machine_access_paused
+    }
+
+    /// Returns stable identities and lock states for tracked machine Vaults.
+    #[must_use]
+    pub fn vaults(&self) -> &[BrokerVaultSessionSnapshot] {
+        &self.vaults
+    }
+
+    /// Returns whether additional tracked Vault states were omitted.
+    #[must_use]
+    pub const fn vaults_truncated(&self) -> bool {
+        self.vaults_truncated
+    }
+}
+
+/// Fixed readiness projection failure.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BrokerReadinessError {
+    /// Process-owned Vault lock state could not be read safely.
+    VaultStateUnavailable,
+}
+
+impl Display for BrokerReadinessError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Broker readiness is unavailable")
+    }
+}
+
+impl std::error::Error for BrokerReadinessError {}
+
+impl From<BrokerVaultSessionError> for BrokerReadinessError {
+    fn from(_: BrokerVaultSessionError) -> Self {
+        Self::VaultStateUnavailable
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_readiness_is_component_exact_pause_independent_and_path_free() {
+        let selected_protocol = HumanControlProtocolVersion::new(1, 7).expect("protocol");
+        let projection = BrokerReadinessProjection::new(
+            selected_protocol,
+            crate::HUMAN_CONTROL_SCHEMA_ID,
+            true,
+            Vec::new(),
+        );
+        assert_eq!(
+            projection.component().component(),
+            PackagedComponent::Broker
+        );
+        assert_eq!(projection.human_control_protocol(), selected_protocol);
+        assert_eq!(
+            projection.human_control_schema(),
+            crate::HUMAN_CONTROL_SCHEMA_ID
+        );
+        assert_eq!(
+            projection.protected_state(),
+            BrokerProtectedStateCategory::Authenticated
+        );
+        assert!(projection.machine_access_paused());
+        assert!(projection.vaults().is_empty());
+        assert!(!projection.vaults_truncated());
+        let debug = format!("{projection:?}");
+        for forbidden in ["/Users/", "/private/", ".pswvault", "device-v1.db"] {
+            assert!(!debug.contains(forbidden));
+        }
+    }
+}
