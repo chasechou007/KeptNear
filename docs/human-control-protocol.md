@@ -109,10 +109,12 @@ invalid union variants, and messages beyond the applicable bound are rejected.
 Errors never echo submitted bytes or include a free-form `message`, `detail`,
 path, or underlying operating-system error.
 
-The initial `hello` envelope may declare any minor version supported by the
-running Broker within the current major. After `Hello` selects a version, every
-request, challenge transcript, success, and failure on that connection uses
-that exact selected version; a different envelope version is incompatible.
+The initial `hello` envelope uses minor `0` of the client's current major so an
+older Broker can decode the fixed negotiation schema. The body offers the full
+`0...currentMinor` range implemented by that client. A successful `hello`
+response uses the selected compatible minor. After `Hello` selects a version,
+every request, challenge transcript, success, and failure on that connection
+uses that exact selected version; a different envelope version is incompatible.
 
 ## Negotiation
 

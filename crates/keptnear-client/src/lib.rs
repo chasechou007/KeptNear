@@ -15,7 +15,9 @@ mod identity;
 mod macos_keychain;
 
 pub use broker_client::{BrokerAdapterError, BrokerAuthenticationStatus};
-pub use human_control_client::{HumanControlClient, HumanControlClientError, HumanControlSigner};
+pub use human_control_client::{
+    HumanControlClient, HumanControlClientError, HumanControlSigner, HumanControlTransport,
+};
 pub use identity::{
     ClientIdentityKind, PairingProfileId, PairingProfileIdError, MAX_PAIRING_PROFILE_ID_BYTES,
 };
@@ -34,6 +36,14 @@ use psw_broker::{
 };
 #[cfg(target_os = "macos")]
 use std::time::Duration;
+
+#[cfg(target_os = "macos")]
+impl HumanControlTransport for UnixBrokerConnection {
+    fn set_operation_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        UnixBrokerConnection::set_operation_timeout(self, timeout)
+            .map_err(|_| std::io::Error::other("transport timeout configuration"))
+    }
+}
 
 /// Authenticated first-party Broker client using the owner-only macOS socket.
 ///
@@ -111,10 +121,7 @@ impl MacOsHumanControlClient {
             let connection =
                 UnixBrokerConnection::connect_with_timeout(&paths, self.operation_timeout)
                     .map_err(|_| HumanControlClientError::Transport)?;
-            connection
-                .set_operation_timeout(Some(self.operation_timeout))
-                .map_err(|_| HumanControlClientError::Transport)?;
-            self.client = Some(HumanControlClient::new(connection));
+            self.client = Some(HumanControlClient::new(connection, self.operation_timeout));
         }
         Ok(())
     }

@@ -1,5 +1,6 @@
 use std::fmt::{Display, Formatter};
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
+use std::time::{Duration, Instant};
 
 use psw_broker::{
     decode_human_control_response, encode_human_control_request, read_human_control_frame,
@@ -76,9 +77,24 @@ impl Display for HumanControlClientError {
 
 impl std::error::Error for HumanControlClientError {}
 
+/// Stream boundary that can tighten each blocking I/O wait to a remaining deadline.
+pub trait HumanControlTransport: Read + Write {
+    /// Applies the maximum wait for the next blocking stream operation.
+    fn set_operation_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
+}
+
+#[cfg(unix)]
+impl HumanControlTransport for std::os::unix::net::UnixStream {
+    fn set_operation_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.set_read_timeout(timeout)?;
+        self.set_write_timeout(timeout)
+    }
+}
+
 /// Authenticated source-level Human Control client over one bounded local stream.
 pub struct HumanControlClient<Stream> {
     stream: Stream,
+    operation_timeout: Duration,
     selected_protocol: Option<HumanControlProtocolVersion>,
     broker_instance_id: Option<psw_broker::BrokerInstanceId>,
     authenticated_session: Option<(ControllerId, ControllerSessionId)>,
@@ -86,13 +102,14 @@ pub struct HumanControlClient<Stream> {
 
 impl<Stream> HumanControlClient<Stream>
 where
-    Stream: Read + Write,
+    Stream: HumanControlTransport,
 {
     /// Creates a lazy client without reading a key or contacting a Broker.
     #[must_use]
-    pub const fn new(stream: Stream) -> Self {
+    pub const fn new(stream: Stream, operation_timeout: Duration) -> Self {
         Self {
             stream,
+            operation_timeout,
             selected_protocol: None,
             broker_instance_id: None,
             authenticated_session: None,
@@ -154,23 +171,31 @@ where
         &mut self,
     ) -> Result<(HumanControlProtocolVersion, psw_broker::BrokerInstanceId), HumanControlClientError>
     {
-        let current = HumanControlProtocolVersion::current();
+        self.negotiate_with_current(HumanControlProtocolVersion::current())
+    }
+
+    fn negotiate_with_current(
+        &mut self,
+        current: HumanControlProtocolVersion,
+    ) -> Result<(HumanControlProtocolVersion, psw_broker::BrokerInstanceId), HumanControlClientError>
+    {
         let offer = HumanControlVersionOffer::new(
             CONTROLLER_ROLE,
-            [HumanControlProtocolVersionRange::new(
-                current.major(),
-                current.minor(),
-                current.minor(),
-            )
-            .map_err(|_| HumanControlClientError::Protocol)?],
+            [
+                HumanControlProtocolVersionRange::new(current.major(), 0, current.minor())
+                    .map_err(|_| HumanControlClientError::Protocol)?,
+            ],
             [HUMAN_CONTROL_SCHEMA_ID.to_owned()],
         )
         .map_err(|_| HumanControlClientError::Protocol)?;
-        let hello = self.request_with_version(current, HumanControlRequest::Hello(offer))?;
+        let baseline = HumanControlProtocolVersion::new(current.major(), 0)
+            .map_err(|_| HumanControlClientError::Protocol)?;
+        let hello =
+            self.request_with_versions(baseline, current, HumanControlRequest::Hello(offer))?;
         let (selected, schema, broker_instance_id) = hello
             .hello_selection()
             .map_err(|_| HumanControlClientError::Protocol)?;
-        if selected != current
+        if !selected.is_supported_by(current)
             || schema != HUMAN_CONTROL_SCHEMA_ID
             || !hello.has_complete_operation_catalog()
         {
@@ -237,17 +262,35 @@ where
         version: HumanControlProtocolVersion,
         request: HumanControlRequest,
     ) -> Result<HumanControlSuccessEnvelope, HumanControlClientError> {
+        self.request_with_versions(version, version, request)
+    }
+
+    fn request_with_versions(
+        &mut self,
+        request_version: HumanControlProtocolVersion,
+        maximum_response_version: HumanControlProtocolVersion,
+        request: HumanControlRequest,
+    ) -> Result<HumanControlSuccessEnvelope, HumanControlClientError> {
         let request_id = HumanControlRequestId::generate();
         let operation = request.operation();
-        let payload = encode_human_control_request(request_id, version, &request)
+        let payload = encode_human_control_request(request_id, request_version, &request)
             .map_err(|_| HumanControlClientError::Protocol)?;
-        write_human_control_frame(&mut self.stream, payload.as_bytes())
+        let deadline = Instant::now()
+            .checked_add(self.operation_timeout)
+            .ok_or(HumanControlClientError::Transport)?;
+        let mut transport = DeadlineTransport::new(&mut self.stream, deadline);
+        write_human_control_frame(&mut transport, payload.as_bytes())
             .map_err(|_| HumanControlClientError::Transport)?;
-        let response = read_human_control_frame(&mut self.stream)
+        let response = read_human_control_frame(&mut transport)
             .map_err(|_| HumanControlClientError::Transport)?
             .ok_or(HumanControlClientError::Transport)?;
-        match decode_human_control_response(response.as_bytes(), request_id, version, operation)
-            .map_err(|_| HumanControlClientError::Protocol)?
+        match decode_human_control_response(
+            response.as_bytes(),
+            request_id,
+            maximum_response_version,
+            operation,
+        )
+        .map_err(|_| HumanControlClientError::Protocol)?
         {
             HumanControlClientResponse::Success(response) => Ok(response),
             HumanControlClientResponse::Failure(failure) => Err(HumanControlClientError::Broker {
@@ -256,6 +299,47 @@ where
                 required_action: failure.required_action(),
             }),
         }
+    }
+}
+
+struct DeadlineTransport<'a, Stream> {
+    stream: &'a mut Stream,
+    deadline: Instant,
+}
+
+impl<'a, Stream> DeadlineTransport<'a, Stream> {
+    const fn new(stream: &'a mut Stream, deadline: Instant) -> Self {
+        Self { stream, deadline }
+    }
+}
+
+impl<Stream: HumanControlTransport> DeadlineTransport<'_, Stream> {
+    fn apply_remaining_timeout(&self) -> io::Result<()> {
+        let remaining = self
+            .deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "operation deadline"))?;
+        self.stream.set_operation_timeout(Some(remaining))
+    }
+}
+
+impl<Stream: HumanControlTransport> Read for DeadlineTransport<'_, Stream> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.apply_remaining_timeout()?;
+        self.stream.read(buffer)
+    }
+}
+
+impl<Stream: HumanControlTransport> Write for DeadlineTransport<'_, Stream> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.apply_remaining_timeout()?;
+        self.stream.write(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.apply_remaining_timeout()?;
+        self.stream.flush()
     }
 }
 
@@ -530,6 +614,14 @@ mod tests {
         }
     }
 
+    impl HumanControlTransport for ScriptedHumanControlBroker {
+        fn set_operation_timeout(&self, _timeout: Option<Duration>) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    const TEST_OPERATION_TIMEOUT: Duration = Duration::from_secs(2);
+
     fn signing_key(seed_byte: u8) -> TestSigner {
         TestSigner::new(seed_byte)
     }
@@ -538,7 +630,7 @@ mod tests {
     fn client_negotiates_authenticates_and_renews_the_exact_controller_session() {
         let key = signing_key(0x51);
         let stream = ScriptedHumanControlBroker::new(0x51, ScriptFault::None);
-        let mut client = HumanControlClient::new(stream);
+        let mut client = HumanControlClient::new(stream, TEST_OPERATION_TIMEOUT);
 
         client.authenticate(&key).expect("authenticate");
         assert_eq!(client.renew_lease().expect("renew"), 30_000);
@@ -551,7 +643,7 @@ mod tests {
     fn client_maps_only_fixed_broker_failures() {
         let key = signing_key(0x52);
         let stream = ScriptedHumanControlBroker::new(0x52, ScriptFault::FixedFailure);
-        let mut client = HumanControlClient::new(stream);
+        let mut client = HumanControlClient::new(stream, TEST_OPERATION_TIMEOUT);
 
         assert_eq!(
             client.authenticate(&key),
@@ -574,7 +666,7 @@ mod tests {
         ] {
             let key = signing_key(0x53);
             let stream = ScriptedHumanControlBroker::new(0x53, fault);
-            let mut client = HumanControlClient::new(stream);
+            let mut client = HumanControlClient::new(stream, TEST_OPERATION_TIMEOUT);
             assert_eq!(
                 client.authenticate(&key),
                 Err(HumanControlClientError::Protocol)
@@ -586,7 +678,7 @@ mod tests {
     fn client_rejects_drifted_renewal_lease() {
         let key = signing_key(0x56);
         let stream = ScriptedHumanControlBroker::new(0x56, ScriptFault::WrongRenewedLease);
-        let mut client = HumanControlClient::new(stream);
+        let mut client = HumanControlClient::new(stream, TEST_OPERATION_TIMEOUT);
 
         client.authenticate(&key).expect("authenticate");
         assert_eq!(client.renew_lease(), Err(HumanControlClientError::Protocol));
@@ -596,7 +688,7 @@ mod tests {
     fn client_maps_peer_eof_to_transport_without_internal_detail() {
         let key = signing_key(0x54);
         let stream = ScriptedHumanControlBroker::new(0x54, ScriptFault::Eof);
-        let mut client = HumanControlClient::new(stream);
+        let mut client = HumanControlClient::new(stream, TEST_OPERATION_TIMEOUT);
         let error = client.authenticate(&key).expect_err("transport failure");
         assert_eq!(error, HumanControlClientError::Transport);
         assert_eq!(error.to_string(), "Human Control transport failed");
@@ -606,17 +698,10 @@ mod tests {
     #[test]
     fn client_maps_a_bounded_read_wait_to_transport() {
         use std::os::unix::net::UnixStream;
-        use std::time::{Duration, Instant};
 
         let key = signing_key(0x55);
         let (stream, _silent_peer) = UnixStream::pair().expect("socket pair");
-        stream
-            .set_read_timeout(Some(Duration::from_millis(100)))
-            .expect("read timeout");
-        stream
-            .set_write_timeout(Some(Duration::from_millis(100)))
-            .expect("write timeout");
-        let mut client = HumanControlClient::new(stream);
+        let mut client = HumanControlClient::new(stream, Duration::from_millis(100));
         let started = Instant::now();
 
         assert_eq!(
@@ -624,5 +709,51 @@ mod tests {
             Err(HumanControlClientError::Transport)
         );
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[test]
+    fn client_offers_every_compatible_minor_and_accepts_an_older_broker() {
+        let future_client = HumanControlProtocolVersion::new(1, 1).expect("future client");
+        let stream = ScriptedHumanControlBroker::new(0x57, ScriptFault::None);
+        let mut client = HumanControlClient::new(stream, TEST_OPERATION_TIMEOUT);
+
+        let (selected, _) = client
+            .negotiate_with_current(future_client)
+            .expect("compatible downgrade");
+
+        assert_eq!(selected, HumanControlProtocolVersion::current());
+        assert_eq!(client.stream.stage, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn client_bounds_the_entire_frame_exchange_against_a_trickling_peer() {
+        use std::os::unix::net::UnixStream;
+        use std::thread;
+
+        let key = signing_key(0x58);
+        let (stream, mut trickling_peer) = UnixStream::pair().expect("socket pair");
+        let peer = thread::spawn(move || {
+            let declared_payload_length = 64_u32.to_be_bytes();
+            for byte in declared_payload_length
+                .into_iter()
+                .chain(std::iter::repeat_n(b'x', 64))
+            {
+                thread::sleep(Duration::from_millis(40));
+                if trickling_peer.write_all(&[byte]).is_err() {
+                    break;
+                }
+            }
+        });
+        let mut client = HumanControlClient::new(stream, Duration::from_millis(120));
+        let started = Instant::now();
+
+        assert_eq!(
+            client.authenticate(&key),
+            Err(HumanControlClientError::Transport)
+        );
+        assert!(started.elapsed() < Duration::from_millis(500));
+        drop(client);
+        peer.join().expect("trickling peer");
     }
 }

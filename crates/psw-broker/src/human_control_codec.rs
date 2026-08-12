@@ -109,7 +109,7 @@ impl HumanControlSuccessEnvelope {
         ))
     }
 
-    /// Verifies that `hello` returned the exact complete operation catalog.
+    /// Verifies that `hello` returned the exact catalog for its selected minor version.
     #[must_use]
     pub fn has_complete_operation_catalog(&self) -> bool {
         if self.operation != HumanControlOperation::Hello {
@@ -118,9 +118,11 @@ impl HumanControlSuccessEnvelope {
         let Some(operations) = self.result.get("operations").and_then(Value::as_array) else {
             return false;
         };
-        operations.len() == crate::HUMAN_CONTROL_OPERATION_CONTRACTS.len()
-            && crate::HUMAN_CONTROL_OPERATION_CONTRACTS
-                .iter()
+        let contracts = crate::HUMAN_CONTROL_OPERATION_CONTRACTS
+            .iter()
+            .filter(|contract| contract.introduced_minor() <= self.version.minor());
+        operations.len() == contracts.clone().count()
+            && contracts
                 .zip(operations)
                 .all(|(contract, value)| value.as_str() == Some(contract.operation().as_str()))
     }
@@ -279,7 +281,10 @@ pub fn encode_human_control_failure(
     Ok(payload)
 }
 
-/// Decodes one response against its exact request, version, and operation.
+/// Decodes one response against its request, operation, and allowed version.
+///
+/// A `hello` response may select any compatible minor at or below
+/// `expected_version`. Every post-negotiation response requires an exact match.
 pub fn decode_human_control_response(
     payload: &[u8],
     expected_request_id: HumanControlRequestId,
@@ -299,9 +304,15 @@ pub fn decode_human_control_response(
     let Value::Object(mut envelope) = value else {
         return Err(HumanControlWireError::Malformed);
     };
-    if envelope.len() != 4
+    let response_version = remove_version(&mut envelope)?;
+    let version_matches = if expected_operation == HumanControlOperation::Hello {
+        response_version.is_supported_by(expected_version)
+    } else {
+        response_version == expected_version
+    };
+    if envelope.len() != 3
         || remove_string(&mut envelope, "protocol")? != HUMAN_CONTROL_PROTOCOL_NAME
-        || remove_version(&mut envelope)? != expected_version
+        || !version_matches
         || HumanControlRequestId::from_str(&remove_string(&mut envelope, "requestId")?)
             .map_err(|_| HumanControlWireError::Malformed)?
             != expected_request_id
@@ -311,11 +322,11 @@ pub fn decode_human_control_response(
     match (envelope.remove("result"), envelope.remove("error")) {
         (Some(Value::Object(result)), None) if envelope.is_empty() => {
             validate_response_body(expected_operation.contract().response_schema(), &result)?;
-            validate_selected_response_bindings(expected_operation, expected_version, &result)?;
+            validate_selected_response_bindings(expected_operation, response_version, &result)?;
             Ok(HumanControlClientResponse::Success(
                 HumanControlSuccessEnvelope {
                     request_id: expected_request_id,
-                    version: expected_version,
+                    version: response_version,
                     operation: expected_operation,
                     result,
                 },
@@ -1991,6 +2002,41 @@ mod tests {
             )
             .expect("decode failure"),
             HumanControlClientResponse::Failure(value) if value == failure
+        ));
+    }
+
+    #[test]
+    fn hello_response_accepts_a_compatible_older_minor_without_relaxing_later_frames() {
+        let future_client = HumanControlProtocolVersion::new(1, 1).expect("future client");
+        let success = encode_human_control_response(
+            request_id(),
+            version(),
+            HumanControlOperation::Hello,
+            &hello_response(),
+        )
+        .expect("success");
+
+        let decoded = decode_human_control_response(
+            &success,
+            request_id(),
+            future_client,
+            HumanControlOperation::Hello,
+        )
+        .expect("compatible selected minor");
+        let HumanControlClientResponse::Success(decoded) = decoded else {
+            panic!("expected success");
+        };
+        assert_eq!(decoded.version(), version());
+        assert_eq!(decoded.hello_selection().expect("selection").0, version());
+
+        assert!(matches!(
+            decode_human_control_response(
+                &success,
+                request_id(),
+                future_client,
+                HumanControlOperation::ReadinessGet,
+            ),
+            Err(HumanControlWireError::Incompatible)
         ));
     }
 
