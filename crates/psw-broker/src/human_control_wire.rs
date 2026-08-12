@@ -7,7 +7,7 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
 use psw_core::{CredentialId, SecretBytes, SecretFieldId, VaultId};
 use serde_json::Value;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     bundled_usage_profile_template, ApprovalRequestId, AuditDecision, AuditEventId, AuditEventKind,
@@ -99,6 +99,43 @@ impl Drop for ZeroizingJsonObject {
         for value in self.0.values_mut() {
             zeroize_json_strings(value);
         }
+    }
+}
+
+/// Owned bounded frame payload that clears its bytes when released.
+pub struct HumanControlFrame {
+    payload: Zeroizing<Vec<u8>>,
+}
+
+impl HumanControlFrame {
+    /// Returns the immutable payload for parsing or framed transport output.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.payload
+    }
+}
+
+impl From<Vec<u8>> for HumanControlFrame {
+    fn from(payload: Vec<u8>) -> Self {
+        Self {
+            payload: Zeroizing::new(payload),
+        }
+    }
+}
+
+impl Debug for HumanControlFrame {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HumanControlFrame")
+            .field("length", &self.payload.len())
+            .field("payload", &"<redacted>")
+            .finish()
+    }
+}
+
+impl Zeroize for HumanControlFrame {
+    fn zeroize(&mut self) {
+        self.payload.zeroize();
     }
 }
 
@@ -277,15 +314,16 @@ impl HumanControlWireEnvelope {
 
 /// Validates one complete frozen JSON payload with duplicate-key rejection at every depth.
 pub fn decode_human_control_wire_envelope(
-    payload: &[u8],
+    payload: impl Into<HumanControlFrame>,
 ) -> Result<HumanControlWireEnvelope, HumanControlWireError> {
-    if payload.is_empty() {
+    let payload = payload.into();
+    if payload.as_bytes().is_empty() {
         return Err(HumanControlWireError::Empty);
     }
-    if payload.len() > MAX_HUMAN_CONTROL_FRAME_LENGTH {
+    if payload.as_bytes().len() > MAX_HUMAN_CONTROL_FRAME_LENGTH {
         return Err(HumanControlWireError::Oversized);
     }
-    let value = crate::protocol::parse_unique_json(payload)
+    let value = crate::protocol::parse_unique_json(payload.as_bytes())
         .map_err(|_| HumanControlWireError::Malformed)?;
     let Value::Object(envelope) = value else {
         let mut value = value;
@@ -314,7 +352,7 @@ pub fn decode_human_control_wire_envelope(
         return Err(HumanControlWireError::Malformed);
     }
     let mut body = ZeroizingJsonObject(body);
-    if payload.len() > operation.contract().maximum_request_length() {
+    if payload.as_bytes().len() > operation.contract().maximum_request_length() {
         return Err(HumanControlWireError::Oversized);
     }
     validate_body_keys(operation, &body.0)?;
@@ -1224,7 +1262,7 @@ fn validate_body_keys(
 /// Reads one bounded big-endian length-prefixed human-control frame.
 pub fn read_human_control_frame(
     reader: &mut impl Read,
-) -> Result<Option<Vec<u8>>, HumanControlWireError> {
+) -> Result<Option<HumanControlFrame>, HumanControlWireError> {
     let mut length = [0_u8; 4];
     let mut read = 0;
     while read < length.len() {
@@ -1243,9 +1281,9 @@ pub fn read_human_control_frame(
     if length > MAX_HUMAN_CONTROL_FRAME_LENGTH {
         return Err(HumanControlWireError::Oversized);
     }
-    let mut payload = vec![0_u8; length];
+    let mut payload = HumanControlFrame::from(vec![0_u8; length]);
     reader
-        .read_exact(&mut payload)
+        .read_exact(payload.payload.as_mut_slice())
         .map_err(|error| match error.kind() {
             io::ErrorKind::UnexpectedEof => HumanControlWireError::Truncated,
             _ => HumanControlWireError::Read,
@@ -1296,7 +1334,7 @@ mod tests {
 
     #[test]
     fn frozen_envelope_accepts_known_operation_and_rejects_capabilities_or_unknown_fields() {
-        let readiness = decode_human_control_wire_envelope(&request("readiness.get", "{}"))
+        let readiness = decode_human_control_wire_envelope(request("readiness.get", "{}"))
             .expect("readiness envelope");
         assert_eq!(readiness.operation(), HumanControlOperation::ReadinessGet);
         assert_eq!(readiness.version(), HumanControlProtocolVersion::current());
@@ -1314,12 +1352,12 @@ mod tests {
             "process.run",
         ] {
             assert_eq!(
-                decode_human_control_wire_envelope(&request(operation, "{}")),
+                decode_human_control_wire_envelope(request(operation, "{}")),
                 Err(HumanControlWireError::Malformed)
             );
         }
         assert_eq!(
-            decode_human_control_wire_envelope(&request(
+            decode_human_control_wire_envelope(request(
                 "machine-access.pause.set",
                 "{\"paused\":true,\"unexpected\":false}"
             )),
@@ -1331,18 +1369,18 @@ mod tests {
     fn duplicate_keys_future_version_and_incomplete_body_fail_closed() {
         let duplicate = request("audit.list", "{\"filter\":{},\"filter\":{},\"limit\":10}");
         assert_eq!(
-            decode_human_control_wire_envelope(&duplicate),
+            decode_human_control_wire_envelope(duplicate),
             Err(HumanControlWireError::Malformed)
         );
         let future = String::from_utf8(request("readiness.get", "{}"))
             .expect("utf8")
             .replace("\"major\":1", "\"major\":2");
         assert_eq!(
-            decode_human_control_wire_envelope(future.as_bytes()),
+            decode_human_control_wire_envelope(future.into_bytes()),
             Err(HumanControlWireError::Incompatible)
         );
         assert_eq!(
-            decode_human_control_wire_envelope(&request(
+            decode_human_control_wire_envelope(request(
                 "credential.allow-once",
                 "{\"pendingRequestId\":\"approval_x\",\"credentialId\":\"credential_x\"}"
             )),
@@ -1351,7 +1389,7 @@ mod tests {
 
         let marker = "seeded-private-input-marker";
         let malformed = request("readiness.get", &format!("{{\"unexpected\":\"{marker}\"}}"));
-        let error = decode_human_control_wire_envelope(&malformed)
+        let error = decode_human_control_wire_envelope(malformed)
             .expect_err("private input must fail closed");
         assert!(!error.to_string().contains(marker));
         assert!(!format!("{error:?}").contains(marker));
@@ -1367,7 +1405,7 @@ mod tests {
                 BASE64_STANDARD.encode([0x22; LOCAL_UNLOCK_MATERIAL_LENGTH])
             ),
         );
-        assert!(decode_human_control_wire_envelope(&valid_unlock).is_ok());
+        assert!(decode_human_control_wire_envelope(valid_unlock).is_ok());
 
         for malformed in [
             request("machine-access.pause.set", "{\"paused\":\"true\"}"),
@@ -1408,7 +1446,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                decode_human_control_wire_envelope(&malformed),
+                decode_human_control_wire_envelope(malformed),
                 Err(HumanControlWireError::Malformed)
             );
         }
@@ -1417,12 +1455,12 @@ mod tests {
             "repair.prepare",
             "{\"expectedComponent\":\"broker\",\"expectedProtocol\":{\"major\":2,\"minor\":0}}",
         );
-        assert!(decode_human_control_wire_envelope(&stale_repair).is_ok());
+        assert!(decode_human_control_wire_envelope(stale_repair).is_ok());
         let mismatched_component = request(
             "repair.prepare",
             "{\"expectedComponent\":\"macos-app\",\"expectedProtocol\":{\"major\":1,\"minor\":0}}",
         );
-        assert!(decode_human_control_wire_envelope(&mismatched_component).is_ok());
+        assert!(decode_human_control_wire_envelope(mismatched_component).is_ok());
         for malformed in [
             request(
                 "repair.prepare",
@@ -1442,7 +1480,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                decode_human_control_wire_envelope(&malformed),
+                decode_human_control_wire_envelope(malformed),
                 Err(HumanControlWireError::Malformed)
             );
         }
@@ -1462,7 +1500,7 @@ mod tests {
                 "keptnear.human-control.schema.v2",
             ),
         ] {
-            let envelope = decode_human_control_wire_envelope(&request("hello", body))
+            let envelope = decode_human_control_wire_envelope(request("hello", body))
                 .expect("structurally valid hello");
             let typed = envelope
                 .to_typed_request(StateTimestamp::from_unix_millis(10).expect("timestamp"))
@@ -1479,7 +1517,7 @@ mod tests {
             "{\"role\":\"human-controller\",\"protocolVersions\":[{\"major\":1,\"minimumMinor\":0,\"maximumMinor\":0}],\"schemaIds\":[\"keptnear.human-control.schema.v2\",\"keptnear.human-control.schema.v2\"]}",
         ] {
             assert_eq!(
-                decode_human_control_wire_envelope(&request("hello", malformed)),
+                decode_human_control_wire_envelope(request("hello", malformed)),
                 Err(HumanControlWireError::Malformed)
             );
         }
@@ -1494,7 +1532,7 @@ mod tests {
                 "{{\"filter\":{{}},\"cursor\":{{\"occurredAtMs\":42,\"auditEventId\":\"{event_id}\"}},\"limit\":17}}"
             ),
         );
-        let envelope = decode_human_control_wire_envelope(&payload).expect("audit envelope");
+        let envelope = decode_human_control_wire_envelope(payload).expect("audit envelope");
         let typed = envelope
             .to_typed_request(StateTimestamp::from_unix_millis(100).expect("timestamp"))
             .expect("typed audit request");
@@ -1699,7 +1737,7 @@ mod tests {
         assert_eq!(operations.len(), 29);
         let observed_at = StateTimestamp::from_unix_millis(100).expect("timestamp");
         for (operation, body) in operations {
-            let envelope = decode_human_control_wire_envelope(&request_value(operation, body))
+            let envelope = decode_human_control_wire_envelope(request_value(operation, body))
                 .unwrap_or_else(|error| panic!("{operation} envelope failed: {error}"));
             let typed = envelope
                 .to_typed_request(observed_at)
@@ -1720,7 +1758,7 @@ mod tests {
             ),
         );
         assert_eq!(
-            decode_human_control_wire_envelope(&payload),
+            decode_human_control_wire_envelope(payload),
             Err(HumanControlWireError::Oversized)
         );
     }
@@ -1736,7 +1774,7 @@ mod tests {
                 BASE64_STANDARD.encode(marker)
             ),
         );
-        let envelope = decode_human_control_wire_envelope(&payload).expect("unlock envelope");
+        let envelope = decode_human_control_wire_envelope(payload).expect("unlock envelope");
         let debug = format!("{envelope:?}");
         assert!(!debug.contains(marker));
         assert!(!debug.contains(&BASE64_STANDARD.encode(marker)));
@@ -1748,24 +1786,27 @@ mod tests {
         let payload = request("pending.list", "{}");
         let mut frame = Vec::new();
         write_human_control_frame(&mut frame, &payload).expect("write frame");
-        assert_eq!(
-            read_human_control_frame(&mut frame.as_slice()).expect("read frame"),
-            Some(payload)
-        );
-        assert_eq!(
+        let mut read = read_human_control_frame(&mut frame.as_slice())
+            .expect("read frame")
+            .expect("payload");
+        assert_eq!(read.as_bytes(), payload);
+        assert!(!format!("{read:?}").contains("pending.list"));
+        read.zeroize();
+        assert!(read.as_bytes().iter().all(|byte| *byte == 0));
+        assert!(matches!(
             read_human_control_frame(&mut [0, 0, 0, 0].as_slice()),
             Err(HumanControlWireError::Empty)
-        );
-        assert_eq!(
+        ));
+        assert!(matches!(
             read_human_control_frame(&mut [0, 0, 0, 3, b'{'].as_slice()),
             Err(HumanControlWireError::Truncated)
-        );
+        ));
         let oversized = u32::try_from(MAX_HUMAN_CONTROL_FRAME_LENGTH + 1)
             .expect("length")
             .to_be_bytes();
-        assert_eq!(
+        assert!(matches!(
             read_human_control_frame(&mut oversized.as_slice()),
             Err(HumanControlWireError::Oversized)
-        );
+        ));
     }
 }

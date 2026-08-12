@@ -215,8 +215,10 @@ The master-password value decodes to 1 through 65,536 bytes; local material
 decodes to exactly 32 bytes. The union accepts no file path, Keychain query,
 environment variable, command argument, or credential reference. Encoded and
 decoded bounds are checked before dispatch, decoded temporary buffers are
-zeroized, validated envelope bodies have redacted debug output, and retained
-JSON strings are zeroized when the envelope is dropped. `ControllerProof.proof`
+zeroized, the frame reader returns an owning payload that is zeroized on every
+success, parse-failure, or early-drop path, validated envelope bodies have
+redacted debug output, and retained JSON strings are zeroized when the envelope
+is dropped. `ControllerProof.proof`
 is canonical padded Base64 of exactly one 64-byte Ed25519 signature.
 
 Nested version 1 values are also closed:

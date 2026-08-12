@@ -186,7 +186,7 @@ pub use human_control_types::{
 };
 pub use human_control_wire::{
     decode_human_control_wire_envelope, read_human_control_frame, write_human_control_frame,
-    HumanControlWireEnvelope, HumanControlWireError,
+    HumanControlFrame, HumanControlWireEnvelope, HumanControlWireError,
 };
 pub use local_data::{
     BrokerLocalDataClearConfirmation, BrokerLocalDataClearSummary, BrokerLocalDataError,
