@@ -112,9 +112,12 @@ major. No shared major produces `protocol-incompatible`. Operations whose
 `introducedMinor` exceeds the selected minor are unavailable. Version 1.0
 negotiates the complete catalog below rather than a Consumer capability set.
 The typed offer retains the bounded role and schema list as well as the version
-ranges. The Broker requires the exact `human-controller` role and requires the
-current schema identity to be present before moving the connection into the
-negotiated phase; a shared version alone is insufficient.
+ranges. Wire validation checks only their closed structure, bounds, canonical
+identity shape, and uniqueness. The Broker dispatcher requires the exact
+`human-controller` role and requires the current schema identity to be present
+before moving the connection into the negotiated phase; a shared version alone
+is insufficient. A structurally valid unsupported role or schema therefore
+receives `protocol-incompatible` with `update-component`, not `malformed-frame`.
 
 A successful result contains only the selected version, schema identity,
 ephemeral Broker instance identity, global limits, and ordered operation names.
@@ -221,7 +224,8 @@ Nested version 1 values are also closed:
   `occurredAtOrAfterMs`, and `occurredBeforeMs`. `fieldScope` is exactly
   `vaultId`, `credentialId`, and `secretFieldId`; duplicate Vault scopes and
   time windows must be consistent.
-- `cursor` is exactly `occurredAtMs` plus canonical `auditEventId`.
+- `cursor` is exactly `occurredAtMs` plus canonical `auditEventId`; those two
+  validated values reconstruct the typed newest-first continuation cursor.
 - `expectedComponent` is one closed packaged-component enum value, and
   `expectedProtocol` is a closed, structurally valid `major` and `minor`
   integer pair. The dispatcher compares both with the running Broker so a

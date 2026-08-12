@@ -155,11 +155,20 @@ pub struct BrokerAuditCursor {
 }
 
 impl BrokerAuditCursor {
-    fn after(event: &AuditEvent) -> Self {
+    /// Reconstructs one continuation cursor from a validated closed wire body.
+    #[must_use]
+    pub const fn from_validated_wire_bindings(
+        occurred_at: StateTimestamp,
+        audit_event_id: AuditEventId,
+    ) -> Self {
         Self {
-            occurred_at: event.occurred_at(),
-            audit_event_id: event.audit_event_id(),
+            occurred_at,
+            audit_event_id,
         }
+    }
+
+    fn after(event: &AuditEvent) -> Self {
+        Self::from_validated_wire_bindings(event.occurred_at(), event.audit_event_id())
     }
 
     pub(crate) const fn occurred_at(self) -> StateTimestamp {
@@ -765,6 +774,13 @@ mod tests {
             }
         }
         assert_eq!(actual, expected);
+
+        let cursor = BrokerAuditCursor::from_validated_wire_bindings(
+            expected[0].occurred_at(),
+            expected[0].audit_event_id(),
+        );
+        assert_eq!(cursor.occurred_at(), expected[0].occurred_at());
+        assert_eq!(cursor.audit_event_id(), expected[0].audit_event_id());
     }
 
     #[test]

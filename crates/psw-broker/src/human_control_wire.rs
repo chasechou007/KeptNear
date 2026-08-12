@@ -5,21 +5,25 @@ use std::str::FromStr;
 
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
-use psw_core::{CredentialId, SecretFieldId, VaultId};
+use psw_core::{CredentialId, SecretBytes, SecretFieldId, VaultId};
 use serde_json::Value;
 use zeroize::Zeroize;
 
 use crate::{
     bundled_usage_profile_template, ApprovalRequestId, AuditDecision, AuditEventId, AuditEventKind,
-    BrokerInstanceId, BundledUsageProfileTemplateId, CapabilityName, ConfirmationPolicy,
-    ConsumerId, ControllerDeadline, ControllerId, ControllerNonce, ControllerSessionId,
+    BrokerAuditCursor, BrokerAuditFilter, BrokerCredentialCandidateSelection, BrokerInstanceId,
+    BrokerPairingUserApproval, BrokerPendingRequestId, BundledUsageProfileTemplateId, Capability,
+    CapabilityName, ConfirmationPolicy, ConsumerId, ControllerAuthenticationProof,
+    ControllerChallengeRequest, ControllerDeadline, ControllerId, ControllerNonce,
+    ControllerSessionId, ControllerSignature, CredentialFieldScope,
     HumanControlAuditConfirmationId, HumanControlOperation, HumanControlProtocolVersion,
-    HumanControlRequestId, PairingRequestId, UsageProfileId, UseGrantId,
+    HumanControlProtocolVersionRange, HumanControlRequest, HumanControlRequestId,
+    HumanControlVaultUnlockCredential, HumanControlVersionOffer, PackagedComponent,
+    PairingRequestId, RuleLifetime, StateTimestamp, UsageProfileId, UseGrantId,
     HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE, HUMAN_CONTROL_DENY_DECISION, HUMAN_CONTROL_PROTOCOL_NAME,
-    HUMAN_CONTROL_SCHEMA_ID, HUMAN_CONTROL_SHUTDOWN_REASON, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
-    MAX_HUMAN_CONTROL_FRAME_LENGTH, MAX_HUMAN_CONTROL_INPUT_TEXT_BYTES,
-    MAX_HUMAN_CONTROL_SCHEMA_IDS, MAX_HUMAN_CONTROL_UNLOCK_CREDENTIAL_BYTES,
-    MAX_HUMAN_CONTROL_VERSION_RANGES,
+    HUMAN_CONTROL_SHUTDOWN_REASON, MAX_HUMAN_CONTROL_AUDIT_EVENTS, MAX_HUMAN_CONTROL_FRAME_LENGTH,
+    MAX_HUMAN_CONTROL_INPUT_TEXT_BYTES, MAX_HUMAN_CONTROL_SCHEMA_IDS,
+    MAX_HUMAN_CONTROL_UNLOCK_CREDENTIAL_BYTES, MAX_HUMAN_CONTROL_VERSION_RANGES,
 };
 
 const LOCAL_UNLOCK_MATERIAL_LENGTH: usize = 32;
@@ -117,10 +121,157 @@ impl HumanControlWireEnvelope {
         self.operation
     }
 
-    /// Returns the validated closed body for typed value decoding.
-    #[must_use]
-    pub const fn body(&self) -> &serde_json::Map<String, Value> {
-        &self.body
+    /// Reconstructs the one typed dispatcher request selected by this validated envelope.
+    ///
+    /// `observed_at` is Broker-owned local context. It records when a pairing approval was
+    /// observed and is never accepted from the untrusted frame.
+    pub fn to_typed_request(
+        &self,
+        observed_at: StateTimestamp,
+    ) -> Result<HumanControlRequest, HumanControlWireError> {
+        let body = &self.body;
+        let request = match self.operation {
+            HumanControlOperation::Hello => HumanControlRequest::Hello(decode_version_offer(body)?),
+            HumanControlOperation::ControllerChallenge => {
+                HumanControlRequest::ControllerChallenge(ControllerChallengeRequest::new(
+                    parse_field(body, "controllerId")?,
+                    parse_field(body, "clientNonce")?,
+                ))
+            }
+            HumanControlOperation::ControllerAuthenticate => {
+                let signature = decode_controller_signature(body, "proof")?;
+                HumanControlRequest::ControllerAuthenticate(
+                    ControllerAuthenticationProof::from_validated_wire_bindings(
+                        parse_field(body, "brokerInstanceId")?,
+                        parse_field(body, "controllerId")?,
+                        parse_field(body, "controllerSessionId")?,
+                        parse_field(body, "clientNonce")?,
+                        parse_field(body, "brokerNonce")?,
+                        parse_field(body, "deadline")?,
+                        signature,
+                    ),
+                )
+            }
+            HumanControlOperation::ControllerLeaseRenew => {
+                HumanControlRequest::ControllerLeaseRenew {
+                    controller_session_id: parse_field(body, "controllerSessionId")?,
+                    broker_instance_id: parse_field(body, "brokerInstanceId")?,
+                }
+            }
+            HumanControlOperation::ReadinessGet => HumanControlRequest::ReadinessGet,
+            HumanControlOperation::MachineAccessPauseSet => {
+                HumanControlRequest::MachineAccessPauseSet {
+                    paused: required_bool(body, "paused")?,
+                }
+            }
+            HumanControlOperation::VaultUnlock => HumanControlRequest::VaultUnlock {
+                vault_id: parse_field(body, "vaultId")?,
+                credential: decode_unlock_credential(value_field(body, "credential")?)?,
+            },
+            HumanControlOperation::VaultLock => HumanControlRequest::VaultLock {
+                vault_id: parse_field(body, "vaultId")?,
+            },
+            HumanControlOperation::PendingList => HumanControlRequest::PendingList,
+            HumanControlOperation::PendingDeny => HumanControlRequest::PendingDeny {
+                request_id: decode_pending_request_id(value_string(body, "pendingRequestId")?)?,
+                decision: value_string(body, "decision")?.to_owned(),
+            },
+            HumanControlOperation::PairingApprove => HumanControlRequest::PairingApprove {
+                request_id: parse_field(body, "pendingRequestId")?,
+                approval: BrokerPairingUserApproval::after_user_approval(
+                    value_string(body, "label")?.to_owned(),
+                    observed_at,
+                ),
+            },
+            HumanControlOperation::UnlockApprove => HumanControlRequest::UnlockApprove {
+                request_id: parse_field(body, "pendingRequestId")?,
+                vault_id: parse_field(body, "vaultId")?,
+            },
+            HumanControlOperation::CredentialReview => HumanControlRequest::CredentialReview {
+                request_id: parse_field(body, "pendingRequestId")?,
+            },
+            HumanControlOperation::CredentialAllowOnce => {
+                HumanControlRequest::CredentialAllowOnce {
+                    request_id: parse_field(body, "pendingRequestId")?,
+                    selection: decode_credential_selection(body)?,
+                }
+            }
+            HumanControlOperation::CredentialAuthorize => {
+                HumanControlRequest::CredentialAuthorize {
+                    request_id: parse_field(body, "pendingRequestId")?,
+                    selection: decode_credential_selection(body)?,
+                    confirmation_policy: parse_field(body, "confirmationPolicy")?,
+                    rule_lifetime: decode_rule_lifetime(value_field(body, "ruleLifetime")?)?,
+                    capability: decode_capability(value_field(body, "capability")?)?,
+                }
+            }
+            HumanControlOperation::AuthorizationSnapshot => {
+                HumanControlRequest::AuthorizationSnapshot {
+                    vault_id: parse_field(body, "vaultId")?,
+                }
+            }
+            HumanControlOperation::ConsumerDetail => HumanControlRequest::ConsumerDetail {
+                consumer_id: parse_field(body, "consumerId")?,
+            },
+            HumanControlOperation::UsageProfileCatalog => {
+                HumanControlRequest::UsageProfileCatalog {
+                    consumer_id: parse_field(body, "consumerId")?,
+                    executable_name_hint: optional_owned_string(body, "executableName")?,
+                }
+            }
+            HumanControlOperation::UsageProfileCreate => {
+                let template_id = parse_field(body, "templateId")?;
+                let technical_field = nullable_string(body, "technicalField")?;
+                let definition = bundled_usage_profile_template(template_id)
+                    .ok_or(HumanControlWireError::Malformed)?
+                    .instantiate(technical_field)
+                    .map_err(|_| HumanControlWireError::Malformed)?;
+                HumanControlRequest::UsageProfileCreate {
+                    consumer_id: parse_field(body, "consumerId")?,
+                    label: value_string(body, "label")?.to_owned(),
+                    definition,
+                }
+            }
+            HumanControlOperation::UsageProfileRemove => HumanControlRequest::UsageProfileRemove {
+                consumer_id: parse_field(body, "consumerId")?,
+                usage_profile_id: parse_field(body, "usageProfileId")?,
+            },
+            HumanControlOperation::FieldAccessRevoke => HumanControlRequest::FieldAccessRevoke {
+                consumer_id: parse_field(body, "consumerId")?,
+                field_scope: decode_field_scope(body)?,
+            },
+            HumanControlOperation::GrantRevoke => HumanControlRequest::GrantRevoke {
+                consumer_id: parse_field(body, "consumerId")?,
+                use_grant_id: parse_field(body, "useGrantId")?,
+            },
+            HumanControlOperation::ConsumerRevoke => HumanControlRequest::ConsumerRevoke {
+                consumer_id: parse_field(body, "consumerId")?,
+                scope: value_string(body, "scope")?.to_owned(),
+            },
+            HumanControlOperation::AllAccessRevoke => HumanControlRequest::AllAccessRevoke,
+            HumanControlOperation::AuditList => HumanControlRequest::AuditList {
+                filter: decode_audit_filter(value_field(body, "filter")?)?,
+                cursor: body.get("cursor").map(decode_audit_cursor).transpose()?,
+                limit: decode_audit_limit(body, "limit")?,
+            },
+            HumanControlOperation::AuditClear => HumanControlRequest::AuditClear {
+                filter: decode_audit_filter(value_field(body, "selection")?)?,
+                confirmation_id: parse_field(body, "confirmationId")?,
+            },
+            HumanControlOperation::AuditExport => HumanControlRequest::AuditExport {
+                filter: decode_audit_filter(value_field(body, "filter")?)?,
+                limit: decode_audit_limit(body, "limit")?,
+            },
+            HumanControlOperation::RepairPrepare => HumanControlRequest::RepairPrepare {
+                expected_component: decode_packaged_component(body, "expectedComponent")?,
+                expected_protocol: decode_protocol_version(value_field(body, "expectedProtocol")?)?,
+            },
+            HumanControlOperation::Shutdown => HumanControlRequest::Shutdown {
+                reason: value_string(body, "reason")?.to_owned(),
+            },
+        };
+        debug_assert_eq!(request.operation(), self.operation);
+        Ok(request)
     }
 }
 
@@ -190,6 +341,237 @@ fn zeroize_json_strings(value: &mut Value) {
             }
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn decode_version_offer(
+    body: &serde_json::Map<String, Value>,
+) -> Result<HumanControlVersionOffer, HumanControlWireError> {
+    let ranges = value_field(body, "protocolVersions")?
+        .as_array()
+        .ok_or(HumanControlWireError::Malformed)?
+        .iter()
+        .map(|value| {
+            let range = value.as_object().ok_or(HumanControlWireError::Malformed)?;
+            HumanControlProtocolVersionRange::new(
+                u16_field(range, "major")?,
+                u16_field(range, "minimumMinor")?,
+                u16_field(range, "maximumMinor")?,
+            )
+            .map_err(|_| HumanControlWireError::Malformed)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let schema_ids = value_field(body, "schemaIds")?
+        .as_array()
+        .ok_or(HumanControlWireError::Malformed)?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(ToOwned::to_owned)
+                .ok_or(HumanControlWireError::Malformed)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    HumanControlVersionOffer::new(value_string(body, "role")?, ranges, schema_ids)
+        .map_err(|_| HumanControlWireError::Malformed)
+}
+
+fn decode_controller_signature(
+    body: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<ControllerSignature, HumanControlWireError> {
+    let mut decoded = BASE64_STANDARD
+        .decode(value_string(body, key)?)
+        .map_err(|_| HumanControlWireError::Malformed)?;
+    let mut bytes = [0_u8; crate::CONTROLLER_SIGNATURE_LENGTH];
+    if decoded.len() != bytes.len() {
+        decoded.zeroize();
+        return Err(HumanControlWireError::Malformed);
+    }
+    bytes.copy_from_slice(&decoded);
+    decoded.zeroize();
+    Ok(ControllerSignature::from_bytes(bytes))
+}
+
+fn decode_unlock_credential(
+    value: &Value,
+) -> Result<HumanControlVaultUnlockCredential, HumanControlWireError> {
+    let credential = value.as_object().ok_or(HumanControlWireError::Malformed)?;
+    let decoded = BASE64_STANDARD
+        .decode(value_string(credential, "valueBase64")?)
+        .map_err(|_| HumanControlWireError::Malformed)?;
+    let secret = SecretBytes::new(decoded);
+    match value_string(credential, "kind")? {
+        "master-password" => Ok(HumanControlVaultUnlockCredential::MasterPassword(secret)),
+        "local-material" => Ok(HumanControlVaultUnlockCredential::LocalMaterial(secret)),
+        _ => Err(HumanControlWireError::Malformed),
+    }
+}
+
+fn decode_pending_request_id(value: &str) -> Result<BrokerPendingRequestId, HumanControlWireError> {
+    if let Ok(request_id) = value.parse::<PairingRequestId>() {
+        Ok(BrokerPendingRequestId::Pairing(request_id))
+    } else {
+        value
+            .parse::<ApprovalRequestId>()
+            .map(BrokerPendingRequestId::Approval)
+            .map_err(|_| HumanControlWireError::Malformed)
+    }
+}
+
+fn decode_credential_selection(
+    body: &serde_json::Map<String, Value>,
+) -> Result<BrokerCredentialCandidateSelection, HumanControlWireError> {
+    Ok(BrokerCredentialCandidateSelection::new(
+        parse_field(body, "credentialId")?,
+        parse_field(body, "secretFieldId")?,
+    ))
+}
+
+fn decode_capability(value: &Value) -> Result<Capability, HumanControlWireError> {
+    let capability = value.as_object().ok_or(HumanControlWireError::Malformed)?;
+    Capability::new(
+        parse_field(capability, "name")?,
+        u16_field(capability, "version")?,
+    )
+    .map_err(|_| HumanControlWireError::Malformed)
+}
+
+fn decode_rule_lifetime(value: &Value) -> Result<RuleLifetime, HumanControlWireError> {
+    let lifetime = value.as_object().ok_or(HumanControlWireError::Malformed)?;
+    match value_string(lifetime, "kind")? {
+        "persistent" => Ok(RuleLifetime::Persistent),
+        "until" => Ok(RuleLifetime::Until(decode_timestamp(timestamp_field(
+            lifetime,
+            "expiresAtMs",
+        )?)?)),
+        _ => Err(HumanControlWireError::Malformed),
+    }
+}
+
+fn decode_field_scope(
+    body: &serde_json::Map<String, Value>,
+) -> Result<CredentialFieldScope, HumanControlWireError> {
+    Ok(CredentialFieldScope::new(
+        parse_field(body, "vaultId")?,
+        parse_field(body, "credentialId")?,
+        parse_field(body, "secretFieldId")?,
+    ))
+}
+
+fn decode_audit_filter(value: &Value) -> Result<BrokerAuditFilter, HumanControlWireError> {
+    let body = value.as_object().ok_or(HumanControlWireError::Malformed)?;
+    let mut filter = BrokerAuditFilter::all();
+    if let Some(event_kind) = optional_parse_field::<AuditEventKind>(body, "eventKind")? {
+        filter = filter.with_event_kind(event_kind);
+    }
+    if let Some(decision) = optional_parse_field::<AuditDecision>(body, "decision")? {
+        filter = filter.with_decision(decision);
+    }
+    if let Some(consumer_id) = optional_parse_field::<ConsumerId>(body, "consumerId")? {
+        filter = filter.with_consumer(consumer_id);
+    }
+    if let Some(vault_id) = optional_parse_field::<VaultId>(body, "vaultId")? {
+        filter = filter.with_vault(vault_id);
+    }
+    if let Some(field_scope) = body.get("fieldScope") {
+        filter = filter.with_field_scope(decode_field_scope(
+            field_scope
+                .as_object()
+                .ok_or(HumanControlWireError::Malformed)?,
+        )?);
+    }
+    if let Some(capability) = body.get("capability") {
+        filter = filter.with_capability(decode_capability(capability)?);
+    }
+    if let Some(timestamp) = optional_timestamp_field(body, "occurredAtOrAfterMs")? {
+        filter = filter.occurring_at_or_after(decode_timestamp(timestamp)?);
+    }
+    if let Some(timestamp) = optional_timestamp_field(body, "occurredBeforeMs")? {
+        filter = filter.occurring_before(decode_timestamp(timestamp)?);
+    }
+    Ok(filter)
+}
+
+fn decode_audit_cursor(value: &Value) -> Result<BrokerAuditCursor, HumanControlWireError> {
+    let cursor = value.as_object().ok_or(HumanControlWireError::Malformed)?;
+    Ok(BrokerAuditCursor::from_validated_wire_bindings(
+        decode_timestamp(timestamp_field(cursor, "occurredAtMs")?)?,
+        parse_field(cursor, "auditEventId")?,
+    ))
+}
+
+fn decode_audit_limit(
+    body: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<usize, HumanControlWireError> {
+    value_field(body, key)?
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .filter(|value| (1..=MAX_HUMAN_CONTROL_AUDIT_EVENTS).contains(value))
+        .ok_or(HumanControlWireError::Malformed)
+}
+
+fn decode_packaged_component(
+    body: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<PackagedComponent, HumanControlWireError> {
+    match value_string(body, key)? {
+        "macos-app" => Ok(PackagedComponent::MacOsApp),
+        "broker" => Ok(PackagedComponent::Broker),
+        "mcp-adapter" => Ok(PackagedComponent::McpAdapter),
+        "cli" => Ok(PackagedComponent::Cli),
+        _ => Err(HumanControlWireError::Malformed),
+    }
+}
+
+fn decode_protocol_version(
+    value: &Value,
+) -> Result<HumanControlProtocolVersion, HumanControlWireError> {
+    let version = value.as_object().ok_or(HumanControlWireError::Malformed)?;
+    HumanControlProtocolVersion::new(u16_field(version, "major")?, u16_field(version, "minor")?)
+        .map_err(|_| HumanControlWireError::Malformed)
+}
+
+fn decode_timestamp(value: i64) -> Result<StateTimestamp, HumanControlWireError> {
+    StateTimestamp::from_unix_millis(value).map_err(|_| HumanControlWireError::Malformed)
+}
+
+fn required_bool(
+    body: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<bool, HumanControlWireError> {
+    value_field(body, key)?
+        .as_bool()
+        .ok_or(HumanControlWireError::Malformed)
+}
+
+fn optional_owned_string(
+    body: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<String>, HumanControlWireError> {
+    body.get(key)
+        .map(|value| {
+            value
+                .as_str()
+                .map(ToOwned::to_owned)
+                .ok_or(HumanControlWireError::Malformed)
+        })
+        .transpose()
+}
+
+fn nullable_string<'a>(
+    body: &'a serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<Option<&'a str>, HumanControlWireError> {
+    let value = value_field(body, key)?;
+    if value.is_null() {
+        Ok(None)
+    } else {
+        value
+            .as_str()
+            .map(Some)
+            .ok_or(HumanControlWireError::Malformed)
     }
 }
 
@@ -338,7 +720,7 @@ fn validate_body_values(
 }
 
 fn validate_hello(body: &serde_json::Map<String, Value>) -> Result<(), HumanControlWireError> {
-    if value_string(body, "role")? != crate::CONTROLLER_ROLE {
+    if !valid_negotiation_identity(value_string(body, "role")?) {
         return Err(HumanControlWireError::Malformed);
     }
     let ranges = value_field(body, "protocolVersions")?
@@ -370,9 +752,6 @@ fn validate_hello(body: &serde_json::Map<String, Value>) -> Result<(), HumanCont
         if !valid_negotiation_identity(schema) || !unique.insert(schema) {
             return Err(HumanControlWireError::Malformed);
         }
-    }
-    if !unique.contains(HUMAN_CONTROL_SCHEMA_ID) {
-        return Err(HumanControlWireError::Malformed);
     }
     Ok(())
 }
@@ -904,13 +1283,29 @@ mod tests {
         .into_bytes()
     }
 
+    fn request_value(operation: &str, body: Value) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "protocol": HUMAN_CONTROL_PROTOCOL_NAME,
+            "version": {"major": 1, "minor": 0},
+            "requestId": "control_request_11111111111111111111111111111111",
+            "operation": operation,
+            "body": body,
+        }))
+        .expect("request JSON")
+    }
+
     #[test]
     fn frozen_envelope_accepts_known_operation_and_rejects_capabilities_or_unknown_fields() {
         let readiness = decode_human_control_wire_envelope(&request("readiness.get", "{}"))
             .expect("readiness envelope");
         assert_eq!(readiness.operation(), HumanControlOperation::ReadinessGet);
         assert_eq!(readiness.version(), HumanControlProtocolVersion::current());
-        assert!(readiness.body().is_empty());
+        assert!(matches!(
+            readiness
+                .to_typed_request(StateTimestamp::from_unix_millis(1).expect("timestamp"))
+                .expect("typed readiness"),
+            HumanControlRequest::ReadinessGet
+        ));
 
         for operation in [
             "credential.search",
@@ -1050,6 +1445,266 @@ mod tests {
                 decode_human_control_wire_envelope(&malformed),
                 Err(HumanControlWireError::Malformed)
             );
+        }
+    }
+
+    #[test]
+    fn structurally_valid_hello_identity_mismatches_reach_negotiation() {
+        for (body, expected_role, expected_schema) in [
+            (
+                "{\"role\":\"consumer\",\"protocolVersions\":[{\"major\":1,\"minimumMinor\":0,\"maximumMinor\":0}],\"schemaIds\":[\"keptnear.human-control.schema.v1\"]}",
+                "consumer",
+                "keptnear.human-control.schema.v1",
+            ),
+            (
+                "{\"role\":\"human-controller\",\"protocolVersions\":[{\"major\":1,\"minimumMinor\":0,\"maximumMinor\":0}],\"schemaIds\":[\"keptnear.human-control.schema.v2\"]}",
+                "human-controller",
+                "keptnear.human-control.schema.v2",
+            ),
+        ] {
+            let envelope = decode_human_control_wire_envelope(&request("hello", body))
+                .expect("structurally valid hello");
+            let typed = envelope
+                .to_typed_request(StateTimestamp::from_unix_millis(10).expect("timestamp"))
+                .expect("typed hello");
+            let HumanControlRequest::Hello(offer) = typed else {
+                panic!("hello operation must reconstruct a hello request");
+            };
+            assert_eq!(offer.role(), expected_role);
+            assert_eq!(offer.schema_ids(), &[expected_schema.to_owned()]);
+        }
+        for malformed in [
+            "{\"role\":\"\",\"protocolVersions\":[{\"major\":1,\"minimumMinor\":0,\"maximumMinor\":0}],\"schemaIds\":[\"keptnear.human-control.schema.v1\"]}",
+            "{\"role\":\"human controller\",\"protocolVersions\":[{\"major\":1,\"minimumMinor\":0,\"maximumMinor\":0}],\"schemaIds\":[\"keptnear.human-control.schema.v1\"]}",
+            "{\"role\":\"human-controller\",\"protocolVersions\":[{\"major\":1,\"minimumMinor\":0,\"maximumMinor\":0}],\"schemaIds\":[\"keptnear.human-control.schema.v2\",\"keptnear.human-control.schema.v2\"]}",
+        ] {
+            assert_eq!(
+                decode_human_control_wire_envelope(&request("hello", malformed)),
+                Err(HumanControlWireError::Malformed)
+            );
+        }
+    }
+
+    #[test]
+    fn validated_audit_cursor_reconstructs_the_typed_continuation_position() {
+        let event_id = AuditEventId::generate();
+        let payload = request(
+            "audit.list",
+            &format!(
+                "{{\"filter\":{{}},\"cursor\":{{\"occurredAtMs\":42,\"auditEventId\":\"{event_id}\"}},\"limit\":17}}"
+            ),
+        );
+        let envelope = decode_human_control_wire_envelope(&payload).expect("audit envelope");
+        let typed = envelope
+            .to_typed_request(StateTimestamp::from_unix_millis(100).expect("timestamp"))
+            .expect("typed audit request");
+        let HumanControlRequest::AuditList {
+            filter,
+            cursor: Some(cursor),
+            limit,
+        } = typed
+        else {
+            panic!("audit.list must retain its validated cursor");
+        };
+        assert_eq!(filter, BrokerAuditFilter::all());
+        assert_eq!(cursor.occurred_at().unix_millis(), 42);
+        assert_eq!(cursor.audit_event_id(), event_id);
+        assert_eq!(limit, 17);
+    }
+
+    #[test]
+    fn every_frozen_operation_reconstructs_exactly_one_typed_request() {
+        let controller_id = format!("controller_{}", "11".repeat(32));
+        let controller_session_id = ControllerSessionId::generate().to_string();
+        let broker_instance_id = BrokerInstanceId::generate().to_string();
+        let client_nonce = ControllerNonce::generate().to_string();
+        let broker_nonce = ControllerNonce::generate().to_string();
+        let vault_id = VaultId::generate().to_string();
+        let credential_id = CredentialId::generate().to_string();
+        let secret_field_id = SecretFieldId::generate().to_string();
+        let pairing_id = PairingRequestId::generate().to_string();
+        let approval_id = ApprovalRequestId::generate().to_string();
+        let consumer_id = ConsumerId::generate().to_string();
+        let usage_profile_id = UsageProfileId::generate().to_string();
+        let use_grant_id = UseGrantId::generate().to_string();
+        let audit_event_id = AuditEventId::generate().to_string();
+        let confirmation_id = HumanControlAuditConfirmationId::generate().to_string();
+        let selection = || {
+            serde_json::json!({
+                "pendingRequestId": approval_id,
+                "credentialId": credential_id,
+                "secretFieldId": secret_field_id,
+            })
+        };
+        let operations = vec![
+            (
+                "hello",
+                serde_json::json!({
+                    "role": "human-controller",
+                    "protocolVersions": [{"major": 1, "minimumMinor": 0, "maximumMinor": 0}],
+                    "schemaIds": ["keptnear.human-control.schema.v1"],
+                }),
+            ),
+            (
+                "controller.challenge",
+                serde_json::json!({"controllerId": controller_id, "clientNonce": client_nonce}),
+            ),
+            (
+                "controller.authenticate",
+                serde_json::json!({
+                    "controllerId": controller_id,
+                    "controllerSessionId": controller_session_id,
+                    "brokerInstanceId": broker_instance_id,
+                    "clientNonce": client_nonce,
+                    "brokerNonce": broker_nonce,
+                    "deadline": "controller_deadline_1",
+                    "proof": BASE64_STANDARD.encode([0x31; crate::CONTROLLER_SIGNATURE_LENGTH]),
+                }),
+            ),
+            (
+                "controller.lease.renew",
+                serde_json::json!({
+                    "controllerSessionId": controller_session_id,
+                    "brokerInstanceId": broker_instance_id,
+                }),
+            ),
+            ("readiness.get", serde_json::json!({})),
+            (
+                "machine-access.pause.set",
+                serde_json::json!({"paused": true}),
+            ),
+            (
+                "vault.unlock",
+                serde_json::json!({
+                    "vaultId": vault_id,
+                    "credential": {
+                        "kind": "local-material",
+                        "valueBase64": BASE64_STANDARD.encode([0x42; LOCAL_UNLOCK_MATERIAL_LENGTH]),
+                    },
+                }),
+            ),
+            ("vault.lock", serde_json::json!({"vaultId": vault_id})),
+            ("pending.list", serde_json::json!({})),
+            (
+                "pending.deny",
+                serde_json::json!({"pendingRequestId": approval_id, "decision": "deny"}),
+            ),
+            (
+                "pairing.approve",
+                serde_json::json!({"pendingRequestId": pairing_id, "label": "Local Tool"}),
+            ),
+            (
+                "unlock.approve",
+                serde_json::json!({"pendingRequestId": approval_id, "vaultId": vault_id}),
+            ),
+            (
+                "credential.review",
+                serde_json::json!({"pendingRequestId": approval_id}),
+            ),
+            ("credential.allow-once", selection()),
+            ("credential.authorize", {
+                let mut body = selection();
+                let object = body.as_object_mut().expect("selection object");
+                object.insert(
+                    "capability".to_owned(),
+                    serde_json::json!({"name": "http.request", "version": 1}),
+                );
+                object.insert(
+                    "confirmationPolicy".to_owned(),
+                    Value::String("every-use".to_owned()),
+                );
+                object.insert(
+                    "ruleLifetime".to_owned(),
+                    serde_json::json!({"kind": "persistent"}),
+                );
+                body
+            }),
+            (
+                "authorization.snapshot",
+                serde_json::json!({"vaultId": vault_id}),
+            ),
+            (
+                "consumer.detail",
+                serde_json::json!({"consumerId": consumer_id}),
+            ),
+            (
+                "usage-profile.catalog",
+                serde_json::json!({"consumerId": consumer_id, "executableName": "gh"}),
+            ),
+            (
+                "usage-profile.create",
+                serde_json::json!({
+                    "consumerId": consumer_id,
+                    "templateId": "http-bearer-authorization",
+                    "label": "GitHub API",
+                    "technicalField": null,
+                }),
+            ),
+            (
+                "usage-profile.remove",
+                serde_json::json!({
+                    "consumerId": consumer_id,
+                    "usageProfileId": usage_profile_id,
+                }),
+            ),
+            (
+                "access.field.revoke",
+                serde_json::json!({
+                    "consumerId": consumer_id,
+                    "vaultId": vault_id,
+                    "credentialId": credential_id,
+                    "secretFieldId": secret_field_id,
+                }),
+            ),
+            (
+                "grant.revoke",
+                serde_json::json!({"consumerId": consumer_id, "useGrantId": use_grant_id}),
+            ),
+            (
+                "consumer.revoke",
+                serde_json::json!({
+                    "consumerId": consumer_id,
+                    "scope": HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE,
+                }),
+            ),
+            ("access.all.revoke", serde_json::json!({})),
+            (
+                "audit.list",
+                serde_json::json!({
+                    "filter": {},
+                    "cursor": {"occurredAtMs": 42, "auditEventId": audit_event_id},
+                    "limit": 17,
+                }),
+            ),
+            (
+                "audit.clear",
+                serde_json::json!({"selection": {}, "confirmationId": confirmation_id}),
+            ),
+            (
+                "audit.export",
+                serde_json::json!({"filter": {}, "limit": 17}),
+            ),
+            (
+                "repair.prepare",
+                serde_json::json!({
+                    "expectedComponent": "broker",
+                    "expectedProtocol": {"major": 1, "minor": 0},
+                }),
+            ),
+            (
+                "shutdown",
+                serde_json::json!({"reason": HUMAN_CONTROL_SHUTDOWN_REASON}),
+            ),
+        ];
+        assert_eq!(operations.len(), 29);
+        let observed_at = StateTimestamp::from_unix_millis(100).expect("timestamp");
+        for (operation, body) in operations {
+            let envelope = decode_human_control_wire_envelope(&request_value(operation, body))
+                .unwrap_or_else(|error| panic!("{operation} envelope failed: {error}"));
+            let typed = envelope
+                .to_typed_request(observed_at)
+                .unwrap_or_else(|error| panic!("{operation} typed request failed: {error}"));
+            assert_eq!(typed.operation(), envelope.operation(), "{operation}");
         }
     }
 
