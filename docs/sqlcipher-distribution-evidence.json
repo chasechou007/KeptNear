@@ -35,9 +35,9 @@
   "source": {
     "workspaceManifestSha256": "326028d1d1e44f636519f928ccb0fd1350450423b06a4fd81019fa25466c3344",
     "cargoLockSha256": "e46d468b993a895969747f4274651ac65064c0a5131a2171ed49565fb27cf9b3",
-    "rustWorkspaceSourceTreeSha256": "4186059aed4e44db17adf25f300545d86af48755c6107ad8225e4852263fd2a1",
+    "rustWorkspaceSourceTreeSha256": "e4a16b891cec65ba7278018959bdc2ea67310ce5657c2880d91847f4ef8db784",
     "brokerManifestSha256": "fc512dc883897b0bff55b131860a68bfeefb8ead5711438bbdf2b7cb943f639b",
-    "brokerSourceTreeSha256": "fbbbdb98f8a07e9b98d036eb6883ef3c94c2e8f51597de22e55b6f8a34381aeb",
+    "brokerSourceTreeSha256": "48046dc1779a54a9aba69c748cce9edd51fb97b9e3f221ca2a161127c8cdeefb",
     "sqlcipherFfiSha256": "8278e9c015e38981d8c0ffaeaef00be3812124652ccccd422c72350d98ce09fe",
     "stateStoreSha256": "75d4ead8c52f419afeca6b83a8f68552ad19790b70aeef549edbfb010bb7d2bc",
     "stateSchemaSha256": "5eb4a968eac16b517c1efa2c0b5c948ad05f842a8da4d7af391f89cef87ba8ed",
@@ -63,7 +63,7 @@
       "script/run_reviewed_distribution_cargo.sh clippy --workspace --all-targets --locked -- -D warnings"
     ],
     "reviewedBy": "KeptNear local quality gate",
-    "reviewedAt": "2026-08-12T11:32:47Z"
+    "reviewedAt": "2026-08-12T12:17:02Z"
   },
   "blocker": "None for the unsigned experimental profile; signed distribution remains separately gated."
 }

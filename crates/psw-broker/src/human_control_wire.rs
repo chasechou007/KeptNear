@@ -312,9 +312,38 @@ impl HumanControlWireEnvelope {
     }
 }
 
-/// Validates one complete frozen JSON payload with duplicate-key rejection at every depth.
+#[derive(Clone, Copy)]
+enum HumanControlWireVersionExpectation {
+    InitialHello { broker: HumanControlProtocolVersion },
+    Negotiated(HumanControlProtocolVersion),
+}
+
+/// Validates an initial Hello using current-major minor-version compatibility.
+pub fn decode_human_control_hello_wire_envelope(
+    payload: impl Into<HumanControlFrame>,
+) -> Result<HumanControlWireEnvelope, HumanControlWireError> {
+    decode_human_control_wire_envelope_with_expectation(
+        payload,
+        HumanControlWireVersionExpectation::InitialHello {
+            broker: HumanControlProtocolVersion::current(),
+        },
+    )
+}
+
+/// Validates one post-Hello request against the exact version selected for its connection.
 pub fn decode_human_control_wire_envelope(
     payload: impl Into<HumanControlFrame>,
+    selected_protocol: HumanControlProtocolVersion,
+) -> Result<HumanControlWireEnvelope, HumanControlWireError> {
+    decode_human_control_wire_envelope_with_expectation(
+        payload,
+        HumanControlWireVersionExpectation::Negotiated(selected_protocol),
+    )
+}
+
+fn decode_human_control_wire_envelope_with_expectation(
+    payload: impl Into<HumanControlFrame>,
+    expectation: HumanControlWireVersionExpectation,
 ) -> Result<HumanControlWireEnvelope, HumanControlWireError> {
     let payload = payload.into();
     if payload.as_bytes().is_empty() {
@@ -338,13 +367,19 @@ pub fn decode_human_control_wire_envelope(
         return Err(HumanControlWireError::Incompatible);
     }
     let version = take_version(&mut envelope.0)?;
-    if version != HumanControlProtocolVersion::current() {
-        return Err(HumanControlWireError::Incompatible);
-    }
     let request_id = HumanControlRequestId::from_str(&take_string(&mut envelope.0, "requestId")?)
         .map_err(|_| HumanControlWireError::Malformed)?;
     let operation = HumanControlOperation::from_str(&take_string(&mut envelope.0, "operation")?)
         .map_err(|_| HumanControlWireError::Malformed)?;
+    let compatible = match expectation {
+        HumanControlWireVersionExpectation::InitialHello { broker } => {
+            operation == HumanControlOperation::Hello && version.is_supported_by(broker)
+        }
+        HumanControlWireVersionExpectation::Negotiated(selected) => version == selected,
+    };
+    if !compatible {
+        return Err(HumanControlWireError::Incompatible);
+    }
     let Some(Value::Object(body)) = envelope.0.remove("body") else {
         return Err(HumanControlWireError::Malformed);
     };
@@ -1314,6 +1349,12 @@ pub fn write_human_control_frame(
 mod tests {
     use super::*;
 
+    fn decode_current(
+        payload: impl Into<HumanControlFrame>,
+    ) -> Result<HumanControlWireEnvelope, HumanControlWireError> {
+        decode_human_control_wire_envelope(payload, HumanControlProtocolVersion::current())
+    }
+
     fn request(operation: &str, body: &str) -> Vec<u8> {
         format!(
             "{{\"protocol\":\"{HUMAN_CONTROL_PROTOCOL_NAME}\",\"version\":{{\"major\":1,\"minor\":0}},\"requestId\":\"control_request_11111111111111111111111111111111\",\"operation\":\"{operation}\",\"body\":{body}}}"
@@ -1334,8 +1375,7 @@ mod tests {
 
     #[test]
     fn frozen_envelope_accepts_known_operation_and_rejects_capabilities_or_unknown_fields() {
-        let readiness = decode_human_control_wire_envelope(request("readiness.get", "{}"))
-            .expect("readiness envelope");
+        let readiness = decode_current(request("readiness.get", "{}")).expect("readiness envelope");
         assert_eq!(readiness.operation(), HumanControlOperation::ReadinessGet);
         assert_eq!(readiness.version(), HumanControlProtocolVersion::current());
         assert!(matches!(
@@ -1352,12 +1392,12 @@ mod tests {
             "process.run",
         ] {
             assert_eq!(
-                decode_human_control_wire_envelope(request(operation, "{}")),
+                decode_current(request(operation, "{}")),
                 Err(HumanControlWireError::Malformed)
             );
         }
         assert_eq!(
-            decode_human_control_wire_envelope(request(
+            decode_current(request(
                 "machine-access.pause.set",
                 "{\"paused\":true,\"unexpected\":false}"
             )),
@@ -1369,18 +1409,18 @@ mod tests {
     fn duplicate_keys_future_version_and_incomplete_body_fail_closed() {
         let duplicate = request("audit.list", "{\"filter\":{},\"filter\":{},\"limit\":10}");
         assert_eq!(
-            decode_human_control_wire_envelope(duplicate),
+            decode_current(duplicate),
             Err(HumanControlWireError::Malformed)
         );
         let future = String::from_utf8(request("readiness.get", "{}"))
             .expect("utf8")
             .replace("\"major\":1", "\"major\":2");
         assert_eq!(
-            decode_human_control_wire_envelope(future.into_bytes()),
+            decode_current(future.into_bytes()),
             Err(HumanControlWireError::Incompatible)
         );
         assert_eq!(
-            decode_human_control_wire_envelope(request(
+            decode_current(request(
                 "credential.allow-once",
                 "{\"pendingRequestId\":\"approval_x\",\"credentialId\":\"credential_x\"}"
             )),
@@ -1389,10 +1429,43 @@ mod tests {
 
         let marker = "seeded-private-input-marker";
         let malformed = request("readiness.get", &format!("{{\"unexpected\":\"{marker}\"}}"));
-        let error = decode_human_control_wire_envelope(malformed)
-            .expect_err("private input must fail closed");
+        let error = decode_current(malformed).expect_err("private input must fail closed");
         assert!(!error.to_string().contains(marker));
         assert!(!format!("{error:?}").contains(marker));
+    }
+
+    #[test]
+    fn hello_accepts_compatible_minor_but_post_hello_frames_match_selected_exactly() {
+        let future_broker = HumanControlProtocolVersion::new(1, 7).expect("future broker");
+        let selected = HumanControlProtocolVersion::new(1, 0).expect("selected protocol");
+        let hello = decode_human_control_wire_envelope_with_expectation(
+            request(
+                "hello",
+                "{\"role\":\"human-controller\",\"protocolVersions\":[{\"major\":1,\"minimumMinor\":0,\"maximumMinor\":0}],\"schemaIds\":[\"keptnear.human-control.schema.v1\"]}",
+            ),
+            HumanControlWireVersionExpectation::InitialHello {
+                broker: future_broker,
+            },
+        )
+        .expect("compatible hello envelope");
+        assert_eq!(hello.version(), selected);
+
+        assert!(
+            decode_human_control_wire_envelope(request("readiness.get", "{}"), selected,).is_ok()
+        );
+        assert_eq!(
+            decode_human_control_wire_envelope(request("readiness.get", "{}"), future_broker,),
+            Err(HumanControlWireError::Incompatible)
+        );
+        assert_eq!(
+            decode_human_control_wire_envelope_with_expectation(
+                request("readiness.get", "{}"),
+                HumanControlWireVersionExpectation::InitialHello {
+                    broker: future_broker,
+                },
+            ),
+            Err(HumanControlWireError::Incompatible)
+        );
     }
 
     #[test]
@@ -1405,7 +1478,7 @@ mod tests {
                 BASE64_STANDARD.encode([0x22; LOCAL_UNLOCK_MATERIAL_LENGTH])
             ),
         );
-        assert!(decode_human_control_wire_envelope(valid_unlock).is_ok());
+        assert!(decode_current(valid_unlock).is_ok());
 
         for malformed in [
             request("machine-access.pause.set", "{\"paused\":\"true\"}"),
@@ -1446,7 +1519,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                decode_human_control_wire_envelope(malformed),
+                decode_current(malformed),
                 Err(HumanControlWireError::Malformed)
             );
         }
@@ -1455,12 +1528,12 @@ mod tests {
             "repair.prepare",
             "{\"expectedComponent\":\"broker\",\"expectedProtocol\":{\"major\":2,\"minor\":0}}",
         );
-        assert!(decode_human_control_wire_envelope(stale_repair).is_ok());
+        assert!(decode_current(stale_repair).is_ok());
         let mismatched_component = request(
             "repair.prepare",
             "{\"expectedComponent\":\"macos-app\",\"expectedProtocol\":{\"major\":1,\"minor\":0}}",
         );
-        assert!(decode_human_control_wire_envelope(mismatched_component).is_ok());
+        assert!(decode_current(mismatched_component).is_ok());
         for malformed in [
             request(
                 "repair.prepare",
@@ -1480,7 +1553,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                decode_human_control_wire_envelope(malformed),
+                decode_current(malformed),
                 Err(HumanControlWireError::Malformed)
             );
         }
@@ -1500,7 +1573,7 @@ mod tests {
                 "keptnear.human-control.schema.v2",
             ),
         ] {
-            let envelope = decode_human_control_wire_envelope(request("hello", body))
+            let envelope = decode_human_control_hello_wire_envelope(request("hello", body))
                 .expect("structurally valid hello");
             let typed = envelope
                 .to_typed_request(StateTimestamp::from_unix_millis(10).expect("timestamp"))
@@ -1517,7 +1590,7 @@ mod tests {
             "{\"role\":\"human-controller\",\"protocolVersions\":[{\"major\":1,\"minimumMinor\":0,\"maximumMinor\":0}],\"schemaIds\":[\"keptnear.human-control.schema.v2\",\"keptnear.human-control.schema.v2\"]}",
         ] {
             assert_eq!(
-                decode_human_control_wire_envelope(request("hello", malformed)),
+                decode_human_control_hello_wire_envelope(request("hello", malformed)),
                 Err(HumanControlWireError::Malformed)
             );
         }
@@ -1532,7 +1605,7 @@ mod tests {
                 "{{\"filter\":{{}},\"cursor\":{{\"occurredAtMs\":42,\"auditEventId\":\"{event_id}\"}},\"limit\":17}}"
             ),
         );
-        let envelope = decode_human_control_wire_envelope(payload).expect("audit envelope");
+        let envelope = decode_current(payload).expect("audit envelope");
         let typed = envelope
             .to_typed_request(StateTimestamp::from_unix_millis(100).expect("timestamp"))
             .expect("typed audit request");
@@ -1737,7 +1810,7 @@ mod tests {
         assert_eq!(operations.len(), 29);
         let observed_at = StateTimestamp::from_unix_millis(100).expect("timestamp");
         for (operation, body) in operations {
-            let envelope = decode_human_control_wire_envelope(request_value(operation, body))
+            let envelope = decode_current(request_value(operation, body))
                 .unwrap_or_else(|error| panic!("{operation} envelope failed: {error}"));
             let typed = envelope
                 .to_typed_request(observed_at)
@@ -1758,7 +1831,7 @@ mod tests {
             ),
         );
         assert_eq!(
-            decode_human_control_wire_envelope(payload),
+            decode_current(payload),
             Err(HumanControlWireError::Oversized)
         );
     }
@@ -1774,7 +1847,7 @@ mod tests {
                 BASE64_STANDARD.encode(marker)
             ),
         );
-        let envelope = decode_human_control_wire_envelope(payload).expect("unlock envelope");
+        let envelope = decode_current(payload).expect("unlock envelope");
         let debug = format!("{envelope:?}");
         assert!(!debug.contains(marker));
         assert!(!debug.contains(&BASE64_STANDARD.encode(marker)));

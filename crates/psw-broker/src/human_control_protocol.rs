@@ -164,6 +164,12 @@ impl HumanControlProtocolVersion {
     pub const fn minor(self) -> u16 {
         self.minor
     }
+
+    /// Returns whether this selected or offered version can run on the named Broker version.
+    #[must_use]
+    pub const fn is_supported_by(self, broker: Self) -> bool {
+        self.major == broker.major && self.minor <= broker.minor
+    }
 }
 
 impl Display for HumanControlProtocolVersion {

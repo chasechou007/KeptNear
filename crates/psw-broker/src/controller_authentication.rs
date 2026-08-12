@@ -423,6 +423,12 @@ pub struct ControllerAuthenticationConnection {
     outstanding: Option<OutstandingChallenge>,
 }
 
+#[derive(Clone, Copy)]
+struct ControllerProtocolCompatibility {
+    selected: HumanControlProtocolVersion,
+    broker: HumanControlProtocolVersion,
+}
+
 impl ControllerAuthenticationConnection {
     /// Refuses challenge work before protected key access once a shared budget is exhausted.
     pub fn check_challenge_budget(
@@ -461,8 +467,30 @@ impl ControllerAuthenticationConnection {
         record: Option<ControllerAuthorityRecord>,
         now: Instant,
     ) -> Result<ControllerAuthenticationChallenge, ControllerAuthenticationError> {
+        self.challenge_for_broker_protocol(
+            request,
+            mode,
+            ControllerProtocolCompatibility {
+                selected: protocol,
+                broker: HumanControlProtocolVersion::current(),
+            },
+            public_key,
+            record,
+            now,
+        )
+    }
+
+    fn challenge_for_broker_protocol(
+        &mut self,
+        request: ControllerChallengeRequest,
+        mode: ControllerAuthenticationMode,
+        compatibility: ControllerProtocolCompatibility,
+        public_key: [u8; 32],
+        record: Option<ControllerAuthorityRecord>,
+        now: Instant,
+    ) -> Result<ControllerAuthenticationChallenge, ControllerAuthenticationError> {
         self.outstanding.take();
-        if protocol != HumanControlProtocolVersion::current()
+        if !compatibility.selected.is_supported_by(compatibility.broker)
             || request.controller_id.as_bytes() != &crate::derive_controller_id(&public_key)
         {
             return self.fail(
@@ -490,7 +518,7 @@ impl ControllerAuthenticationConnection {
         let deadline = self.next_deadline()?;
         let challenge = ControllerAuthenticationChallenge {
             mode,
-            protocol,
+            protocol: compatibility.selected,
             broker_instance_id: self.service.broker_instance_id,
             controller_id: request.controller_id,
             public_key,
@@ -713,6 +741,47 @@ mod tests {
             ordinary.complete(challenge.prove(&auth_key), now, timestamp()),
             Ok(ControllerAuthenticationCompletion::Authenticated { .. })
         ));
+    }
+
+    #[test]
+    fn challenge_accepts_the_connection_selected_minor_supported_by_the_broker() {
+        let key = signing_key(6);
+        let service = ControllerAuthenticationService::new(BrokerInstanceId::generate());
+        let now = Instant::now();
+        let selected = HumanControlProtocolVersion::new(1, 0).expect("selected protocol");
+        let future_broker = HumanControlProtocolVersion::new(1, 7).expect("future broker");
+        let mut connection = service.connection();
+
+        let challenge = connection
+            .challenge_for_broker_protocol(
+                request(&key, 1),
+                ControllerAuthenticationMode::Bootstrap,
+                ControllerProtocolCompatibility {
+                    selected,
+                    broker: future_broker,
+                },
+                key.public_key(),
+                None,
+                now,
+            )
+            .expect("selected version challenge");
+        assert_eq!(challenge.protocol(), selected);
+
+        let mut incompatible = service.connection();
+        assert_eq!(
+            incompatible.challenge_for_broker_protocol(
+                request(&key, 2),
+                ControllerAuthenticationMode::Bootstrap,
+                ControllerProtocolCompatibility {
+                    selected: future_broker,
+                    broker: selected,
+                },
+                key.public_key(),
+                None,
+                now,
+            ),
+            Err(ControllerAuthenticationError::AuthenticationFailed)
+        );
     }
 
     #[test]

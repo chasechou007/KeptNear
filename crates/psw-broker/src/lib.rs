@@ -185,8 +185,9 @@ pub use human_control_types::{
     HumanControlAuditConfirmationId, HumanControlRequestId, HumanControlTypeParseError,
 };
 pub use human_control_wire::{
-    decode_human_control_wire_envelope, read_human_control_frame, write_human_control_frame,
-    HumanControlFrame, HumanControlWireEnvelope, HumanControlWireError,
+    decode_human_control_hello_wire_envelope, decode_human_control_wire_envelope,
+    read_human_control_frame, write_human_control_frame, HumanControlFrame,
+    HumanControlWireEnvelope, HumanControlWireError,
 };
 pub use local_data::{
     BrokerLocalDataClearConfirmation, BrokerLocalDataClearSummary, BrokerLocalDataError,

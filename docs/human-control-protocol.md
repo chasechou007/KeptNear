@@ -92,6 +92,11 @@ invalid union variants, and messages beyond the applicable bound are rejected.
 Errors never echo submitted bytes or include a free-form `message`, `detail`,
 path, or underlying operating-system error.
 
+The initial `hello` envelope may declare any minor version supported by the
+running Broker within the current major. After `Hello` selects a version, every
+request, challenge transcript, success, and failure on that connection uses
+that exact selected version; a different envelope version is incompatible.
+
 ## Negotiation
 
 `hello` is the only operation allowed before negotiation. Its body is:
