@@ -565,8 +565,12 @@ confirmed device-access clear followed by a later explicit enable. A
 either authority side is removed and deleted last, so an interrupted clear
 cannot be mistaken for resumable bootstrap. The runtime Keychain adapter,
 Broker controller record, challenge manager, and strict wire boundary are
-implemented in source, but the App human-control client and service activation
-are not, so this contract does not activate machine access. See
+implemented in source. Successful proof starts a 30-second monotonic
+connection lease; every authenticated operation rejects the exact expiry
+boundary, closes the connection, and requires reauthentication. Only an exact
+session-and-Broker-bound renewal advances that deadline. Lease-loss-driven
+Vault locking, the App human-control client, and service activation are not
+implemented, so this contract does not activate machine access. See
 `docs/controller-authority-contract.md`.
 
 Pairing protocol messages carry a fresh client nonce, Broker nonce, comparison

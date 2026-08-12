@@ -319,17 +319,17 @@ fn validate_body_values(
             audit_limit(body, "limit")
         }
         HumanControlOperation::RepairPrepare => {
-            fixed_string(body, "expectedComponent", "broker")?;
+            validate_packaged_component(body, "expectedComponent")?;
             let version = value_field(body, "expectedProtocol")?
                 .as_object()
                 .ok_or(HumanControlWireError::Malformed)?;
             validate_exact_keys(version, &["major", "minor"], &[])?;
-            if u16_field(version, "major")? != HumanControlProtocolVersion::current().major()
-                || u16_field(version, "minor")? != HumanControlProtocolVersion::current().minor()
-            {
-                return Err(HumanControlWireError::Malformed);
-            }
-            Ok(())
+            HumanControlProtocolVersion::new(
+                u16_field(version, "major")?,
+                u16_field(version, "minor")?,
+            )
+            .map(|_| ())
+            .map_err(|_| HumanControlWireError::Malformed)
         }
         HumanControlOperation::Shutdown => {
             fixed_string(body, "reason", HUMAN_CONTROL_SHUTDOWN_REASON)
@@ -625,6 +625,16 @@ fn bool_field(
         .as_bool()
         .map(|_| ())
         .ok_or(HumanControlWireError::Malformed)
+}
+
+fn validate_packaged_component(
+    body: &serde_json::Map<String, Value>,
+    key: &str,
+) -> Result<(), HumanControlWireError> {
+    match value_string(body, key)? {
+        "macos-app" | "broker" | "mcp-adapter" | "cli" => Ok(()),
+        _ => Err(HumanControlWireError::Malformed),
+    }
 }
 
 fn u16_field(
@@ -1000,6 +1010,40 @@ mod tests {
             request(
                 "consumer.detail",
                 "{\"consumerId\":\"consumer_ABCDEFABCDEFABCDEFABCDEFABCDEFAB\"}",
+            ),
+        ] {
+            assert_eq!(
+                decode_human_control_wire_envelope(&malformed),
+                Err(HumanControlWireError::Malformed)
+            );
+        }
+
+        let stale_repair = request(
+            "repair.prepare",
+            "{\"expectedComponent\":\"broker\",\"expectedProtocol\":{\"major\":2,\"minor\":0}}",
+        );
+        assert!(decode_human_control_wire_envelope(&stale_repair).is_ok());
+        let mismatched_component = request(
+            "repair.prepare",
+            "{\"expectedComponent\":\"macos-app\",\"expectedProtocol\":{\"major\":1,\"minor\":0}}",
+        );
+        assert!(decode_human_control_wire_envelope(&mismatched_component).is_ok());
+        for malformed in [
+            request(
+                "repair.prepare",
+                "{\"expectedComponent\":\"broker\",\"expectedProtocol\":{\"major\":0,\"minor\":0}}",
+            ),
+            request(
+                "repair.prepare",
+                "{\"expectedComponent\":\"broker\",\"expectedProtocol\":{\"major\":2,\"minor\":0,\"patch\":1}}",
+            ),
+            request(
+                "repair.prepare",
+                "{\"expectedComponent\":\"broker\",\"expectedProtocol\":{\"major\":\"2\",\"minor\":0}}",
+            ),
+            request(
+                "repair.prepare",
+                "{\"expectedComponent\":\"unknown\",\"expectedProtocol\":{\"major\":1,\"minor\":0}}",
             ),
         ] {
             assert_eq!(

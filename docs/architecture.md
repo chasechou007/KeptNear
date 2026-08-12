@@ -102,7 +102,10 @@ access group, bootstrap and authentication transcripts, replay bounds, and a
 marker-backed fail-closed removal lifecycle. The external dispatcher, runtime
 Keychain adapter, SQLCipher public trust record, challenge manager, strict wire
 validator, connection-local bounded single-use audit-clear tickets, process
-lock, and readiness projection are implemented and tested in source. The App
+lock, readiness projection, and 30-second monotonic connection lease are
+implemented and tested in source. Lease expiry closes authorization and
+requires a fresh authenticated connection; App-associated Vault locking on
+lease loss remains part of the later external-client lifecycle. The App
 human-control client and ServiceManagement lifecycle remain
 unimplemented, so installation still does not activate the service.
 The process-lifetime singleton uses an advisory kernel lock on the canonical
@@ -813,7 +816,8 @@ Implemented:
   transactional revocation with process-local cleanup, plus typed
   human-controller identities, restricted Keychain seed loading, SQLCipher
   public-record bootstrap, single-use challenge authentication, closed
-  human-control wire and request dispatch, path-free readiness, and a
+  human-control wire and request dispatch, bounded authenticated connection
+  leases, path-free readiness, and a
   process-lifetime single-Broker lock acquired before protected state or IPC.
 - `crates/psw-core`: Rust vault core.
 - `crates/psw-ffi`: macOS bridge.

@@ -25,10 +25,11 @@ use crate::{
     HumanControlProtocolVersion, HumanControlRequiredAction, HumanControlVersionOffer,
     PackagedComponent, PairingComparisonCode, PairingRequestId, RuleLifetime, SecretFieldId,
     SecretFieldKind, StateTimestamp, UsageProfile, UsageProfileDefinition, UsageProfileId,
-    UseGrantId, CONTROLLER_ROLE, HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE, HUMAN_CONTROL_DENY_DECISION,
-    HUMAN_CONTROL_SCHEMA_ID, HUMAN_CONTROL_SHUTDOWN_REASON,
-    MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
-    MAX_HUMAN_CONTROL_COLLECTION_ITEMS, MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
+    UseGrantId, CONTROLLER_ROLE, HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE,
+    HUMAN_CONTROL_CONTROLLER_LEASE_TTL, HUMAN_CONTROL_DENY_DECISION, HUMAN_CONTROL_SCHEMA_ID,
+    HUMAN_CONTROL_SHUTDOWN_REASON, MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS,
+    MAX_HUMAN_CONTROL_AUDIT_EVENTS, MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
+    MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
 };
 
 const MAX_HUMAN_CONTROL_AUDIT_EXPORT_BYTES: usize = MAX_HUMAN_CONTROL_RESPONSE_LENGTH / 2;
@@ -690,11 +691,15 @@ pub enum HumanControlResponse {
         controller_id: ControllerId,
         /// Ephemeral authenticated connection session.
         session_id: ControllerSessionId,
+        /// Relative lease window advertised to the client in milliseconds.
+        lease_duration_millis: u64,
     },
-    /// Current connection lease remains active; timed expiry is added in task 3.6.
+    /// Current bounded connection lease remains active.
     ControllerLease {
         /// Ephemeral authenticated connection session.
         session_id: ControllerSessionId,
+        /// Renewed relative lease window advertised to the client in milliseconds.
+        lease_duration_millis: u64,
     },
     /// Authenticated path-free service readiness.
     Readiness(BrokerReadinessProjection),
@@ -764,6 +769,7 @@ pub struct HumanControlConnectionState {
     phase: HumanControlConnectionPhase,
     authentication: ControllerAuthenticationConnection,
     audit_clear_confirmations: VecDeque<BrokerAuditClearConfirmation>,
+    lease_expires_at: Option<Instant>,
 }
 
 impl HumanControlConnectionState {
@@ -777,6 +783,7 @@ impl HumanControlConnectionState {
     pub fn close(&mut self) {
         self.authentication.consume_outstanding();
         self.audit_clear_confirmations.clear();
+        self.lease_expires_at = None;
         self.phase = HumanControlConnectionPhase::Closed;
     }
 }
@@ -847,6 +854,7 @@ where
             phase: HumanControlConnectionPhase::AwaitingHello,
             authentication: self.authentication.connection(),
             audit_clear_confirmations: VecDeque::new(),
+            lease_expires_at: None,
         }
     }
 
@@ -907,7 +915,17 @@ where
                         ),
                     ));
                 };
-                self.dispatch_authenticated(runtime, state, request, session_id, observed_at)
+                if !connection_lease_is_live(state, now) {
+                    state.close();
+                    return Err(HumanControlDispatchError::new(
+                        HumanControlProtocolFailure::new(
+                            HumanControlFailureCode::AuthenticationRequired,
+                            false,
+                            Some(HumanControlRequiredAction::Reauthenticate),
+                        ),
+                    ));
+                }
+                self.dispatch_authenticated(runtime, state, request, session_id, now, observed_at)
             }
         }
     }
@@ -1042,9 +1060,17 @@ where
             controller_id,
             session_id,
         };
+        state.lease_expires_at = lease_deadline(now);
+        if state.lease_expires_at.is_none() {
+            state.close();
+            return Err(HumanControlDispatchError::code(
+                HumanControlFailureCode::OperationFailed,
+            ));
+        }
         Ok(HumanControlResponse::ControllerAuthenticated {
             controller_id,
             session_id,
+            lease_duration_millis: controller_lease_duration_millis(),
         })
     }
 
@@ -1054,6 +1080,7 @@ where
         state: &mut HumanControlConnectionState,
         request: HumanControlRequest,
         session_id: ControllerSessionId,
+        now: Instant,
         observed_at: StateTimestamp,
     ) -> Result<HumanControlResponse, HumanControlDispatchError> {
         match request {
@@ -1067,7 +1094,17 @@ where
                     controller_session_id,
                     broker_instance_id,
                 )?;
-                Ok(HumanControlResponse::ControllerLease { session_id })
+                state.lease_expires_at = lease_deadline(now);
+                if state.lease_expires_at.is_none() {
+                    state.close();
+                    return Err(HumanControlDispatchError::code(
+                        HumanControlFailureCode::OperationFailed,
+                    ));
+                }
+                Ok(HumanControlResponse::ControllerLease {
+                    session_id,
+                    lease_duration_millis: controller_lease_duration_millis(),
+                })
             }
             HumanControlRequest::ReadinessGet => runtime
                 .readiness_projection()
@@ -1373,6 +1410,21 @@ fn validate_controller_lease(
             HumanControlFailureCode::InvalidRequest,
         ))
     }
+}
+
+fn lease_deadline(now: Instant) -> Option<Instant> {
+    now.checked_add(HUMAN_CONTROL_CONTROLLER_LEASE_TTL)
+}
+
+fn controller_lease_duration_millis() -> u64 {
+    u64::try_from(HUMAN_CONTROL_CONTROLLER_LEASE_TTL.as_millis())
+        .expect("human-control lease duration fits u64 milliseconds")
+}
+
+fn connection_lease_is_live(state: &HumanControlConnectionState, now: Instant) -> bool {
+    state
+        .lease_expires_at
+        .is_some_and(|expires_at| now < expires_at)
 }
 
 fn validate_audit_clear_confirmation(
@@ -1888,6 +1940,10 @@ mod tests {
                 error.failure().code(),
                 HumanControlFailureCode::ProtocolIncompatible
             );
+            assert_eq!(
+                error.failure().required_action(),
+                Some(HumanControlRequiredAction::UpdateComponent)
+            );
         }
     }
 
@@ -2013,7 +2069,11 @@ mod tests {
             HumanControlResponse::ControllerAuthenticated {
                 controller_id,
                 session_id,
-            } => (controller_id, session_id),
+                lease_duration_millis,
+            } => {
+                assert_eq!(lease_duration_millis, 30_000);
+                (controller_id, session_id)
+            }
             other => panic!("unexpected response {other:?}"),
         };
         assert_eq!(
@@ -2054,7 +2114,8 @@ mod tests {
                 timestamp(113),
             ),
             Ok(HumanControlResponse::ControllerLease {
-                session_id: renewed
+                session_id: renewed,
+                lease_duration_millis: 30_000,
             }) if renewed == session_id
         ));
 
@@ -2289,6 +2350,174 @@ mod tests {
             ),
             Ok(HumanControlResponse::ShutdownReceipt(_))
         ));
+        drop(runtime);
+        fs::remove_dir_all(home).expect("cleanup");
+    }
+
+    #[test]
+    fn authenticated_connection_lease_expires_and_only_valid_renewal_extends_it() {
+        let (home, mut runtime) = runtime("controller-lease");
+        let seed = ControllerSigningKey::from_stored_bytes(vec![0x72; 32]).expect("seed");
+        let dispatcher = HumanControlDispatcher::new(
+            runtime.process().broker_instance_id(),
+            MemoryControllerKeyStore::seeded(0x72),
+        );
+        let broker_instance_id = runtime.process().broker_instance_id();
+        let mut state = dispatcher.connection();
+        let authenticated_at = Instant::now();
+        dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                hello(),
+                authenticated_at,
+                timestamp(200),
+            )
+            .expect("hello");
+        let challenge = match dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::ControllerChallenge(ControllerChallengeRequest::new(
+                    seed.controller_id(),
+                    crate::ControllerNonce::from_bytes([0x74; 32]),
+                )),
+                authenticated_at,
+                timestamp(201),
+            )
+            .expect("challenge")
+        {
+            HumanControlResponse::ControllerChallenge(challenge) => challenge,
+            other => panic!("unexpected response {other:?}"),
+        };
+        dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::ControllerAuthenticate(challenge.prove(&seed)),
+                authenticated_at,
+                timestamp(202),
+            )
+            .expect("authenticate");
+        let initial_expiry = authenticated_at + HUMAN_CONTROL_CONTROLLER_LEASE_TTL;
+        assert!(dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::ReadinessGet,
+                initial_expiry - std::time::Duration::from_nanos(1),
+                timestamp(203),
+            )
+            .is_ok());
+
+        let invalid_renewal = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::ControllerLeaseRenew {
+                    controller_session_id: ControllerSessionId::generate(),
+                    broker_instance_id,
+                },
+                initial_expiry - std::time::Duration::from_secs(1),
+                timestamp(204),
+            )
+            .expect_err("reject mismatched renewal");
+        assert_eq!(
+            invalid_renewal.failure().code(),
+            HumanControlFailureCode::InvalidRequest
+        );
+        let expired = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::ReadinessGet,
+                initial_expiry,
+                timestamp(205),
+            )
+            .expect_err("exact deadline expires");
+        assert_eq!(
+            expired.failure(),
+            HumanControlProtocolFailure::new(
+                HumanControlFailureCode::AuthenticationRequired,
+                false,
+                Some(HumanControlRequiredAction::Reauthenticate),
+            )
+        );
+        assert_eq!(state.phase(), HumanControlConnectionPhase::Closed);
+
+        let mut renewed_state = dispatcher.connection();
+        dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut renewed_state,
+                hello(),
+                authenticated_at,
+                timestamp(206),
+            )
+            .expect("renewed hello");
+        let challenge = match dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut renewed_state,
+                HumanControlRequest::ControllerChallenge(ControllerChallengeRequest::new(
+                    seed.controller_id(),
+                    crate::ControllerNonce::from_bytes([0x75; 32]),
+                )),
+                authenticated_at,
+                timestamp(207),
+            )
+            .expect("renewed challenge")
+        {
+            HumanControlResponse::ControllerChallenge(challenge) => challenge,
+            other => panic!("unexpected response {other:?}"),
+        };
+        let renewed_session_id = challenge.session_id();
+        dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut renewed_state,
+                HumanControlRequest::ControllerAuthenticate(challenge.prove(&seed)),
+                authenticated_at,
+                timestamp(208),
+            )
+            .expect("renewed authenticate");
+        let renewal_at = authenticated_at + std::time::Duration::from_secs(20);
+        dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut renewed_state,
+                HumanControlRequest::ControllerLeaseRenew {
+                    controller_session_id: renewed_session_id,
+                    broker_instance_id,
+                },
+                renewal_at,
+                timestamp(209),
+            )
+            .expect("valid renewal");
+        assert!(dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut renewed_state,
+                HumanControlRequest::ReadinessGet,
+                initial_expiry,
+                timestamp(210),
+            )
+            .is_ok());
+        let renewed_expiry = renewal_at + HUMAN_CONTROL_CONTROLLER_LEASE_TTL;
+        let expired = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut renewed_state,
+                HumanControlRequest::ReadinessGet,
+                renewed_expiry,
+                timestamp(211),
+            )
+            .expect_err("renewed exact deadline expires");
+        assert_eq!(
+            expired.failure().required_action(),
+            Some(HumanControlRequiredAction::Reauthenticate)
+        );
+        runtime.shutdown_at(timestamp(212)).expect("shutdown");
         drop(runtime);
         fs::remove_dir_all(home).expect("cleanup");
     }

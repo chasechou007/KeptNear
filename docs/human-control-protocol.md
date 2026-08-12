@@ -171,6 +171,20 @@ Every `ControllerProof` binding is retained by the typed request and compared
 exactly with the outstanding single-use challenge before signature
 verification, including `controllerId`.
 
+Successful authentication starts a 30-second process-local connection lease.
+Every authenticated operation checks the monotonic deadline before dispatch;
+expiry closes the connection and requires a fresh authenticated connection.
+Only a renewal carrying the exact authenticated `controllerSessionId` and
+running `brokerInstanceId` advances the deadline by another 30 seconds. This
+connection bound does not implement the App-termination Vault-lock lifecycle,
+which remains a separate activation task.
+
+`ControllerAuthenticated` returns `controllerId`, `controllerSessionId`, and
+`leaseDurationMs`; `ControllerLease` returns `controllerSessionId` and
+`leaseDurationMs`. Version 1 fixes `leaseDurationMs` at `30000`. It is a client
+scheduling hint, not an absolute clock or authorization assertion; the Broker's
+private monotonic deadline remains authoritative.
+
 The fixed `ConsumerRevoke.scope` value is `consumer-and-authorization`, and the
 fixed graceful `Shutdown.reason` value is `controller-request`. A controller
 lease renewal must echo both the authenticated `controllerSessionId` and the
@@ -205,7 +219,11 @@ Nested version 1 values are also closed:
   `vaultId`, `credentialId`, and `secretFieldId`; duplicate Vault scopes and
   time windows must be consistent.
 - `cursor` is exactly `occurredAtMs` plus canonical `auditEventId`.
-- `expectedProtocol` is exactly the current `major` and `minor` integer pair.
+- `expectedComponent` is one closed packaged-component enum value, and
+  `expectedProtocol` is a closed, structurally valid `major` and `minor`
+  integer pair. The dispatcher compares both with the running Broker so a
+  stale or mismatched client receives `protocol-incompatible` with
+  `update-component` rather than a malformed-frame result.
 
 The controller algorithm, Keychain identity, transcript encoding, nonce sizes,
 proof size, deadline semantics, replay bounds, and authority lifecycle are

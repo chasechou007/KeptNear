@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
+use std::time::Duration;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -46,11 +47,14 @@ pub const MAX_HUMAN_CONTROL_NEGOTIATION_ID_BYTES: usize = 128;
 pub const MAX_HUMAN_CONTROL_INPUT_TEXT_BYTES: usize = 128;
 /// Maximum outstanding audit-clear tickets retained on one controller connection.
 pub const MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS: usize = 16;
+/// Maximum lifetime of one authenticated human-control connection lease.
+pub const HUMAN_CONTROL_CONTROLLER_LEASE_TTL: Duration = Duration::from_secs(30);
 
 const _: () = assert!(MAX_HUMAN_CONTROL_UNLOCK_CREDENTIAL_BYTES < MAX_HUMAN_CONTROL_UNLOCK_LENGTH);
 const _: () = assert!(MAX_HUMAN_CONTROL_COLLECTION_ITEMS <= 256);
 const _: () = assert!(MAX_HUMAN_CONTROL_AUDIT_EVENTS <= MAX_HUMAN_CONTROL_COLLECTION_ITEMS);
 const _: () = assert!(MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS <= 16);
+const _: () = assert!(HUMAN_CONTROL_CONTROLLER_LEASE_TTL.as_secs() == 30);
 
 /// Sanitized validation failure for the frozen human-control contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
