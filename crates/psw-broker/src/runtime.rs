@@ -445,9 +445,11 @@ impl BrokerRuntime {
         self.approval_restore_summary
     }
 
-    /// Returns authenticated component, protocol, pause, and machine Vault lock state.
+    /// Returns authenticated component, negotiated compatibility, pause, and Vault lock state.
     pub fn readiness_projection(
         &self,
+        human_control_protocol: crate::HumanControlProtocolVersion,
+        human_control_schema: &'static str,
     ) -> Result<crate::BrokerReadinessProjection, BrokerRuntimeError> {
         let paused = self
             .machine_access
@@ -458,7 +460,12 @@ impl BrokerRuntime {
             .vault_sessions()
             .snapshots()
             .map_err(BrokerRuntimeError::VaultSession)?;
-        Ok(crate::BrokerReadinessProjection::new(paused, vaults))
+        Ok(crate::BrokerReadinessProjection::new(
+            human_control_protocol,
+            human_control_schema,
+            paused,
+            vaults,
+        ))
     }
 
     /// Returns secret-free Apps & Tools state for one trusted human Vault view.

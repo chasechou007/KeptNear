@@ -17,6 +17,7 @@ pub enum BrokerProtectedStateCategory {
 pub struct BrokerReadinessProjection {
     component: ComponentMetadata,
     human_control_protocol: HumanControlProtocolVersion,
+    human_control_schema: &'static str,
     protected_state: BrokerProtectedStateCategory,
     machine_access_paused: bool,
     vaults: Vec<BrokerVaultSessionSnapshot>,
@@ -25,6 +26,8 @@ pub struct BrokerReadinessProjection {
 
 impl BrokerReadinessProjection {
     pub(crate) fn new(
+        human_control_protocol: HumanControlProtocolVersion,
+        human_control_schema: &'static str,
         machine_access_paused: bool,
         mut vaults: Vec<BrokerVaultSessionSnapshot>,
     ) -> Self {
@@ -37,7 +40,8 @@ impl BrokerReadinessProjection {
                 env!("CARGO_PKG_VERSION"),
             )
             .expect("Cargo package version is valid component metadata"),
-            human_control_protocol: HumanControlProtocolVersion::current(),
+            human_control_protocol,
+            human_control_schema,
             protected_state: BrokerProtectedStateCategory::Authenticated,
             machine_access_paused,
             vaults,
@@ -55,6 +59,12 @@ impl BrokerReadinessProjection {
     #[must_use]
     pub const fn human_control_protocol(&self) -> HumanControlProtocolVersion {
         self.human_control_protocol
+    }
+
+    /// Returns the exact schema selected for this authenticated connection.
+    #[must_use]
+    pub const fn human_control_schema(&self) -> &'static str {
+        self.human_control_schema
     }
 
     /// Returns the fixed protected-state category without a path or SQL detail.
@@ -109,14 +119,21 @@ mod tests {
 
     #[test]
     fn empty_readiness_is_component_exact_pause_independent_and_path_free() {
-        let projection = BrokerReadinessProjection::new(true, Vec::new());
+        let selected_protocol = HumanControlProtocolVersion::new(1, 7).expect("protocol");
+        let projection = BrokerReadinessProjection::new(
+            selected_protocol,
+            crate::HUMAN_CONTROL_SCHEMA_ID,
+            true,
+            Vec::new(),
+        );
         assert_eq!(
             projection.component().component(),
             PackagedComponent::Broker
         );
+        assert_eq!(projection.human_control_protocol(), selected_protocol);
         assert_eq!(
-            projection.human_control_protocol(),
-            HumanControlProtocolVersion::current()
+            projection.human_control_schema(),
+            crate::HUMAN_CONTROL_SCHEMA_ID
         );
         assert_eq!(
             projection.protected_state(),

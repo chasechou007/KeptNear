@@ -266,6 +266,8 @@ All operations were introduced in minor version 0.
 `Readiness` contains bounded component identity, negotiated protocol and schema,
 protected-state category, Machine Access Pause, and machine Vault lock state. It
 contains no full path, key identity, credential metadata, or service log.
+The protocol and schema are copied from the authenticated connection's `Hello`
+selection; they are not recomputed from the running Broker's current version.
 
 ### Pause And Vault State
 

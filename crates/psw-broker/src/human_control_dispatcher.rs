@@ -762,6 +762,10 @@ pub enum HumanControlConnectionPhase {
         controller_id: ControllerId,
         /// Ephemeral connection session.
         session_id: ControllerSessionId,
+        /// Exact protocol selected for this connection.
+        protocol: HumanControlProtocolVersion,
+        /// Exact schema selected for this connection.
+        schema: &'static str,
     },
     /// Connection is no longer usable.
     Closed,
@@ -773,6 +777,13 @@ pub struct HumanControlConnectionState {
     authentication: ControllerAuthenticationConnection,
     audit_clear_confirmations: VecDeque<BrokerAuditClearConfirmation>,
     lease_expires_at: Option<Instant>,
+}
+
+#[derive(Clone, Copy)]
+struct AuthenticatedHumanControlContext {
+    session_id: ControllerSessionId,
+    protocol: HumanControlProtocolVersion,
+    schema: &'static str,
 }
 
 impl HumanControlConnectionState {
@@ -906,7 +917,12 @@ where
                 self.controller_authenticate(runtime, state, proof, now, observed_at)
             }
             request => {
-                let HumanControlConnectionPhase::Authenticated { session_id, .. } = state.phase
+                let HumanControlConnectionPhase::Authenticated {
+                    session_id,
+                    protocol,
+                    schema,
+                    ..
+                } = state.phase
                 else {
                     return Err(HumanControlDispatchError::new(
                         HumanControlProtocolFailure::new(
@@ -937,7 +953,18 @@ where
                         ),
                     ));
                 }
-                self.dispatch_authenticated(runtime, state, request, session_id, now, observed_at)
+                self.dispatch_authenticated(
+                    runtime,
+                    state,
+                    request,
+                    AuthenticatedHumanControlContext {
+                        session_id,
+                        protocol,
+                        schema,
+                    },
+                    now,
+                    observed_at,
+                )
             }
         }
     }
@@ -1048,11 +1075,11 @@ where
         now: Instant,
         approved_at: StateTimestamp,
     ) -> Result<HumanControlResponse, HumanControlDispatchError> {
-        if !matches!(state.phase, HumanControlConnectionPhase::Negotiated(_)) {
+        let HumanControlConnectionPhase::Negotiated(protocol) = state.phase else {
             return Err(HumanControlDispatchError::code(
                 HumanControlFailureCode::NegotiationRequired,
             ));
-        }
+        };
         let completion = state
             .authentication
             .complete(proof, now, approved_at)
@@ -1072,6 +1099,8 @@ where
         state.phase = HumanControlConnectionPhase::Authenticated {
             controller_id,
             session_id,
+            protocol,
+            schema: HUMAN_CONTROL_SCHEMA_ID,
         };
         state.lease_expires_at = lease_deadline(now);
         if state.lease_expires_at.is_none() {
@@ -1092,10 +1121,15 @@ where
         runtime: &mut BrokerRuntime,
         state: &mut HumanControlConnectionState,
         request: HumanControlRequest,
-        session_id: ControllerSessionId,
+        context: AuthenticatedHumanControlContext,
         now: Instant,
         observed_at: StateTimestamp,
     ) -> Result<HumanControlResponse, HumanControlDispatchError> {
+        let AuthenticatedHumanControlContext {
+            session_id,
+            protocol,
+            schema,
+        } = context;
         match request {
             HumanControlRequest::ControllerLeaseRenew {
                 controller_session_id,
@@ -1120,7 +1154,7 @@ where
                 })
             }
             HumanControlRequest::ReadinessGet => runtime
-                .readiness_projection()
+                .readiness_projection(protocol, schema)
                 .map(HumanControlResponse::Readiness)
                 .map_err(map_runtime_error),
             HumanControlRequest::MachineAccessPauseSet { paused } => {
@@ -2159,6 +2193,8 @@ mod tests {
             HumanControlConnectionPhase::Authenticated {
                 controller_id,
                 session_id,
+                protocol: HumanControlProtocolVersion::current(),
+                schema: HUMAN_CONTROL_SCHEMA_ID,
             }
         );
         let broker_instance_id = runtime.process().broker_instance_id();
@@ -2197,16 +2233,27 @@ mod tests {
             }) if renewed == session_id
         ));
 
-        assert!(matches!(
-            dispatcher.dispatch(
+        let selected_protocol = HumanControlProtocolVersion::new(1, 7).expect("protocol");
+        state.phase = HumanControlConnectionPhase::Authenticated {
+            controller_id,
+            session_id,
+            protocol: selected_protocol,
+            schema: HUMAN_CONTROL_SCHEMA_ID,
+        };
+        let readiness = dispatcher
+            .dispatch(
                 &mut runtime,
                 &mut state,
                 HumanControlRequest::ReadinessGet,
                 now,
                 timestamp(114),
-            ),
-            Ok(HumanControlResponse::Readiness(_))
-        ));
+            )
+            .expect("readiness");
+        let HumanControlResponse::Readiness(readiness) = readiness else {
+            panic!("expected readiness response");
+        };
+        assert_eq!(readiness.human_control_protocol(), selected_protocol);
+        assert_eq!(readiness.human_control_schema(), HUMAN_CONTROL_SCHEMA_ID);
         assert!(matches!(
             dispatcher.dispatch(
                 &mut runtime,
