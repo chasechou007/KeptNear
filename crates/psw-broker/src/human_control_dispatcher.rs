@@ -1342,17 +1342,19 @@ where
                 expected_protocol,
             } => {
                 validate_repair_target(expected_component, expected_protocol)?;
-                runtime
+                let summary = runtime
                     .shutdown_at(observed_at)
-                    .map(HumanControlResponse::RepairReadiness)
-                    .map_err(map_runtime_error)
+                    .map_err(map_runtime_error)?;
+                state.close();
+                Ok(HumanControlResponse::RepairReadiness(summary))
             }
             HumanControlRequest::Shutdown { reason } => {
                 validate_fixed_value(&reason, HUMAN_CONTROL_SHUTDOWN_REASON)?;
-                runtime
+                let summary = runtime
                     .shutdown_at(observed_at)
-                    .map(HumanControlResponse::ShutdownReceipt)
-                    .map_err(map_runtime_error)
+                    .map_err(map_runtime_error)?;
+                state.close();
+                Ok(HumanControlResponse::ShutdownReceipt(summary))
             }
             HumanControlRequest::Hello(_)
             | HumanControlRequest::ControllerChallenge(_)
@@ -2350,6 +2352,91 @@ mod tests {
             ),
             Ok(HumanControlResponse::ShutdownReceipt(_))
         ));
+        assert_eq!(state.phase(), HumanControlConnectionPhase::Closed);
+        let post_shutdown_error = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::MachineAccessPauseSet { paused: true },
+                now,
+                timestamp(121),
+            )
+            .expect_err("closed controller connection cannot mutate quiesced state");
+        assert_eq!(
+            post_shutdown_error.failure().code(),
+            HumanControlFailureCode::AuthenticationRequired
+        );
+        drop(runtime);
+        fs::remove_dir_all(home).expect("cleanup");
+    }
+
+    #[test]
+    fn repair_prepare_closes_the_authenticated_connection_after_quiescence() {
+        let (home, mut runtime) = runtime("repair-closes-connection");
+        let seed = ControllerSigningKey::from_stored_bytes(vec![0x75; 32]).expect("seed");
+        let dispatcher = HumanControlDispatcher::new(
+            runtime.process().broker_instance_id(),
+            MemoryControllerKeyStore::seeded(0x75),
+        );
+        let mut state = dispatcher.connection();
+        let now = Instant::now();
+        dispatcher
+            .dispatch(&mut runtime, &mut state, hello(), now, timestamp(200))
+            .expect("hello");
+        let challenge = match dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::ControllerChallenge(ControllerChallengeRequest::new(
+                    seed.controller_id(),
+                    crate::ControllerNonce::from_bytes([0x76; 32]),
+                )),
+                now,
+                timestamp(201),
+            )
+            .expect("challenge")
+        {
+            HumanControlResponse::ControllerChallenge(challenge) => challenge,
+            _ => panic!("expected controller challenge"),
+        };
+        dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::ControllerAuthenticate(challenge.prove(&seed)),
+                now,
+                timestamp(202),
+            )
+            .expect("authenticate");
+
+        assert!(matches!(
+            dispatcher.dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::RepairPrepare {
+                    expected_component: PackagedComponent::Broker,
+                    expected_protocol: HumanControlProtocolVersion::current(),
+                },
+                now,
+                timestamp(203),
+            ),
+            Ok(HumanControlResponse::RepairReadiness(_))
+        ));
+        assert_eq!(state.phase(), HumanControlConnectionPhase::Closed);
+        let post_repair_error = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::MachineAccessPauseSet { paused: true },
+                now,
+                timestamp(204),
+            )
+            .expect_err("closed repair connection cannot mutate quiesced state");
+        assert_eq!(
+            post_repair_error.failure().code(),
+            HumanControlFailureCode::AuthenticationRequired
+        );
+
         drop(runtime);
         fs::remove_dir_all(home).expect("cleanup");
     }
