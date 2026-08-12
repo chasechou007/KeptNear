@@ -179,6 +179,32 @@ pub struct ControllerAuthenticationProof {
 }
 
 impl ControllerAuthenticationProof {
+    /// Reconstructs one proof from an already validated closed wire body.
+    ///
+    /// Construction does not authenticate these public bindings. Completion
+    /// still consumes and compares the outstanding challenge before verifying
+    /// the Ed25519 signature.
+    #[must_use]
+    pub const fn from_validated_wire_bindings(
+        broker_instance_id: BrokerInstanceId,
+        controller_id: ControllerId,
+        session_id: ControllerSessionId,
+        client_nonce: ControllerNonce,
+        broker_nonce: ControllerNonce,
+        deadline: ControllerDeadline,
+        signature: ControllerSignature,
+    ) -> Self {
+        Self {
+            broker_instance_id,
+            controller_id,
+            session_id,
+            client_nonce,
+            broker_nonce,
+            deadline,
+            signature,
+        }
+    }
+
     /// Replaces the echoed controller identity, useful to reject identity substitution.
     #[must_use]
     pub fn with_controller_id(mut self, controller_id: ControllerId) -> Self {
@@ -673,6 +699,62 @@ mod tests {
             ordinary.complete(challenge.prove(&auth_key), now, timestamp()),
             Ok(ControllerAuthenticationCompletion::Authenticated { .. })
         ));
+    }
+
+    #[test]
+    fn validated_wire_bindings_reconstruct_a_proof_without_controller_seed_access() {
+        let key = signing_key(6);
+        let service = ControllerAuthenticationService::new(BrokerInstanceId::generate());
+        let now = Instant::now();
+        let mut connection = service.connection();
+        let challenge = issue_challenge(
+            &mut connection,
+            &key,
+            ControllerAuthenticationMode::Bootstrap,
+            6,
+            None,
+            now,
+        )
+        .expect("challenge");
+        let signature = key.sign(&challenge.transcript());
+        let proof = ControllerAuthenticationProof::from_validated_wire_bindings(
+            challenge.broker_instance_id(),
+            key.controller_id(),
+            challenge.session_id(),
+            challenge.client_nonce(),
+            challenge.broker_nonce(),
+            challenge.deadline(),
+            signature,
+        );
+        assert!(!format!("{proof:?}").contains(&format!("{signature:?}")));
+        assert!(matches!(
+            connection.complete(proof, now, timestamp()),
+            Ok(ControllerAuthenticationCompletion::Bootstrap { .. })
+        ));
+
+        let mut changed_connection = service.connection();
+        let challenge = issue_challenge(
+            &mut changed_connection,
+            &key,
+            ControllerAuthenticationMode::Bootstrap,
+            7,
+            None,
+            now,
+        )
+        .expect("changed challenge");
+        let proof = ControllerAuthenticationProof::from_validated_wire_bindings(
+            challenge.broker_instance_id(),
+            key.controller_id(),
+            challenge.session_id(),
+            challenge.client_nonce(),
+            ControllerNonce::from_bytes([0xff; 32]),
+            challenge.deadline(),
+            key.sign(&challenge.transcript()),
+        );
+        assert_eq!(
+            changed_connection.complete(proof, now, timestamp()),
+            Err(ControllerAuthenticationError::ReplayRejected)
+        );
     }
 
     #[test]

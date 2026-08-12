@@ -169,7 +169,10 @@ those fields and never loads protected authority before dispatch admission.
 
 Every `ControllerProof` binding is retained by the typed request and compared
 exactly with the outstanding single-use challenge before signature
-verification, including `controllerId`.
+verification, including `controllerId`. The Broker can reconstruct the typed
+proof directly from every validated closed wire binding plus the 64-byte
+signature; this path never needs the App's controller seed and grants no trust
+until the outstanding challenge is consumed and verified.
 
 Successful authentication starts a 30-second process-local connection lease.
 Every authenticated operation checks the monotonic deadline before dispatch;
