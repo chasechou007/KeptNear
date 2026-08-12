@@ -215,6 +215,11 @@ fresh controller session, echoed client nonce, fresh Broker nonce, and the
 opaque deadline token. The App signs the authentication transcript and returns
 the fixed 64-byte proof through `controller.authenticate`.
 
+The challenge request carries only the stable controller identity and a fresh
+client nonce. After negotiation and bounded admission, the Broker derives the
+purpose, protocol, role, and public key from the selected connection contract
+and the exact protected authority state; none is nominated by the requester.
+
 The request cannot nominate a controller session identity. The Broker generates
 that identity independently for every challenge, including replacement
 challenges on the same connection. The submitted proof retains the echoed

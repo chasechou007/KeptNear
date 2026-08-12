@@ -68,7 +68,10 @@ preserved Keychain and SQLCipher state after reinstall without implicit
 initialization, or perform an explicitly confirmed, ordered, verified clear of
 the managed database files and device root key. It never removes portable
 vaults. The macOS App now exposes the local Apps & Tools control plane through
-the in-process FFI boundary.
+the in-process FFI boundary. That bridge retains the same
+`BrokerServiceRuntime` process-ownership container as the standalone Broker,
+so the App and external executable cannot concurrently open protected state.
+This does not activate or register the external service.
 
 That FFI boundary synchronizes each successful human unlock by presenting both
 the selected path and the authenticated stable `vault_id` to the Broker. It

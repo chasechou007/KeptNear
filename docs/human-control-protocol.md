@@ -159,6 +159,12 @@ rather than labels or paths.
 | `RepairPrepare` | `expectedComponent`, `expectedProtocol` |
 | `Shutdown` | fixed `reason` |
 
+`ControllerChallenge` retains exactly its two wire fields. The Broker derives
+the bootstrap or authentication purpose, selected protocol, controller role,
+and public key from the negotiated connection and protected Controller
+authority only after the shared failure-budget check. A decoder never invents
+those fields and never loads protected authority before dispatch admission.
+
 Every `ControllerProof` binding is retained by the typed request and compared
 exactly with the outstanding single-use challenge before signature
 verification, including `controllerId`.

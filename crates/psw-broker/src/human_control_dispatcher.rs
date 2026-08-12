@@ -940,11 +940,11 @@ where
         request: ControllerChallengeRequest,
         now: Instant,
     ) -> Result<HumanControlResponse, HumanControlDispatchError> {
-        if !matches!(state.phase, HumanControlConnectionPhase::Negotiated(_)) {
+        let HumanControlConnectionPhase::Negotiated(protocol) = state.phase else {
             return Err(HumanControlDispatchError::code(
                 HumanControlFailureCode::NegotiationRequired,
             ));
-        }
+        };
         state
             .authentication
             .check_challenge_budget(request.controller_id(), now)
@@ -964,7 +964,7 @@ where
                 ControllerAuthenticationMode::Authenticate
             }
         };
-        if request.mode() != expected_mode || !request.matches_key(prepared.key()) {
+        if request.controller_id() != prepared.key().controller_id() {
             return Err(map_authentication_error(
                 state
                     .authentication
@@ -973,7 +973,14 @@ where
         }
         let challenge = state
             .authentication
-            .challenge(request, record, now)
+            .challenge(
+                request,
+                expected_mode,
+                protocol,
+                prepared.key().public_key(),
+                record,
+                now,
+            )
             .map_err(map_authentication_error)?;
         Ok(HumanControlResponse::ControllerChallenge(challenge))
     }
@@ -1735,14 +1742,9 @@ mod tests {
         let untrusted_key =
             ControllerSigningKey::from_stored_bytes(vec![0x32; 32]).expect("request key");
         let request = ControllerChallengeRequest::new(
-            ControllerAuthenticationMode::Bootstrap,
-            HumanControlProtocolVersion::current(),
-            CONTROLLER_ROLE.to_owned(),
             untrusted_key.controller_id(),
-            untrusted_key.public_key(),
             crate::ControllerNonce::from_bytes([0x33; 32]),
-        )
-        .expect("challenge request");
+        );
         let error = dispatcher
             .dispatch(
                 &mut runtime,
@@ -1885,14 +1887,9 @@ mod tests {
         ));
 
         let challenge_request = ControllerChallengeRequest::new(
-            ControllerAuthenticationMode::Bootstrap,
-            HumanControlProtocolVersion::current(),
-            CONTROLLER_ROLE.to_owned(),
             seed.controller_id(),
-            seed.public_key(),
             crate::ControllerNonce::from_bytes([0x73; 32]),
-        )
-        .expect("challenge request");
+        );
         let challenge = match dispatcher
             .dispatch(
                 &mut runtime,
@@ -2194,14 +2191,9 @@ mod tests {
         for attempt in 0..MAX_CONTROLLER_FAILURES_PER_IDENTITY {
             let session_byte = 0x43_u8.wrapping_add(u8::try_from(attempt).expect("attempt"));
             let request = ControllerChallengeRequest::new(
-                ControllerAuthenticationMode::Authenticate,
-                HumanControlProtocolVersion::current(),
-                CONTROLLER_ROLE.to_owned(),
                 impostor.controller_id(),
-                impostor.public_key(),
                 crate::ControllerNonce::from_bytes([session_byte.wrapping_add(1); 32]),
-            )
-            .expect("request");
+            );
             let error = dispatcher
                 .dispatch(
                     &mut runtime,
@@ -2217,14 +2209,9 @@ mod tests {
             );
         }
         let request = ControllerChallengeRequest::new(
-            ControllerAuthenticationMode::Authenticate,
-            HumanControlProtocolVersion::current(),
-            CONTROLLER_ROLE.to_owned(),
             impostor.controller_id(),
-            impostor.public_key(),
             crate::ControllerNonce::from_bytes([0x61; 32]),
-        )
-        .expect("limited request");
+        );
         let error = dispatcher
             .dispatch(
                 &mut runtime,

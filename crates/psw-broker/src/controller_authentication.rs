@@ -10,7 +10,7 @@ use rand_core::{OsRng, RngCore};
 use crate::controller_authority_contract::{
     controller_authentication_transcript, controller_bootstrap_transcript,
     ControllerTranscriptFields, CONTROLLER_CHALLENGE_TTL, CONTROLLER_FAILURE_WINDOW,
-    CONTROLLER_ROLE, MAX_CONTROLLER_FAILURES_GLOBALLY, MAX_CONTROLLER_FAILURES_PER_IDENTITY,
+    MAX_CONTROLLER_FAILURES_GLOBALLY, MAX_CONTROLLER_FAILURES_PER_IDENTITY,
 };
 use crate::{
     BrokerInstanceId, ControllerAuthorityRecord, ControllerDeadline, ControllerId, ControllerNonce,
@@ -31,42 +31,18 @@ pub enum ControllerAuthenticationMode {
 /// Strict request for one fresh controller challenge.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ControllerChallengeRequest {
-    mode: ControllerAuthenticationMode,
-    protocol: HumanControlProtocolVersion,
-    role: String,
     controller_id: ControllerId,
-    public_key: [u8; 32],
     client_nonce: ControllerNonce,
 }
 
 impl ControllerChallengeRequest {
-    /// Creates a bounded challenge request. Role validity is checked by the Broker.
-    #[allow(clippy::too_many_arguments)]
-    pub fn new(
-        mode: ControllerAuthenticationMode,
-        protocol: HumanControlProtocolVersion,
-        role: String,
-        controller_id: ControllerId,
-        public_key: [u8; 32],
-        client_nonce: ControllerNonce,
-    ) -> Result<Self, ControllerAuthenticationError> {
-        if role.is_empty() || role.len() > 64 || !role.is_ascii() {
-            return Err(ControllerAuthenticationError::AuthenticationFailed);
-        }
-        Ok(Self {
-            mode,
-            protocol,
-            role,
-            controller_id,
-            public_key,
-            client_nonce,
-        })
-    }
-
-    /// Returns the requested bootstrap or ordinary authentication mode.
+    /// Creates the exact closed wire request. Challenge-only fields are Broker-derived.
     #[must_use]
-    pub const fn mode(&self) -> ControllerAuthenticationMode {
-        self.mode
+    pub const fn new(controller_id: ControllerId, client_nonce: ControllerNonce) -> Self {
+        Self {
+            controller_id,
+            client_nonce,
+        }
     }
 
     /// Returns the claimed public controller identity for bounded admission checks.
@@ -74,20 +50,12 @@ impl ControllerChallengeRequest {
     pub const fn controller_id(&self) -> ControllerId {
         self.controller_id
     }
-
-    /// Returns whether this request exactly names the loaded restricted seed.
-    #[must_use]
-    pub fn matches_key(&self, key: &ControllerSigningKey) -> bool {
-        self.controller_id == key.controller_id() && self.public_key == key.public_key()
-    }
 }
 
 impl Debug for ControllerChallengeRequest {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("ControllerChallengeRequest")
-            .field("mode", &self.mode)
-            .field("protocol", &self.protocol)
             .field("authentication_material", &"<redacted>")
             .finish()
     }
@@ -446,16 +414,18 @@ impl ControllerAuthenticationConnection {
     }
 
     /// Replaces any prior challenge and issues a fresh process-bound challenge.
-    pub fn challenge(
+    pub(crate) fn challenge(
         &mut self,
         request: ControllerChallengeRequest,
+        mode: ControllerAuthenticationMode,
+        protocol: HumanControlProtocolVersion,
+        public_key: [u8; 32],
         record: Option<ControllerAuthorityRecord>,
         now: Instant,
     ) -> Result<ControllerAuthenticationChallenge, ControllerAuthenticationError> {
         self.outstanding.take();
-        if request.role != CONTROLLER_ROLE
-            || request.protocol != HumanControlProtocolVersion::current()
-            || request.controller_id.as_bytes() != &crate::derive_controller_id(&request.public_key)
+        if protocol != HumanControlProtocolVersion::current()
+            || request.controller_id.as_bytes() != &crate::derive_controller_id(&public_key)
         {
             return self.fail(
                 request.controller_id,
@@ -463,11 +433,11 @@ impl ControllerAuthenticationConnection {
                 ControllerAuthenticationError::AuthenticationFailed,
             );
         }
-        match (request.mode, record) {
+        match (mode, record) {
             (ControllerAuthenticationMode::Bootstrap, None) => {}
             (ControllerAuthenticationMode::Authenticate, Some(record))
                 if record.controller_id() == request.controller_id
-                    && record.public_key() == request.public_key => {}
+                    && record.public_key() == public_key => {}
             _ => {
                 return self.fail(
                     request.controller_id,
@@ -481,11 +451,11 @@ impl ControllerAuthenticationConnection {
         }
         let deadline = self.next_deadline()?;
         let challenge = ControllerAuthenticationChallenge {
-            mode: request.mode,
-            protocol: request.protocol,
+            mode,
+            protocol,
             broker_instance_id: self.service.broker_instance_id,
             controller_id: request.controller_id,
-            public_key: request.public_key,
+            public_key,
             session_id: ControllerSessionId::generate(),
             client_nonce: request.client_nonce,
             broker_nonce: ControllerNonce::generate(),
@@ -637,21 +607,29 @@ mod tests {
         ControllerSigningKey::from_stored_bytes(vec![byte; 32]).expect("signing key")
     }
 
-    fn request(
+    fn request(key: &ControllerSigningKey, nonce_byte: u8) -> ControllerChallengeRequest {
+        ControllerChallengeRequest::new(
+            key.controller_id(),
+            ControllerNonce::from_bytes([nonce_byte; 32]),
+        )
+    }
+
+    fn issue_challenge(
+        connection: &mut ControllerAuthenticationConnection,
         key: &ControllerSigningKey,
         mode: ControllerAuthenticationMode,
         nonce_byte: u8,
-        role: &str,
-    ) -> ControllerChallengeRequest {
-        ControllerChallengeRequest::new(
+        record: Option<ControllerAuthorityRecord>,
+        now: Instant,
+    ) -> Result<ControllerAuthenticationChallenge, ControllerAuthenticationError> {
+        connection.challenge(
+            request(key, nonce_byte),
             mode,
             HumanControlProtocolVersion::current(),
-            role.to_owned(),
-            key.controller_id(),
             key.public_key(),
-            ControllerNonce::from_bytes([nonce_byte; 32]),
+            record,
+            now,
         )
-        .expect("request")
     }
 
     fn timestamp() -> StateTimestamp {
@@ -664,18 +642,15 @@ mod tests {
         let service = ControllerAuthenticationService::new(BrokerInstanceId::generate());
         let now = Instant::now();
         let mut bootstrap = service.connection();
-        let challenge = bootstrap
-            .challenge(
-                request(
-                    &key,
-                    ControllerAuthenticationMode::Bootstrap,
-                    1,
-                    CONTROLLER_ROLE,
-                ),
-                None,
-                now,
-            )
-            .expect("bootstrap challenge");
+        let challenge = issue_challenge(
+            &mut bootstrap,
+            &key,
+            ControllerAuthenticationMode::Bootstrap,
+            1,
+            None,
+            now,
+        )
+        .expect("bootstrap challenge");
         let auth_key = signing_key(7);
         let completion = bootstrap
             .complete(challenge.prove(&auth_key), now, timestamp())
@@ -685,18 +660,15 @@ mod tests {
         };
 
         let mut ordinary = service.connection();
-        let challenge = ordinary
-            .challenge(
-                request(
-                    &auth_key,
-                    ControllerAuthenticationMode::Authenticate,
-                    2,
-                    CONTROLLER_ROLE,
-                ),
-                Some(record),
-                now,
-            )
-            .expect("auth challenge");
+        let challenge = issue_challenge(
+            &mut ordinary,
+            &auth_key,
+            ControllerAuthenticationMode::Authenticate,
+            2,
+            Some(record),
+            now,
+        )
+        .expect("auth challenge");
         assert!(matches!(
             ordinary.complete(challenge.prove(&auth_key), now, timestamp()),
             Ok(ControllerAuthenticationCompletion::Authenticated { .. })
@@ -711,18 +683,15 @@ mod tests {
         let now = Instant::now();
 
         let mut identity_connection = service.connection();
-        let identity_challenge = identity_connection
-            .challenge(
-                request(
-                    &key,
-                    ControllerAuthenticationMode::Bootstrap,
-                    2,
-                    CONTROLLER_ROLE,
-                ),
-                None,
-                now,
-            )
-            .expect("identity challenge");
+        let identity_challenge = issue_challenge(
+            &mut identity_connection,
+            &key,
+            ControllerAuthenticationMode::Bootstrap,
+            2,
+            None,
+            now,
+        )
+        .expect("identity challenge");
         let changed_identity = identity_challenge
             .prove(&key)
             .with_controller_id(other_key.controller_id());
@@ -732,18 +701,15 @@ mod tests {
         );
 
         let mut connection = service.connection();
-        let challenge = connection
-            .challenge(
-                request(
-                    &key,
-                    ControllerAuthenticationMode::Bootstrap,
-                    3,
-                    CONTROLLER_ROLE,
-                ),
-                None,
-                now,
-            )
-            .expect("challenge");
+        let challenge = issue_challenge(
+            &mut connection,
+            &key,
+            ControllerAuthenticationMode::Bootstrap,
+            3,
+            None,
+            now,
+        )
+        .expect("challenge");
         let proof = challenge.prove(&key);
         let changed = proof.with_session_id(ControllerSessionId::from_bytes([9; 16]));
         assert_eq!(
@@ -757,36 +723,23 @@ mod tests {
     }
 
     #[test]
-    fn expiry_wrong_role_wrong_key_and_broker_restart_fail_non_reflectively() {
+    fn expiry_wrong_key_and_broker_restart_fail_non_reflectively() {
         let key = signing_key(9);
         let wrong = signing_key(10);
         let instance = BrokerInstanceId::generate();
         let service = ControllerAuthenticationService::new(instance);
         let now = Instant::now();
 
-        let mut wrong_role = service.connection();
-        assert_eq!(
-            wrong_role.challenge(
-                request(&key, ControllerAuthenticationMode::Bootstrap, 4, "consumer"),
-                None,
-                now,
-            ),
-            Err(ControllerAuthenticationError::AuthenticationFailed)
-        );
-
         let mut expired = service.connection();
-        let challenge = expired
-            .challenge(
-                request(
-                    &key,
-                    ControllerAuthenticationMode::Bootstrap,
-                    5,
-                    CONTROLLER_ROLE,
-                ),
-                None,
-                now,
-            )
-            .expect("challenge");
+        let challenge = issue_challenge(
+            &mut expired,
+            &key,
+            ControllerAuthenticationMode::Bootstrap,
+            5,
+            None,
+            now,
+        )
+        .expect("challenge");
         assert_eq!(
             expired.complete(
                 challenge.prove(&key),
@@ -797,18 +750,15 @@ mod tests {
         );
 
         let mut invalid = service.connection();
-        let challenge = invalid
-            .challenge(
-                request(
-                    &key,
-                    ControllerAuthenticationMode::Bootstrap,
-                    6,
-                    CONTROLLER_ROLE,
-                ),
-                None,
-                now,
-            )
-            .expect("challenge");
+        let challenge = issue_challenge(
+            &mut invalid,
+            &key,
+            ControllerAuthenticationMode::Bootstrap,
+            6,
+            None,
+            now,
+        )
+        .expect("challenge");
         assert_eq!(
             invalid.complete(challenge.prove(&wrong), now, timestamp()),
             Err(ControllerAuthenticationError::AuthenticationFailed)
@@ -831,30 +781,24 @@ mod tests {
         let service = ControllerAuthenticationService::new(BrokerInstanceId::generate());
         let now = Instant::now();
         let mut connection = service.connection();
-        let first = connection
-            .challenge(
-                request(
-                    &key,
-                    ControllerAuthenticationMode::Bootstrap,
-                    7,
-                    CONTROLLER_ROLE,
-                ),
-                None,
-                now,
-            )
-            .expect("first");
-        let second = connection
-            .challenge(
-                request(
-                    &key,
-                    ControllerAuthenticationMode::Bootstrap,
-                    8,
-                    CONTROLLER_ROLE,
-                ),
-                None,
-                now,
-            )
-            .expect("replacement");
+        let first = issue_challenge(
+            &mut connection,
+            &key,
+            ControllerAuthenticationMode::Bootstrap,
+            7,
+            None,
+            now,
+        )
+        .expect("first");
+        let second = issue_challenge(
+            &mut connection,
+            &key,
+            ControllerAuthenticationMode::Bootstrap,
+            8,
+            None,
+            now,
+        )
+        .expect("replacement");
         assert_ne!(first.session_id(), second.session_id());
         assert_eq!(
             connection.complete(first.prove(&key), now, timestamp()),
@@ -869,18 +813,15 @@ mod tests {
         let budget_service = ControllerAuthenticationService::new(BrokerInstanceId::generate());
         for offset in 0..MAX_CONTROLLER_FAILURES_PER_IDENTITY {
             let mut attempt = budget_service.connection();
-            let challenge = attempt
-                .challenge(
-                    request(
-                        &key,
-                        ControllerAuthenticationMode::Bootstrap,
-                        20 + u8::try_from(offset).expect("offset"),
-                        CONTROLLER_ROLE,
-                    ),
-                    None,
-                    now + Duration::from_millis(offset as u64),
-                )
-                .expect("challenge before limit");
+            let challenge = issue_challenge(
+                &mut attempt,
+                &key,
+                ControllerAuthenticationMode::Bootstrap,
+                20 + u8::try_from(offset).expect("offset"),
+                None,
+                now + Duration::from_millis(offset as u64),
+            )
+            .expect("challenge before limit");
             let bad_signature = ControllerSignature::from_bytes([0; 64]);
             assert_eq!(
                 attempt.complete(
@@ -894,12 +835,10 @@ mod tests {
         let mut limited = budget_service.connection();
         assert_eq!(
             limited.challenge(
-                request(
-                    &key,
-                    ControllerAuthenticationMode::Bootstrap,
-                    40,
-                    CONTROLLER_ROLE
-                ),
+                request(&key, 40),
+                ControllerAuthenticationMode::Bootstrap,
+                HumanControlProtocolVersion::current(),
+                key.public_key(),
                 None,
                 now + Duration::from_secs(1),
             ),
@@ -910,12 +849,10 @@ mod tests {
             let mut malformed = budget_service.connection();
             assert_eq!(
                 malformed.challenge(
-                    request(
-                        &key,
-                        ControllerAuthenticationMode::Bootstrap,
-                        nonce,
-                        "consumer",
-                    ),
+                    request(&key, nonce),
+                    ControllerAuthenticationMode::Bootstrap,
+                    HumanControlProtocolVersion::current(),
+                    key.public_key(),
                     None,
                     now + Duration::from_secs(1),
                 ),
