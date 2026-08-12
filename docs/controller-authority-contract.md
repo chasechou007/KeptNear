@@ -217,7 +217,10 @@ the fixed 64-byte proof through `controller.authenticate`.
 
 The request cannot nominate a controller session identity. The Broker generates
 that identity independently for every challenge, including replacement
-challenges on the same connection.
+challenges on the same connection. The submitted proof retains the echoed
+controller identity and the Broker compares it exactly with the outstanding
+challenge before signature verification; changing only that wire field cannot
+authenticate the original challenge identity.
 
 Successful proof authenticates only that connection and starts the separately
 bounded controller lease. It does not authenticate another connection, unlock

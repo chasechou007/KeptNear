@@ -159,6 +159,10 @@ rather than labels or paths.
 | `RepairPrepare` | `expectedComponent`, `expectedProtocol` |
 | `Shutdown` | fixed `reason` |
 
+Every `ControllerProof` binding is retained by the typed request and compared
+exactly with the outstanding single-use challenge before signature
+verification, including `controllerId`.
+
 The fixed `ConsumerRevoke.scope` value is `consumer-and-authorization`, and the
 fixed graceful `Shutdown.reason` value is `controller-request`. A controller
 lease renewal must echo both the authenticated `controllerSessionId` and the

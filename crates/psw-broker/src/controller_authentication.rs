@@ -177,6 +177,7 @@ impl ControllerAuthenticationChallenge {
     pub fn prove(&self, key: &ControllerSigningKey) -> ControllerAuthenticationProof {
         ControllerAuthenticationProof {
             broker_instance_id: self.broker_instance_id,
+            controller_id: self.controller_id,
             session_id: self.session_id,
             client_nonce: self.client_nonce,
             broker_nonce: self.broker_nonce,
@@ -201,6 +202,7 @@ impl Debug for ControllerAuthenticationChallenge {
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub struct ControllerAuthenticationProof {
     broker_instance_id: BrokerInstanceId,
+    controller_id: ControllerId,
     session_id: ControllerSessionId,
     client_nonce: ControllerNonce,
     broker_nonce: ControllerNonce,
@@ -209,6 +211,13 @@ pub struct ControllerAuthenticationProof {
 }
 
 impl ControllerAuthenticationProof {
+    /// Replaces the echoed controller identity, useful to reject identity substitution.
+    #[must_use]
+    pub fn with_controller_id(mut self, controller_id: ControllerId) -> Self {
+        self.controller_id = controller_id;
+        self
+    }
+
     /// Replaces the echoed session identity, useful to reject stale clients before verification.
     #[must_use]
     pub fn with_session_id(mut self, session_id: ControllerSessionId) -> Self {
@@ -505,6 +514,7 @@ impl ControllerAuthenticationConnection {
         }
         if now >= outstanding.expires_at
             || proof.broker_instance_id != challenge.broker_instance_id
+            || proof.controller_id != challenge.controller_id
             || proof.session_id != challenge.session_id
             || proof.client_nonce != challenge.client_nonce
             || proof.broker_nonce != challenge.broker_nonce
@@ -696,8 +706,31 @@ mod tests {
     #[test]
     fn every_attempt_consumes_challenge_and_replay_or_changed_bindings_fail() {
         let key = signing_key(8);
+        let other_key = signing_key(9);
         let service = ControllerAuthenticationService::new(BrokerInstanceId::generate());
         let now = Instant::now();
+
+        let mut identity_connection = service.connection();
+        let identity_challenge = identity_connection
+            .challenge(
+                request(
+                    &key,
+                    ControllerAuthenticationMode::Bootstrap,
+                    2,
+                    CONTROLLER_ROLE,
+                ),
+                None,
+                now,
+            )
+            .expect("identity challenge");
+        let changed_identity = identity_challenge
+            .prove(&key)
+            .with_controller_id(other_key.controller_id());
+        assert_eq!(
+            identity_connection.complete(changed_identity, now, timestamp()),
+            Err(ControllerAuthenticationError::ReplayRejected)
+        );
+
         let mut connection = service.connection();
         let challenge = connection
             .challenge(
