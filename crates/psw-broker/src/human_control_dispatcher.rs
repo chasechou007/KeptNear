@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::fmt::{Debug, Display, Formatter};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use psw_core::{SecretBytes, VaultId};
@@ -832,6 +833,7 @@ pub struct HumanControlDispatcher<S> {
     broker_instance_id: BrokerInstanceId,
     authentication: ControllerAuthenticationService,
     authority: ControllerAuthorityManager<S>,
+    quiesced: AtomicBool,
 }
 
 impl<S> HumanControlDispatcher<S>
@@ -844,6 +846,7 @@ where
             broker_instance_id,
             authentication: ControllerAuthenticationService::new(broker_instance_id),
             authority: ControllerAuthorityManager::new(key_store),
+            quiesced: AtomicBool::new(false),
         }
     }
 
@@ -867,6 +870,9 @@ where
         &self,
         runtime: &BrokerRuntime,
     ) -> Result<ControllerBootstrapMode, HumanControlDispatchError> {
+        if self.quiesced.load(Ordering::Acquire) {
+            return Err(quiesced_dispatch_error());
+        }
         let record = runtime
             .controller_authority_record()
             .map_err(map_runtime_error)?;
@@ -885,6 +891,10 @@ where
         now: Instant,
         observed_at: StateTimestamp,
     ) -> Result<HumanControlResponse, HumanControlDispatchError> {
+        if self.quiesced.load(Ordering::Acquire) {
+            state.close();
+            return Err(quiesced_dispatch_error());
+        }
         match request {
             HumanControlRequest::Hello(offer) => self.hello(state, offer),
             HumanControlRequest::ControllerChallenge(request) => {
@@ -1345,6 +1355,7 @@ where
                 let summary = runtime
                     .shutdown_at(observed_at)
                     .map_err(map_runtime_error)?;
+                self.quiesced.store(true, Ordering::Release);
                 state.close();
                 Ok(HumanControlResponse::RepairReadiness(summary))
             }
@@ -1353,6 +1364,7 @@ where
                 let summary = runtime
                     .shutdown_at(observed_at)
                     .map_err(map_runtime_error)?;
+                self.quiesced.store(true, Ordering::Release);
                 state.close();
                 Ok(HumanControlResponse::ShutdownReceipt(summary))
             }
@@ -1363,6 +1375,14 @@ where
             ),
         }
     }
+}
+
+fn quiesced_dispatch_error() -> HumanControlDispatchError {
+    HumanControlDispatchError::new(HumanControlProtocolFailure::new(
+        HumanControlFailureCode::RepairRequired,
+        false,
+        Some(HumanControlRequiredAction::RepairService),
+    ))
 }
 
 fn validate_repair_target(
@@ -1673,6 +1693,45 @@ mod tests {
             )
             .expect("offer"),
         )
+    }
+
+    fn authenticate_test_connection<S: ControllerKeyStore>(
+        dispatcher: &HumanControlDispatcher<S>,
+        runtime: &mut BrokerRuntime,
+        state: &mut HumanControlConnectionState,
+        seed: &ControllerSigningKey,
+        nonce_byte: u8,
+        now: Instant,
+        observed_at: i64,
+    ) {
+        dispatcher
+            .dispatch(runtime, state, hello(), now, timestamp(observed_at))
+            .expect("hello");
+        let challenge = match dispatcher
+            .dispatch(
+                runtime,
+                state,
+                HumanControlRequest::ControllerChallenge(ControllerChallengeRequest::new(
+                    seed.controller_id(),
+                    crate::ControllerNonce::from_bytes([nonce_byte; 32]),
+                )),
+                now,
+                timestamp(observed_at + 1),
+            )
+            .expect("challenge")
+        {
+            HumanControlResponse::ControllerChallenge(challenge) => challenge,
+            _ => panic!("expected controller challenge"),
+        };
+        dispatcher
+            .dispatch(
+                runtime,
+                state,
+                HumanControlRequest::ControllerAuthenticate(challenge.prove(seed)),
+                now,
+                timestamp(observed_at + 2),
+            )
+            .expect("authenticate");
     }
 
     #[test]
@@ -2364,14 +2423,18 @@ mod tests {
             .expect_err("closed controller connection cannot mutate quiesced state");
         assert_eq!(
             post_shutdown_error.failure().code(),
-            HumanControlFailureCode::AuthenticationRequired
+            HumanControlFailureCode::RepairRequired
+        );
+        assert_eq!(
+            post_shutdown_error.failure().required_action(),
+            Some(HumanControlRequiredAction::RepairService)
         );
         drop(runtime);
         fs::remove_dir_all(home).expect("cleanup");
     }
 
     #[test]
-    fn repair_prepare_closes_the_authenticated_connection_after_quiescence() {
+    fn repair_prepare_invalidates_all_controller_connections_after_quiescence() {
         let (home, mut runtime) = runtime("repair-closes-connection");
         let seed = ControllerSigningKey::from_stored_bytes(vec![0x75; 32]).expect("seed");
         let dispatcher = HumanControlDispatcher::new(
@@ -2379,35 +2442,18 @@ mod tests {
             MemoryControllerKeyStore::seeded(0x75),
         );
         let mut state = dispatcher.connection();
+        let mut other_state = dispatcher.connection();
         let now = Instant::now();
-        dispatcher
-            .dispatch(&mut runtime, &mut state, hello(), now, timestamp(200))
-            .expect("hello");
-        let challenge = match dispatcher
-            .dispatch(
-                &mut runtime,
-                &mut state,
-                HumanControlRequest::ControllerChallenge(ControllerChallengeRequest::new(
-                    seed.controller_id(),
-                    crate::ControllerNonce::from_bytes([0x76; 32]),
-                )),
-                now,
-                timestamp(201),
-            )
-            .expect("challenge")
-        {
-            HumanControlResponse::ControllerChallenge(challenge) => challenge,
-            _ => panic!("expected controller challenge"),
-        };
-        dispatcher
-            .dispatch(
-                &mut runtime,
-                &mut state,
-                HumanControlRequest::ControllerAuthenticate(challenge.prove(&seed)),
-                now,
-                timestamp(202),
-            )
-            .expect("authenticate");
+        authenticate_test_connection(&dispatcher, &mut runtime, &mut state, &seed, 0x76, now, 200);
+        authenticate_test_connection(
+            &dispatcher,
+            &mut runtime,
+            &mut other_state,
+            &seed,
+            0x77,
+            now,
+            210,
+        );
 
         assert!(matches!(
             dispatcher.dispatch(
@@ -2426,15 +2472,37 @@ mod tests {
         let post_repair_error = dispatcher
             .dispatch(
                 &mut runtime,
-                &mut state,
+                &mut other_state,
                 HumanControlRequest::MachineAccessPauseSet { paused: true },
                 now,
                 timestamp(204),
             )
-            .expect_err("closed repair connection cannot mutate quiesced state");
+            .expect_err("other authenticated connection cannot mutate quiesced state");
         assert_eq!(
             post_repair_error.failure().code(),
-            HumanControlFailureCode::AuthenticationRequired
+            HumanControlFailureCode::RepairRequired
+        );
+        assert_eq!(
+            post_repair_error.failure().required_action(),
+            Some(HumanControlRequiredAction::RepairService)
+        );
+        assert_eq!(other_state.phase(), HumanControlConnectionPhase::Closed);
+
+        let mut new_state = dispatcher.connection();
+        let new_connection_error = dispatcher
+            .dispatch(&mut runtime, &mut new_state, hello(), now, timestamp(205))
+            .expect_err("new connection cannot negotiate after quiescence");
+        assert_eq!(
+            new_connection_error.failure().code(),
+            HumanControlFailureCode::RepairRequired
+        );
+        assert_eq!(new_state.phase(), HumanControlConnectionPhase::Closed);
+        let authority_error = dispatcher
+            .prepare_controller_authority_after_explicit_enable(&runtime)
+            .expect_err("quiesced dispatcher cannot prepare controller authority");
+        assert_eq!(
+            authority_error.failure().code(),
+            HumanControlFailureCode::RepairRequired
         );
 
         drop(runtime);

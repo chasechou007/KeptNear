@@ -356,8 +356,10 @@ stale or confused controller request leaves the pending decision unchanged.
 `repair.prepare` and `shutdown` first lock machine Vault sessions and invalidate
 live Grants. Before any quiescence, `repair.prepare` requires the expected
 component to be the Broker and the expected Human Control protocol to equal the
-running version. After either operation succeeds, the Broker closes that Human
-Control connection so its authenticated lease cannot mutate quiesced state.
+running version. After either operation succeeds, the dispatcher becomes
+permanently quiesced for that Broker process: every current or new Human Control
+connection is closed before dispatch and receives `repair-required` with
+`repair-service`, so no authenticated lease can mutate quiesced state.
 Neither operation clears protected device state, resumes
 pause, changes portable Vaults, removes host configuration, or edits Agent
 policy.
