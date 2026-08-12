@@ -427,31 +427,44 @@ mod tests {
 
     #[test]
     fn symbolic_hard_link_and_broad_stale_file_fail_closed_without_target_mutation() {
-        let (home, paths) = paths("unsafe");
-        let lock_path = paths.runtime().join(BROKER_PROCESS_LOCK_FILENAME);
-        let target = paths.runtime().join("target");
-        fs::write(&target, b"stale").expect("target");
-        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("target mode");
-        symlink(&target, &lock_path).expect("symlink");
-        assert_eq!(
-            BrokerProcessLock::acquire_for_tests(&paths).unwrap_err(),
-            BrokerProcessLockError::SymbolicLink
-        );
-        fs::remove_file(&lock_path).expect("remove link");
-        fs::hard_link(&target, &lock_path).expect("hard link");
-        assert_eq!(
-            BrokerProcessLock::acquire_for_tests(&paths).unwrap_err(),
-            BrokerProcessLockError::HardLinked
-        );
-        assert_eq!(fs::read(&target).expect("unchanged target"), b"stale");
-        fs::remove_file(&lock_path).expect("remove hard link");
-        fs::write(&lock_path, b"stale").expect("stale file");
-        fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).expect("broad mode");
-        assert_eq!(
-            BrokerProcessLock::acquire_for_tests(&paths).unwrap_err(),
-            BrokerProcessLockError::InsecurePermissions { mode: 0o644 }
-        );
-        fs::remove_dir_all(home).expect("cleanup");
+        {
+            let (home, paths) = paths("unsafe-symbolic");
+            let lock_path = paths.runtime().join(BROKER_PROCESS_LOCK_FILENAME);
+            let target = paths.runtime().join("target");
+            fs::write(&target, b"stale").expect("target");
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("target mode");
+            symlink(&target, &lock_path).expect("symlink");
+            assert_eq!(
+                BrokerProcessLock::acquire_for_tests(&paths).unwrap_err(),
+                BrokerProcessLockError::SymbolicLink
+            );
+            fs::remove_dir_all(home).expect("cleanup symbolic fixture");
+        }
+        {
+            let (home, paths) = paths("unsafe-hard-link");
+            let lock_path = paths.runtime().join(BROKER_PROCESS_LOCK_FILENAME);
+            let target = paths.runtime().join("target");
+            fs::write(&target, b"stale").expect("target");
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("target mode");
+            fs::hard_link(&target, &lock_path).expect("hard link");
+            assert_eq!(
+                BrokerProcessLock::acquire_for_tests(&paths).unwrap_err(),
+                BrokerProcessLockError::HardLinked
+            );
+            assert_eq!(fs::read(&target).expect("unchanged target"), b"stale");
+            fs::remove_dir_all(home).expect("cleanup hard-link fixture");
+        }
+        {
+            let (home, paths) = paths("unsafe-permissions");
+            let lock_path = paths.runtime().join(BROKER_PROCESS_LOCK_FILENAME);
+            fs::write(&lock_path, b"stale").expect("stale file");
+            fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).expect("broad mode");
+            assert_eq!(
+                BrokerProcessLock::acquire_for_tests(&paths).unwrap_err(),
+                BrokerProcessLockError::InsecurePermissions { mode: 0o644 }
+            );
+            fs::remove_dir_all(home).expect("cleanup permissions fixture");
+        }
     }
 
     #[test]

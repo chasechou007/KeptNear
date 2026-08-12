@@ -100,9 +100,10 @@ result is secret-free. The related `keptnear.controller-authority.v1` source
 contract freezes Ed25519, the shared App-and-Broker Data Protection Keychain
 access group, bootstrap and authentication transcripts, replay bounds, and a
 marker-backed fail-closed removal lifecycle. The external dispatcher, runtime
-Keychain adapter, SQLCipher public trust record, challenge manager, closed wire
-validator, process lock, and readiness projection are implemented and tested in
-source. The App human-control client and ServiceManagement lifecycle remain
+Keychain adapter, SQLCipher public trust record, challenge manager, strict wire
+validator, connection-local bounded single-use audit-clear tickets, process
+lock, and readiness projection are implemented and tested in source. The App
+human-control client and ServiceManagement lifecycle remain
 unimplemented, so installation still does not activate the service.
 The process-lifetime singleton uses an advisory kernel lock on the canonical
 operating-system account home directory inode and requires that entry to be

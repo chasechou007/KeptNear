@@ -42,10 +42,15 @@ pub const MAX_HUMAN_CONTROL_VERSION_RANGES: usize = 8;
 pub const MAX_HUMAN_CONTROL_SCHEMA_IDS: usize = 8;
 /// Maximum bytes accepted for one negotiation role or schema identity.
 pub const MAX_HUMAN_CONTROL_NEGOTIATION_ID_BYTES: usize = 128;
+/// Maximum UTF-8 bytes accepted for one human-control label or technical name.
+pub const MAX_HUMAN_CONTROL_INPUT_TEXT_BYTES: usize = 128;
+/// Maximum outstanding audit-clear tickets retained on one controller connection.
+pub const MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS: usize = 16;
 
 const _: () = assert!(MAX_HUMAN_CONTROL_UNLOCK_CREDENTIAL_BYTES < MAX_HUMAN_CONTROL_UNLOCK_LENGTH);
 const _: () = assert!(MAX_HUMAN_CONTROL_COLLECTION_ITEMS <= 256);
 const _: () = assert!(MAX_HUMAN_CONTROL_AUDIT_EVENTS <= MAX_HUMAN_CONTROL_COLLECTION_ITEMS);
+const _: () = assert!(MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS <= 16);
 
 /// Sanitized validation failure for the frozen human-control contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

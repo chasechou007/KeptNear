@@ -127,7 +127,9 @@ authenticated controller session and bounded lease.
 
 Every body is a closed object. Optional fields are explicitly noted; all other
 fields are required. Stable identity fields are typed, canonical identifiers
-rather than labels or paths.
+rather than labels or paths. Validation covers scalar types, nested closed
+objects, fixed values, tagged unions, canonical identifiers, and decoded byte
+bounds before a validated envelope can reach typed dispatch.
 
 | Schema | Fields |
 | --- | --- |
@@ -174,13 +176,40 @@ fixed graceful `Shutdown.reason` value is `controller-request`. A controller
 lease renewal must echo both the authenticated `controllerSessionId` and the
 running `brokerInstanceId`; either mismatch is rejected.
 
-The `credential` union accepts either a Base64 master-password byte string or a
-fixed-length Base64 local-unlock value. It accepts no file path, Keychain query,
-environment variable, command argument, or credential reference. The decoded
-value is bounded before secret-handling allocation and must be zeroized after
-the unlock attempt. The controller algorithm, Keychain identity, transcript
-encoding, nonce sizes, proof size, deadline semantics, replay bounds, and
-authority lifecycle are frozen separately in
+The `credential` union is exactly one of:
+
+```json
+{"kind":"master-password","valueBase64":"<canonical padded Base64>"}
+{"kind":"local-material","valueBase64":"<canonical padded Base64>"}
+```
+
+The master-password value decodes to 1 through 65,536 bytes; local material
+decodes to exactly 32 bytes. The union accepts no file path, Keychain query,
+environment variable, command argument, or credential reference. Encoded and
+decoded bounds are checked before dispatch, decoded temporary buffers are
+zeroized, validated envelope bodies have redacted debug output, and retained
+JSON strings are zeroized when the envelope is dropped. `ControllerProof.proof`
+is canonical padded Base64 of exactly one 64-byte Ed25519 signature.
+
+Nested version 1 values are also closed:
+
+- `capability` is `{"name":"<fixed-capability>","version":<nonzero-u16>}`.
+- `ruleLifetime` is either `{"kind":"persistent"}` or
+  `{"kind":"until","expiresAtMs":<nonnegative-i64>}`.
+- `technicalField` is `null` or a non-empty string of at most 128 UTF-8 bytes;
+  the selected bundled template validates whether it is absent, optional, or
+  required and validates the resulting header or environment-variable name.
+- `filter` and `selection` accept only optional `eventKind`, `decision`,
+  `consumerId`, `vaultId`, `fieldScope`, `capability`,
+  `occurredAtOrAfterMs`, and `occurredBeforeMs`. `fieldScope` is exactly
+  `vaultId`, `credentialId`, and `secretFieldId`; duplicate Vault scopes and
+  time windows must be consistent.
+- `cursor` is exactly `occurredAtMs` plus canonical `auditEventId`.
+- `expectedProtocol` is exactly the current `major` and `minor` integer pair.
+
+The controller algorithm, Keychain identity, transcript encoding, nonce sizes,
+proof size, deadline semantics, replay bounds, and authority lifecycle are
+frozen separately in
 `docs/controller-authority-contract.md`. These fields keep their closed wire
 positions. The runtime challenge manager and access-group Keychain adapter are
 implemented in source; entitlement-qualified App integration remains later work.
@@ -244,10 +273,15 @@ compare those identities with the immutable pending target, while
 new-Credential approvals compare them with the current human-reviewed
 candidate. A mismatch leaves the request pending.
 
-Audit-clear confirmation is issued for one exact non-secret selection. The
-typed confirmation retains both its fresh `confirmationId` and that selection;
-the dispatcher rejects a changed identity or selection before deleting any
-audit event.
+Each successful `audit.list` response returns the bounded page plus a fresh
+`clearConfirmationId` bound to that request's exact non-secret filter. The
+Broker retains at most 16 such tickets on that authenticated human-controller
+connection, evicting the oldest; connection close clears all of them. After an
+explicit local confirmation, the App sends the exact selection and ticket ID
+in `audit.clear`. The Broker removes the identified ticket before validating
+its selection, rejects arbitrary, evicted, cross-connection, changed-selection,
+or replayed IDs, and deletes no audit event unless the retained exact-selection
+token also passes the runtime transaction boundary.
 
 Credential-review metadata uses a shared half-response byte budget in addition
 to the candidate-count bound. Individual titles, template identities, tags,
@@ -281,7 +315,7 @@ already received by a compatible child or remote service.
 
 | Operation | Request | Response |
 | --- | --- | --- |
-| `audit.list` | `AuditPage` | `AuditPage` |
+| `audit.list` | `AuditPage` | `AuditPage` plus `clearConfirmationId` |
 | `audit.clear` | `AuditClear` | `AuditClearSummary` |
 | `audit.export` | `AuditExport` | `AuditExport` |
 | `repair.prepare` | `RepairPrepare` | `RepairReadiness` |

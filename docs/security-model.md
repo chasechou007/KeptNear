@@ -563,9 +563,10 @@ reinstall preserve complete authority; v1 supports rotation only through a
 confirmed device-access clear followed by a later explicit enable. A
 `removal-pending-v1` item in the same restricted access group is created before
 either authority side is removed and deleted last, so an interrupted clear
-cannot be mistaken for resumable bootstrap. The runtime
-Keychain adapter and Broker controller record are not yet implemented, so this
-contract does not activate machine access. See
+cannot be mistaken for resumable bootstrap. The runtime Keychain adapter,
+Broker controller record, challenge manager, and strict wire boundary are
+implemented in source, but the App human-control client and service activation
+are not, so this contract does not activate machine access. See
 `docs/controller-authority-contract.md`.
 
 Pairing protocol messages carry a fresh client nonce, Broker nonce, comparison

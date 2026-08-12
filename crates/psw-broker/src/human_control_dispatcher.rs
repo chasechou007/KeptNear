@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fmt::{Debug, Display, Formatter};
 use std::time::Instant;
 
@@ -25,7 +26,8 @@ use crate::{
     PackagedComponent, PairingComparisonCode, PairingRequestId, RuleLifetime, SecretFieldId,
     SecretFieldKind, StateTimestamp, UsageProfile, UsageProfileDefinition, UsageProfileId,
     UseGrantId, CONTROLLER_ROLE, HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE, HUMAN_CONTROL_DENY_DECISION,
-    HUMAN_CONTROL_SCHEMA_ID, HUMAN_CONTROL_SHUTDOWN_REASON, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+    HUMAN_CONTROL_SCHEMA_ID, HUMAN_CONTROL_SHUTDOWN_REASON,
+    MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
     MAX_HUMAN_CONTROL_COLLECTION_ITEMS, MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
 };
 
@@ -235,8 +237,6 @@ pub enum HumanControlRequest {
         filter: BrokerAuditFilter,
         /// Exact identity issued with the confirmed audit selection.
         confirmation_id: HumanControlAuditConfirmationId,
-        /// Capability token proving explicit local confirmation.
-        confirmation: BrokerAuditClearConfirmation,
     },
     /// Export one bounded non-secret audit document.
     AuditExport {
@@ -567,6 +567,27 @@ pub struct HumanControlUsageProfileCatalog {
     pub recommendation: Option<BundledUsageProfileRecommendation>,
 }
 
+/// Bounded audit page plus one Broker-issued clear token for its exact selection.
+#[derive(Debug)]
+pub struct HumanControlAuditPage {
+    page: BrokerAuditPage,
+    clear_confirmation_id: HumanControlAuditConfirmationId,
+}
+
+impl HumanControlAuditPage {
+    /// Returns the newest-first audit page.
+    #[must_use]
+    pub const fn page(&self) -> &BrokerAuditPage {
+        &self.page
+    }
+
+    /// Returns the single-use token bound to the list request's exact filter.
+    #[must_use]
+    pub const fn clear_confirmation_id(&self) -> HumanControlAuditConfirmationId {
+        self.clear_confirmation_id
+    }
+}
+
 /// Bounded Vault authorization inventory for one human-control response.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HumanControlAuthorizationSnapshot {
@@ -709,7 +730,7 @@ pub enum HumanControlResponse {
     /// Fixed revocation counts.
     RevocationSummary(BrokerRevocationSummary),
     /// Bounded audit page.
-    AuditPage(BrokerAuditPage),
+    AuditPage(HumanControlAuditPage),
     /// Fixed audit clear counts.
     AuditClearSummary(BrokerAuditClearSummary),
     /// Versioned non-secret audit export.
@@ -742,6 +763,7 @@ pub enum HumanControlConnectionPhase {
 pub struct HumanControlConnectionState {
     phase: HumanControlConnectionPhase,
     authentication: ControllerAuthenticationConnection,
+    audit_clear_confirmations: VecDeque<BrokerAuditClearConfirmation>,
 }
 
 impl HumanControlConnectionState {
@@ -754,6 +776,7 @@ impl HumanControlConnectionState {
     /// Consumes any challenge and permanently closes this connection state.
     pub fn close(&mut self) {
         self.authentication.consume_outstanding();
+        self.audit_clear_confirmations.clear();
         self.phase = HumanControlConnectionPhase::Closed;
     }
 }
@@ -823,6 +846,7 @@ where
         HumanControlConnectionState {
             phase: HumanControlConnectionPhase::AwaitingHello,
             authentication: self.authentication.connection(),
+            audit_clear_confirmations: VecDeque::new(),
         }
     }
 
@@ -883,7 +907,7 @@ where
                         ),
                     ));
                 };
-                self.dispatch_authenticated(runtime, request, session_id, observed_at)
+                self.dispatch_authenticated(runtime, state, request, session_id, observed_at)
             }
         }
     }
@@ -1027,6 +1051,7 @@ where
     fn dispatch_authenticated(
         &self,
         runtime: &mut BrokerRuntime,
+        state: &mut HumanControlConnectionState,
         request: HumanControlRequest,
         session_id: ControllerSessionId,
         observed_at: StateTimestamp,
@@ -1237,16 +1262,26 @@ where
                 limit,
             } => {
                 validate_human_control_audit_limit(limit)?;
-                runtime
+                let page = runtime
                     .view_audit_at(filter, cursor, limit, observed_at)
-                    .map(HumanControlResponse::AuditPage)
-                    .map_err(map_runtime_error)
+                    .map_err(map_runtime_error)?;
+                let confirmation =
+                    BrokerAuditClearConfirmation::for_human_control_selection(filter);
+                let clear_confirmation_id = confirmation.confirmation_id();
+                retain_audit_clear_confirmation(&mut state.audit_clear_confirmations, confirmation);
+                Ok(HumanControlResponse::AuditPage(HumanControlAuditPage {
+                    page,
+                    clear_confirmation_id,
+                }))
             }
             HumanControlRequest::AuditClear {
                 filter,
                 confirmation_id,
-                confirmation,
             } => {
+                let confirmation = take_audit_clear_confirmation(
+                    &mut state.audit_clear_confirmations,
+                    confirmation_id,
+                )?;
                 validate_audit_clear_confirmation(&confirmation, confirmation_id, filter)?;
                 runtime
                     .clear_audit(filter, confirmation)
@@ -1352,6 +1387,29 @@ fn validate_audit_clear_confirmation(
             HumanControlFailureCode::InvalidRequest,
         ))
     }
+}
+
+fn retain_audit_clear_confirmation(
+    confirmations: &mut VecDeque<BrokerAuditClearConfirmation>,
+    confirmation: BrokerAuditClearConfirmation,
+) {
+    if confirmations.len() == MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS {
+        confirmations.pop_front();
+    }
+    confirmations.push_back(confirmation);
+}
+
+fn take_audit_clear_confirmation(
+    confirmations: &mut VecDeque<BrokerAuditClearConfirmation>,
+    confirmation_id: HumanControlAuditConfirmationId,
+) -> Result<BrokerAuditClearConfirmation, HumanControlDispatchError> {
+    let index = confirmations
+        .iter()
+        .position(|confirmation| confirmation.confirmation_id() == confirmation_id)
+        .ok_or_else(|| HumanControlDispatchError::code(HumanControlFailureCode::InvalidRequest))?;
+    confirmations
+        .remove(index)
+        .ok_or_else(|| HumanControlDispatchError::code(HumanControlFailureCode::InvalidRequest))
 }
 
 fn grant_revoke_response(removed: bool) -> HumanControlResponse {
@@ -1688,6 +1746,45 @@ mod tests {
     }
 
     #[test]
+    fn audit_clear_confirmation_queue_is_bounded_single_use_and_connection_local() {
+        let mut confirmations = VecDeque::new();
+        let first =
+            BrokerAuditClearConfirmation::for_human_control_selection(BrokerAuditFilter::all());
+        let first_id = first.confirmation_id();
+        retain_audit_clear_confirmation(&mut confirmations, first);
+        for _ in 0..MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS {
+            retain_audit_clear_confirmation(
+                &mut confirmations,
+                BrokerAuditClearConfirmation::for_human_control_selection(BrokerAuditFilter::all()),
+            );
+        }
+        assert_eq!(
+            confirmations.len(),
+            MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS
+        );
+        assert!(take_audit_clear_confirmation(&mut confirmations, first_id).is_err());
+
+        let retained =
+            BrokerAuditClearConfirmation::for_human_control_selection(BrokerAuditFilter::all());
+        let retained_id = retained.confirmation_id();
+        retain_audit_clear_confirmation(&mut confirmations, retained);
+        assert!(take_audit_clear_confirmation(&mut confirmations, retained_id).is_ok());
+        assert!(take_audit_clear_confirmation(&mut confirmations, retained_id).is_err());
+
+        let dispatcher = HumanControlDispatcher::new(
+            BrokerInstanceId::generate(),
+            MemoryControllerKeyStore::empty(),
+        );
+        let mut connection = dispatcher.connection();
+        retain_audit_clear_confirmation(
+            &mut connection.audit_clear_confirmations,
+            BrokerAuditClearConfirmation::for_human_control_selection(BrokerAuditFilter::all()),
+        );
+        connection.close();
+        assert!(connection.audit_clear_confirmations.is_empty());
+    }
+
+    #[test]
     fn negotiation_rejects_wrong_role_or_schema_before_challenge_state() {
         let (home, mut runtime) = runtime("negotiation-bindings");
         let dispatcher = HumanControlDispatcher::new(
@@ -2005,8 +2102,8 @@ mod tests {
                 ))
                 .expect("seed audit event");
         }
-        assert!(matches!(
-            dispatcher.dispatch(
+        let listed = dispatcher
+            .dispatch(
                 &mut runtime,
                 &mut state,
                 HumanControlRequest::AuditList {
@@ -2016,9 +2113,13 @@ mod tests {
                 },
                 now,
                 timestamp(117),
-            ),
-            Ok(HumanControlResponse::AuditPage(_))
-        ));
+            )
+            .expect("bounded audit page");
+        let HumanControlResponse::AuditPage(listed) = listed else {
+            panic!("expected audit page");
+        };
+        assert_eq!(listed.page().events().len(), 2);
+        let first_confirmation_id = listed.clear_confirmation_id();
         let export = dispatcher
             .dispatch(
                 &mut runtime,
@@ -2036,8 +2137,6 @@ mod tests {
             HumanControlResponse::AuditExport(export) if export.event_count() == 1
         ));
         let clear_filter = BrokerAuditFilter::all();
-        let wrong_id_confirmation =
-            BrokerAuditClearConfirmation::after_user_confirmation(clear_filter);
         let wrong_id_error = dispatcher
             .dispatch(
                 &mut runtime,
@@ -2045,7 +2144,6 @@ mod tests {
                 HumanControlRequest::AuditClear {
                     filter: clear_filter,
                     confirmation_id: HumanControlAuditConfirmationId::generate(),
-                    confirmation: wrong_id_confirmation,
                 },
                 now,
                 timestamp(118),
@@ -2055,17 +2153,13 @@ mod tests {
             wrong_id_error.failure().code(),
             HumanControlFailureCode::InvalidRequest
         );
-        let wrong_selection_confirmation =
-            BrokerAuditClearConfirmation::after_user_confirmation(clear_filter);
-        let wrong_selection_id = wrong_selection_confirmation.confirmation_id();
         let wrong_selection_error = dispatcher
             .dispatch(
                 &mut runtime,
                 &mut state,
                 HumanControlRequest::AuditClear {
                     filter: BrokerAuditFilter::all().with_consumer(ConsumerId::generate()),
-                    confirmation_id: wrong_selection_id,
-                    confirmation: wrong_selection_confirmation,
+                    confirmation_id: first_confirmation_id,
                 },
                 now,
                 timestamp(118),
@@ -2075,9 +2169,23 @@ mod tests {
             wrong_selection_error.failure().code(),
             HumanControlFailureCode::InvalidRequest
         );
-        let clear_confirmation =
-            BrokerAuditClearConfirmation::after_user_confirmation(clear_filter);
-        let clear_confirmation_id = clear_confirmation.confirmation_id();
+        let relisted = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::AuditList {
+                    filter: clear_filter,
+                    cursor: None,
+                    limit: 10,
+                },
+                now,
+                timestamp(118),
+            )
+            .expect("reissue audit clear confirmation");
+        let HumanControlResponse::AuditPage(relisted) = relisted else {
+            panic!("expected second audit page");
+        };
+        let clear_confirmation_id = relisted.clear_confirmation_id();
         let clear = dispatcher
             .dispatch(
                 &mut runtime,
@@ -2085,7 +2193,6 @@ mod tests {
                 HumanControlRequest::AuditClear {
                     filter: clear_filter,
                     confirmation_id: clear_confirmation_id,
-                    confirmation: clear_confirmation,
                 },
                 now,
                 timestamp(118),
@@ -2096,6 +2203,22 @@ mod tests {
             HumanControlResponse::AuditClearSummary(summary)
                 if summary.removed_events() == 2 && summary.remaining_events() == 0
         ));
+        let replay_error = dispatcher
+            .dispatch(
+                &mut runtime,
+                &mut state,
+                HumanControlRequest::AuditClear {
+                    filter: clear_filter,
+                    confirmation_id: clear_confirmation_id,
+                },
+                now,
+                timestamp(118),
+            )
+            .expect_err("reject consumed audit confirmation");
+        assert_eq!(
+            replay_error.failure().code(),
+            HumanControlFailureCode::InvalidRequest
+        );
         let revoke_error = dispatcher
             .dispatch(
                 &mut runtime,

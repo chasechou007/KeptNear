@@ -198,7 +198,7 @@ impl BrokerAuditPage {
     }
 }
 
-/// Capability token created only after an explicit local user confirmation.
+/// Single-use exact-selection token retained by a trusted local control plane.
 #[derive(Debug, Eq, PartialEq)]
 pub struct BrokerAuditClearConfirmation {
     confirmation_id: HumanControlAuditConfirmationId,
@@ -209,6 +209,11 @@ impl BrokerAuditClearConfirmation {
     /// Records that the trusted local control plane confirmed one exact selection.
     #[must_use]
     pub fn after_user_confirmation(filter: BrokerAuditFilter) -> Self {
+        Self::for_human_control_selection(filter)
+    }
+
+    /// Issues one token for a selection returned to the authenticated App.
+    pub(crate) fn for_human_control_selection(filter: BrokerAuditFilter) -> Self {
         Self {
             confirmation_id: HumanControlAuditConfirmationId::generate(),
             filter,

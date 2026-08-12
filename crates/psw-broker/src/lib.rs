@@ -155,9 +155,9 @@ pub use human_control::{
     MAX_CONSUMER_DETAIL_AUDIT_EVENTS,
 };
 pub use human_control_dispatcher::{
-    HumanControlConnectionPhase, HumanControlConnectionState, HumanControlCredentialCandidate,
-    HumanControlCredentialReview, HumanControlDispatchError, HumanControlDispatcher,
-    HumanControlPendingRequest, HumanControlRequest, HumanControlResponse,
+    HumanControlAuditPage, HumanControlConnectionPhase, HumanControlConnectionState,
+    HumanControlCredentialCandidate, HumanControlCredentialReview, HumanControlDispatchError,
+    HumanControlDispatcher, HumanControlPendingRequest, HumanControlRequest, HumanControlResponse,
     HumanControlSecretFieldCandidate, HumanControlUsageProfileCatalog,
     HumanControlVaultUnlockCredential,
 };
@@ -170,13 +170,14 @@ pub use human_control_protocol::{
     HumanControlVersionOffer, HUMAN_CONTROL_CONSUMER_REVOKE_SCOPE, HUMAN_CONTROL_DENY_DECISION,
     HUMAN_CONTROL_FAILURE_CODES, HUMAN_CONTROL_OPERATION_CONTRACTS, HUMAN_CONTROL_PROTOCOL_MAJOR,
     HUMAN_CONTROL_PROTOCOL_MINOR, HUMAN_CONTROL_PROTOCOL_NAME, HUMAN_CONTROL_REQUIRED_ACTIONS,
-    HUMAN_CONTROL_SCHEMA_ID, HUMAN_CONTROL_SHUTDOWN_REASON, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
+    HUMAN_CONTROL_SCHEMA_ID, HUMAN_CONTROL_SHUTDOWN_REASON,
+    MAX_HUMAN_CONTROL_AUDIT_CLEAR_CONFIRMATIONS, MAX_HUMAN_CONTROL_AUDIT_EVENTS,
     MAX_HUMAN_CONTROL_AUTH_LENGTH, MAX_HUMAN_CONTROL_COLLECTION_ITEMS,
     MAX_HUMAN_CONTROL_FRAME_LENGTH, MAX_HUMAN_CONTROL_HELLO_LENGTH,
-    MAX_HUMAN_CONTROL_NEGOTIATION_ID_BYTES, MAX_HUMAN_CONTROL_REQUEST_LENGTH,
-    MAX_HUMAN_CONTROL_RESPONSE_LENGTH, MAX_HUMAN_CONTROL_SCHEMA_IDS,
-    MAX_HUMAN_CONTROL_UNLOCK_CREDENTIAL_BYTES, MAX_HUMAN_CONTROL_UNLOCK_LENGTH,
-    MAX_HUMAN_CONTROL_VERSION_RANGES,
+    MAX_HUMAN_CONTROL_INPUT_TEXT_BYTES, MAX_HUMAN_CONTROL_NEGOTIATION_ID_BYTES,
+    MAX_HUMAN_CONTROL_REQUEST_LENGTH, MAX_HUMAN_CONTROL_RESPONSE_LENGTH,
+    MAX_HUMAN_CONTROL_SCHEMA_IDS, MAX_HUMAN_CONTROL_UNLOCK_CREDENTIAL_BYTES,
+    MAX_HUMAN_CONTROL_UNLOCK_LENGTH, MAX_HUMAN_CONTROL_VERSION_RANGES,
 };
 pub use human_control_types::{
     ControllerDeadline, ControllerId, ControllerNonce, ControllerSessionId,
