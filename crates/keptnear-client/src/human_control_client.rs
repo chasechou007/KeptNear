@@ -9,7 +9,7 @@ use psw_broker::{
     HumanControlOperation, HumanControlProtocolVersion, HumanControlProtocolVersionRange,
     HumanControlRequest, HumanControlRequestId, HumanControlRequiredAction,
     HumanControlSuccessEnvelope, HumanControlVersionOffer, CONTROLLER_ROLE,
-    HUMAN_CONTROL_SCHEMA_ID,
+    HUMAN_CONTROL_CONTROLLER_LEASE_TTL, HUMAN_CONTROL_SCHEMA_ID,
 };
 
 /// Minimal proof boundary required by the Human Control client.
@@ -118,10 +118,9 @@ where
             _ => return Err(HumanControlClientError::Protocol),
         };
 
-        let challenge_request = ControllerChallengeRequest::new(
-            signing_key.controller_id(),
-            ControllerNonce::generate(),
-        );
+        let client_nonce = ControllerNonce::generate();
+        let challenge_request =
+            ControllerChallengeRequest::new(signing_key.controller_id(), client_nonce);
         let challenge_response =
             self.request(HumanControlRequest::ControllerChallenge(challenge_request))?;
         let challenge = challenge_response
@@ -131,6 +130,7 @@ where
             || challenge.broker_instance_id() != broker_instance_id
             || challenge.controller_id() != signing_key.controller_id()
             || challenge.public_key() != signing_key.public_key()
+            || challenge.client_nonce() != client_nonce
         {
             return Err(HumanControlClientError::Protocol);
         }
@@ -140,7 +140,10 @@ where
         let (controller_id, session_id, lease_duration_millis) = authenticated
             .authenticated_session()
             .map_err(|_| HumanControlClientError::Protocol)?;
-        if controller_id != signing_key.controller_id() || lease_duration_millis == 0 {
+        if controller_id != signing_key.controller_id()
+            || session_id != challenge.session_id()
+            || lease_duration_millis != controller_lease_duration_millis()
+        {
             return Err(HumanControlClientError::Protocol);
         }
         self.authenticated_session = Some((controller_id, session_id));
@@ -211,7 +214,9 @@ where
         let (response_session_id, lease_duration_millis) = response
             .controller_lease()
             .map_err(|_| HumanControlClientError::Protocol)?;
-        if response_session_id != session_id || lease_duration_millis == 0 {
+        if response_session_id != session_id
+            || lease_duration_millis != controller_lease_duration_millis()
+        {
             return Err(HumanControlClientError::Protocol);
         }
         Ok(lease_duration_millis)
@@ -254,6 +259,11 @@ where
     }
 }
 
+fn controller_lease_duration_millis() -> u64 {
+    u64::try_from(HUMAN_CONTROL_CONTROLLER_LEASE_TTL.as_millis())
+        .expect("the frozen Human Control lease fits u64 milliseconds")
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -266,7 +276,7 @@ mod tests {
         BrokerInstanceId, ControllerAuthenticationChallenge, ControllerAuthenticationMode,
         ControllerAuthenticationProof, ControllerDeadline, ControllerSignature, HumanControlLimits,
         HumanControlProtocolFailure, HumanControlResponse, HumanControlWireEnvelope,
-        StateTimestamp, HUMAN_CONTROL_CONTROLLER_LEASE_TTL, HUMAN_CONTROL_OPERATION_CONTRACTS,
+        StateTimestamp, HUMAN_CONTROL_OPERATION_CONTRACTS,
     };
 
     use super::*;
@@ -313,6 +323,10 @@ mod tests {
         None,
         WrongRequestId,
         WrongPublicKey,
+        WrongClientNonce,
+        WrongAuthenticatedSession,
+        WrongAuthenticatedLease,
+        WrongRenewedLease,
         FixedFailure,
         Eof,
     }
@@ -422,6 +436,11 @@ mod tests {
                     } else {
                         request.controller_id()
                     };
+                    let client_nonce = if matches!(self.fault, ScriptFault::WrongClientNonce) {
+                        ControllerNonce::from_bytes([0x65; 32])
+                    } else {
+                        request.client_nonce()
+                    };
                     let challenge =
                         ControllerAuthenticationChallenge::from_validated_wire_bindings(
                             ControllerAuthenticationMode::Authenticate,
@@ -430,7 +449,7 @@ mod tests {
                             controller_id,
                             public_key,
                             self.session_id,
-                            request.client_nonce(),
+                            client_nonce,
                             ControllerNonce::from_bytes([0x64; 32]),
                             ControllerDeadline::new(1).expect("deadline"),
                         )
@@ -446,11 +465,22 @@ mod tests {
                     if expected != proof {
                         return Err(io::Error::new(io::ErrorKind::InvalidData, "proof"));
                     }
+                    let session_id = if matches!(self.fault, ScriptFault::WrongAuthenticatedSession)
+                    {
+                        ControllerSessionId::from_bytes([0x66; 16])
+                    } else {
+                        self.session_id
+                    };
+                    let lease_duration_millis =
+                        if matches!(self.fault, ScriptFault::WrongAuthenticatedLease) {
+                            1
+                        } else {
+                            controller_lease_duration_millis()
+                        };
                     Ok(HumanControlResponse::ControllerAuthenticated {
                         controller_id: self.key.controller_id(),
-                        session_id: self.session_id,
-                        lease_duration_millis: HUMAN_CONTROL_CONTROLLER_LEASE_TTL.as_millis()
-                            as u64,
+                        session_id,
+                        lease_duration_millis,
                     })
                 }
                 HumanControlRequest::ControllerLeaseRenew {
@@ -461,8 +491,14 @@ mod tests {
                 {
                     Ok(HumanControlResponse::ControllerLease {
                         session_id: self.session_id,
-                        lease_duration_millis: HUMAN_CONTROL_CONTROLLER_LEASE_TTL.as_millis()
-                            as u64,
+                        lease_duration_millis: if matches!(
+                            self.fault,
+                            ScriptFault::WrongRenewedLease
+                        ) {
+                            1
+                        } else {
+                            controller_lease_duration_millis()
+                        },
                     })
                 }
                 _ => Err(io::Error::new(
@@ -529,7 +565,13 @@ mod tests {
 
     #[test]
     fn client_rejects_response_identity_and_controller_key_mismatch() {
-        for fault in [ScriptFault::WrongRequestId, ScriptFault::WrongPublicKey] {
+        for fault in [
+            ScriptFault::WrongRequestId,
+            ScriptFault::WrongPublicKey,
+            ScriptFault::WrongClientNonce,
+            ScriptFault::WrongAuthenticatedSession,
+            ScriptFault::WrongAuthenticatedLease,
+        ] {
             let key = signing_key(0x53);
             let stream = ScriptedHumanControlBroker::new(0x53, fault);
             let mut client = HumanControlClient::new(stream);
@@ -538,6 +580,16 @@ mod tests {
                 Err(HumanControlClientError::Protocol)
             );
         }
+    }
+
+    #[test]
+    fn client_rejects_drifted_renewal_lease() {
+        let key = signing_key(0x56);
+        let stream = ScriptedHumanControlBroker::new(0x56, ScriptFault::WrongRenewedLease);
+        let mut client = HumanControlClient::new(stream);
+
+        client.authenticate(&key).expect("authenticate");
+        assert_eq!(client.renew_lease(), Err(HumanControlClientError::Protocol));
     }
 
     #[test]
