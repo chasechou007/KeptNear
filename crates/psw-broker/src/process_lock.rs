@@ -13,6 +13,8 @@ const PRIVATE_FILE_MODE: u32 = 0o600;
 /// Logical process-lock operation with no retained path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BrokerProcessLockOperation {
+    /// Open the operating-system account home used as the stable lock anchor.
+    OpenAnchor,
     /// Inspect the stable lock entry.
     Inspect,
     /// Open or create the stable lock entry without following links.
@@ -28,6 +30,8 @@ pub enum BrokerProcessLockOperation {
 pub enum BrokerProcessLockError {
     /// Another live process owns the authoritative lock.
     AlreadyOwned,
+    /// The operating-system account home is not a private directory owned by this user.
+    UnsafeAnchor,
     /// The stable lock entry is a symbolic link.
     SymbolicLink,
     /// The stable lock entry is not a regular file.
@@ -54,6 +58,9 @@ impl Display for BrokerProcessLockError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::AlreadyOwned => formatter.write_str("another Broker process owns the runtime"),
+            Self::UnsafeAnchor => {
+                formatter.write_str("Broker process lock anchor is not a private user directory")
+            }
             Self::SymbolicLink => {
                 formatter.write_str("Broker process lock must not be a symbolic link")
             }
@@ -82,12 +89,58 @@ impl std::error::Error for BrokerProcessLockError {}
 
 /// Exclusive process-lifetime ownership of one user's Broker runtime.
 pub struct BrokerProcessLock {
-    file: File,
+    anchor: File,
+    _diagnostic: File,
 }
 
 impl BrokerProcessLock {
-    /// Acquires the stable owner-only lock before protected state or sockets open.
+    /// Acquires a kernel lock on the OS-account home before protected state or sockets open.
+    ///
+    /// The runtime PID file is diagnostic only. Removing or replacing that
+    /// owner-writable path cannot replace the home-directory inode holding the
+    /// authoritative process-lifetime lock.
     pub fn acquire(paths: &DevicePaths) -> Result<Self, BrokerProcessLockError> {
+        Self::acquire_with_anchor_policy(paths, true)
+    }
+
+    fn acquire_with_anchor_policy(
+        paths: &DevicePaths,
+        require_system_parent: bool,
+    ) -> Result<Self, BrokerProcessLockError> {
+        let home = paths
+            .root()
+            .parent()
+            .expect("prepared device root has a user-home parent");
+        if require_system_parent {
+            validate_stable_home_parent(home)?;
+        }
+        let mut anchor_options = OpenOptions::new();
+        anchor_options.read(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            anchor_options.custom_flags(
+                (nix::fcntl::OFlag::O_DIRECTORY | nix::fcntl::OFlag::O_NOFOLLOW).bits(),
+            );
+        }
+        let anchor = anchor_options
+            .open(home)
+            .map_err(|error| BrokerProcessLockError::Io {
+                operation: BrokerProcessLockOperation::OpenAnchor,
+                kind: error.kind(),
+            })?;
+        validate_open_anchor(&anchor)?;
+        anchor.try_lock_exclusive().map_err(|error| {
+            if error.kind() == io::ErrorKind::WouldBlock {
+                BrokerProcessLockError::AlreadyOwned
+            } else {
+                BrokerProcessLockError::Io {
+                    operation: BrokerProcessLockOperation::Lock,
+                    kind: error.kind(),
+                }
+            }
+        })?;
+
         let path = paths.runtime().join(BROKER_PROCESS_LOCK_FILENAME);
         validate_optional_lock_path(&path)?;
         let mut options = OpenOptions::new();
@@ -106,16 +159,6 @@ impl BrokerProcessLock {
                 kind: error.kind(),
             })?;
         validate_open_lock_file(&file)?;
-        file.try_lock_exclusive().map_err(|error| {
-            if error.kind() == io::ErrorKind::WouldBlock {
-                BrokerProcessLockError::AlreadyOwned
-            } else {
-                BrokerProcessLockError::Io {
-                    operation: BrokerProcessLockOperation::Lock,
-                    kind: error.kind(),
-                }
-            }
-        })?;
         file.set_len(0)
             .and_then(|()| file.seek(SeekFrom::Start(0)).map(|_| ()))
             .and_then(|()| writeln!(file, "{}", std::process::id()))
@@ -124,7 +167,15 @@ impl BrokerProcessLock {
                 operation: BrokerProcessLockOperation::RecordOwner,
                 kind: error.kind(),
             })?;
-        Ok(Self { file })
+        Ok(Self {
+            anchor,
+            _diagnostic: file,
+        })
+    }
+
+    #[cfg(test)]
+    fn acquire_for_tests(paths: &DevicePaths) -> Result<Self, BrokerProcessLockError> {
+        Self::acquire_with_anchor_policy(paths, false)
     }
 }
 
@@ -136,8 +187,62 @@ impl Debug for BrokerProcessLock {
 
 impl Drop for BrokerProcessLock {
     fn drop(&mut self) {
-        let _ = self.file.unlock();
+        let _ = self.anchor.unlock();
     }
+}
+
+#[cfg(unix)]
+fn validate_open_anchor(anchor: &File) -> Result<(), BrokerProcessLockError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = anchor
+        .metadata()
+        .map_err(|error| BrokerProcessLockError::Io {
+            operation: BrokerProcessLockOperation::Inspect,
+            kind: error.kind(),
+        })?;
+    if !metadata.is_dir()
+        || metadata.uid() != nix::unistd::geteuid().as_raw()
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(BrokerProcessLockError::UnsafeAnchor);
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn validate_stable_home_parent(home: &Path) -> Result<(), BrokerProcessLockError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let parent = home.parent().ok_or(BrokerProcessLockError::UnsafeAnchor)?;
+    let metadata = fs::symlink_metadata(parent).map_err(|error| BrokerProcessLockError::Io {
+        operation: BrokerProcessLockOperation::Inspect,
+        kind: error.kind(),
+    })?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_dir()
+        || metadata.uid() == nix::unistd::geteuid().as_raw()
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(BrokerProcessLockError::UnsafeAnchor);
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_open_anchor(_anchor: &File) -> Result<(), BrokerProcessLockError> {
+    Err(BrokerProcessLockError::Io {
+        operation: BrokerProcessLockOperation::Inspect,
+        kind: io::ErrorKind::Unsupported,
+    })
+}
+
+#[cfg(not(unix))]
+fn validate_stable_home_parent(_home: &Path) -> Result<(), BrokerProcessLockError> {
+    Err(BrokerProcessLockError::Io {
+        operation: BrokerProcessLockOperation::Inspect,
+        kind: io::ErrorKind::Unsupported,
+    })
 }
 
 /// Ordered service startup failure without local path disclosure.
@@ -303,13 +408,19 @@ mod tests {
     #[test]
     fn active_owner_is_rejected_and_unlocked_stale_file_is_reused() {
         let (home, paths) = paths("ownership");
-        let first = BrokerProcessLock::acquire(&paths).expect("first lock");
+        let first = BrokerProcessLock::acquire_for_tests(&paths).expect("first lock");
         assert_eq!(
-            BrokerProcessLock::acquire(&paths).unwrap_err(),
+            BrokerProcessLock::acquire_for_tests(&paths).unwrap_err(),
+            BrokerProcessLockError::AlreadyOwned
+        );
+        fs::remove_file(paths.runtime().join(BROKER_PROCESS_LOCK_FILENAME))
+            .expect("remove diagnostic PID file");
+        assert_eq!(
+            BrokerProcessLock::acquire_for_tests(&paths).unwrap_err(),
             BrokerProcessLockError::AlreadyOwned
         );
         drop(first);
-        let second = BrokerProcessLock::acquire(&paths).expect("reuse stale file");
+        let second = BrokerProcessLock::acquire_for_tests(&paths).expect("reuse stale file");
         drop(second);
         fs::remove_dir_all(home).expect("cleanup");
     }
@@ -323,13 +434,13 @@ mod tests {
         fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("target mode");
         symlink(&target, &lock_path).expect("symlink");
         assert_eq!(
-            BrokerProcessLock::acquire(&paths).unwrap_err(),
+            BrokerProcessLock::acquire_for_tests(&paths).unwrap_err(),
             BrokerProcessLockError::SymbolicLink
         );
         fs::remove_file(&lock_path).expect("remove link");
         fs::hard_link(&target, &lock_path).expect("hard link");
         assert_eq!(
-            BrokerProcessLock::acquire(&paths).unwrap_err(),
+            BrokerProcessLock::acquire_for_tests(&paths).unwrap_err(),
             BrokerProcessLockError::HardLinked
         );
         assert_eq!(fs::read(&target).expect("unchanged target"), b"stale");
@@ -337,7 +448,7 @@ mod tests {
         fs::write(&lock_path, b"stale").expect("stale file");
         fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).expect("broad mode");
         assert_eq!(
-            BrokerProcessLock::acquire(&paths).unwrap_err(),
+            BrokerProcessLock::acquire_for_tests(&paths).unwrap_err(),
             BrokerProcessLockError::InsecurePermissions { mode: 0o644 }
         );
         fs::remove_dir_all(home).expect("cleanup");
@@ -346,12 +457,22 @@ mod tests {
     #[test]
     fn debug_and_errors_never_include_the_runtime_path() {
         let (home, paths) = paths("redaction");
-        let lock = BrokerProcessLock::acquire(&paths).expect("lock");
+        let lock = BrokerProcessLock::acquire_for_tests(&paths).expect("lock");
         assert!(!format!("{lock:?}").contains(&home.to_string_lossy().to_string()));
         assert!(!BrokerProcessLockError::AlreadyOwned
             .to_string()
             .contains(&home.to_string_lossy().to_string()));
         drop(lock);
+        fs::remove_dir_all(home).expect("cleanup");
+    }
+
+    #[test]
+    fn owner_writable_home_parent_is_not_a_production_lock_anchor() {
+        let (home, paths) = paths("replaceable-anchor");
+        assert_eq!(
+            BrokerProcessLock::acquire(&paths).unwrap_err(),
+            BrokerProcessLockError::UnsafeAnchor
+        );
         fs::remove_dir_all(home).expect("cleanup");
     }
 }

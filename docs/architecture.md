@@ -101,6 +101,11 @@ Keychain adapter, SQLCipher public trust record, challenge manager, closed wire
 validator, process lock, and readiness projection are implemented and tested in
 source. The App human-control client and ServiceManagement lifecycle remain
 unimplemented, so installation still does not activate the service.
+The process-lifetime singleton uses an advisory kernel lock on the canonical
+operating-system account home directory inode and requires that entry to be
+anchored by a non-user-owned, non-writable system parent. Its owner-only runtime
+PID file is diagnostic only, so unlinking or replacing that writable file
+cannot admit a second Broker before protected state opens.
 See `docs/human-control-protocol.md`.
 The controller authority details are in
 `docs/controller-authority-contract.md`.
