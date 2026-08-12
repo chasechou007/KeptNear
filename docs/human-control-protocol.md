@@ -3,15 +3,18 @@
 This document freezes the source-level version 1 contract for the authenticated
 App-to-Broker management channel. It does not mean the installed Broker service
 or end-user machine access is active. The current App still uses its in-process
-Apps & Tools bridge until the external controller client and service lifecycle
-are implemented and accepted. The Broker-side typed dispatcher, strict wire
-envelope validator, controller authentication, process ownership, and readiness
-projection are implemented and tested in source but are not connected to an
-installed App client.
+Apps & Tools bridge until FFI migration and the service lifecycle are
+implemented and accepted. The Broker-side typed dispatcher, symmetric request
+and response codec, strict first-frame router, authenticated connection loop,
+controller authentication, readiness projection, and bounded Rust macOS client
+are implemented and tested in source. The product Broker entry point does not
+activate the router, and the installed App does not call the macOS client.
 
 The executable contract is defined in
 `crates/psw-broker/src/human_control_protocol.rs`,
-`human_control_wire.rs`, and `human_control_dispatcher.rs`.
+`human_control_wire.rs`, `human_control_codec.rs`,
+`human_control_connection.rs`, and `human_control_dispatcher.rs`. The
+first-party client is in `crates/keptnear-client`.
 
 ## Boundary
 
@@ -37,6 +40,20 @@ diagnostic text.
 
 The transport uses the existing Broker framing shape: one unsigned 32-bit
 big-endian payload length followed by exactly that many UTF-8 JSON bytes.
+Consumer and Human Control connections share the existing owner-only
+`broker-v1.sock`; no second socket is introduced. The server reads one bounded
+first frame and selects exactly one connection class:
+
+- `protocol_name: "keptnear.broker"` selects the existing Consumer loop;
+- `protocol: "keptnear.human-control"` selects Human Control; and
+- missing, unknown, duplicate, or simultaneous protocol discriminators fail
+  closed before either dispatcher runs.
+
+The Consumer frame is replayed unchanged into the existing Consumer loop. A
+Human Control connection must begin with `hello`, owns one negotiation and
+controller-authentication state, and clears connection-local challenge, lease,
+and audit-confirmation state on EOF, framing failure, protocol failure,
+quiescence, or server close.
 
 - Maximum frame: 1 MiB.
 - Maximum `hello` request or response: 16 KiB.
@@ -134,6 +151,18 @@ It does not expose protected device state. After negotiation, only
 `controller.challenge` and `controller.authenticate` are accepted until the
 dedicated controller proof succeeds. Every later operation requires a live
 authenticated controller session and bounded lease.
+
+The source-level Rust client accepts an injected signer that exposes only the
+controller identity, public key, and challenge-proof operation. Its macOS
+wrapper loads only an existing restricted controller Keychain item, verifies
+the canonical owner-only paths and peer, bounds connect plus stream read/write
+waits, verifies the exact selected version, schema, operation catalog, Broker
+instance, controller identity, public key, request identity, and response
+schema, and maps only fixed protocol failures. It never creates replacement
+controller material. Repeated authentication renews the current lease; a
+transport, closed-protocol, incompatible-protocol, authentication-required, or
+repair-required result discards the wrapper's connection so a later attempt
+must establish a fresh socket and session.
 
 ## Request Schemas
 

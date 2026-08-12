@@ -1,9 +1,10 @@
 use std::fs::{self, OpenOptions};
 use std::io::{Seek, SeekFrom, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::{Signer, SigningKey};
@@ -19,6 +20,9 @@ use crate::audit::{BrokerAuditClearConfirmation, BrokerAuditFilter};
 use crate::capability_protocol::{
     BrokerAccessRequest, BrokerAccessResponse, BrokerGrantStatusRequest,
 };
+use crate::controller_authentication::ControllerChallengeRequest;
+use crate::controller_authority_contract::CONTROLLER_ROLE;
+use crate::controller_key::{ControllerKeyStore, ControllerKeyStoreError, ControllerSigningKey};
 use crate::credential_matching::{
     BrokerCredentialCandidateSelection, BrokerCredentialMatchingError, BrokerNewCredentialRequest,
 };
@@ -31,6 +35,12 @@ use crate::http_request::{
     BrokerHttpRequestError, BrokerHttpTransport, BrokerHttpTransportResponse,
 };
 use crate::human_control::{BrokerPendingRequestId, BrokerPendingRequestKind};
+use crate::human_control_dispatcher::{HumanControlDispatcher, HumanControlRequest};
+use crate::human_control_protocol::{
+    HumanControlProtocolVersion, HumanControlProtocolVersionRange, HumanControlVersionOffer,
+    HUMAN_CONTROL_SCHEMA_ID,
+};
+use crate::human_control_types::{ControllerNonce, HumanControlRequestId};
 use crate::local_data::BrokerLocalDataError;
 use crate::machine_access::BrokerMachineAccessError;
 use crate::outbound_operation::{BrokerOutboundOperationError, BrokerOutboundOperationOutcome};
@@ -66,6 +76,12 @@ use crate::state_store::{
 };
 use crate::usage_profile::BrokerUsageProfileError;
 use crate::use_grant::{BrokerAllowOnceApproval, BrokerUseGrantBasis, BrokerUseGrantError};
+use crate::{
+    decode_human_control_response, encode_human_control_request, read_human_control_frame,
+    write_human_control_frame, BrokerConnectionClass, BrokerConnectionExit,
+    HumanControlClientResponse, UnixBrokerConnection, UnixBrokerListener, UnixBrokerTransportEntry,
+    UnixBrokerTransportError, UnixBrokerTransportOperation,
+};
 
 static TEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -121,6 +137,63 @@ impl DeviceKeyStore for MemoryKeyStore {
     }
 }
 
+#[derive(Clone)]
+struct MemoryControllerKeyStore {
+    seed: Arc<Mutex<Option<Vec<u8>>>>,
+    removal_marker: Arc<Mutex<bool>>,
+}
+
+impl MemoryControllerKeyStore {
+    fn seeded(byte: u8) -> Self {
+        Self {
+            seed: Arc::new(Mutex::new(Some(vec![byte; 32]))),
+            removal_marker: Arc::new(Mutex::new(false)),
+        }
+    }
+}
+
+impl ControllerKeyStore for MemoryControllerKeyStore {
+    fn load_seed(&self) -> Result<Option<ControllerSigningKey>, ControllerKeyStoreError> {
+        self.seed
+            .lock()
+            .expect("controller key")
+            .as_ref()
+            .map(|seed| ControllerSigningKey::from_stored_bytes(seed.clone()))
+            .transpose()
+    }
+
+    fn create_seed(&self, key: &ControllerSigningKey) -> Result<(), ControllerKeyStoreError> {
+        let mut seed = self.seed.lock().expect("controller key");
+        if seed.is_some() {
+            return Err(ControllerKeyStoreError::AlreadyExists);
+        }
+        *seed = Some(key.expose_seed().to_vec());
+        Ok(())
+    }
+
+    fn delete_seed(&self) -> Result<bool, ControllerKeyStoreError> {
+        Ok(self.seed.lock().expect("controller key").take().is_some())
+    }
+
+    fn removal_pending(&self) -> Result<bool, ControllerKeyStoreError> {
+        Ok(*self.removal_marker.lock().expect("controller marker"))
+    }
+
+    fn create_removal_marker(&self) -> Result<(), ControllerKeyStoreError> {
+        let mut marker = self.removal_marker.lock().expect("controller marker");
+        if *marker {
+            return Err(ControllerKeyStoreError::AlreadyExists);
+        }
+        *marker = true;
+        Ok(())
+    }
+
+    fn delete_removal_marker(&self) -> Result<bool, ControllerKeyStoreError> {
+        let mut marker = self.removal_marker.lock().expect("controller marker");
+        Ok(std::mem::replace(&mut *marker, false))
+    }
+}
+
 struct TestHome {
     path: PathBuf,
     paths: DevicePaths,
@@ -139,6 +212,17 @@ impl TestHome {
         ));
         fs::create_dir(&path).expect("create test home");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).expect("protect test home");
+        let paths = DevicePaths::prepare_for_test_home(&path).expect("prepare device paths");
+        Self { path, paths }
+    }
+
+    fn new_short(label: &str) -> Self {
+        let sequence = TEST_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let path =
+            PathBuf::from("/tmp").join(format!("kn-{label}-{}-{sequence}", std::process::id()));
+        fs::create_dir(&path).expect("create short test home");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+            .expect("protect short test home");
         let paths = DevicePaths::prepare_for_test_home(&path).expect("prepare device paths");
         Self { path, paths }
     }
@@ -256,6 +340,38 @@ fn initialize_state(home: &TestHome, key_store: &MemoryKeyStore) -> DeviceStateS
         .expect("initialize device key");
     DeviceStateStore::initialize_new(&home.paths, &root_key, timestamp(100))
         .expect("initialize encrypted state")
+}
+
+fn human_control_hello() -> HumanControlRequest {
+    HumanControlRequest::Hello(
+        HumanControlVersionOffer::new(
+            CONTROLLER_ROLE,
+            [HumanControlProtocolVersionRange::new(1, 0, 0).expect("range")],
+            [HUMAN_CONTROL_SCHEMA_ID.to_owned()],
+        )
+        .expect("offer"),
+    )
+}
+
+fn exchange_human_control(
+    connection: &mut UnixBrokerConnection,
+    request: &HumanControlRequest,
+) -> HumanControlClientResponse {
+    let request_id = HumanControlRequestId::generate();
+    let payload =
+        encode_human_control_request(request_id, HumanControlProtocolVersion::current(), request)
+            .expect("encode request");
+    write_human_control_frame(connection, payload.as_bytes()).expect("write request");
+    let response = read_human_control_frame(connection)
+        .expect("read response")
+        .expect("response frame");
+    decode_human_control_response(
+        response.as_bytes(),
+        request_id,
+        HumanControlProtocolVersion::current(),
+        request.operation(),
+    )
+    .expect("decode response")
 }
 
 fn seed_authorization(
@@ -4494,6 +4610,108 @@ fn ciphertext_corruption_blocks_runtime_without_replacing_state_or_key() {
     assert_eq!(fs::read(home.database_path()).expect("database"), tampered);
     assert_eq!(key_store.bytes().expect("unchanged key"), key_before);
     assert_path_free(&error, &home.path);
+}
+
+#[test]
+fn owner_only_socket_routes_a_bounded_authenticated_human_control_client() {
+    let home = TestHome::new_short("hc");
+    let key_store = MemoryKeyStore::default();
+    let mut runtime = BrokerRuntime::open_or_initialize_with_paths_at(
+        home.paths.clone(),
+        key_store,
+        timestamp(100),
+    )
+    .expect("runtime");
+    let dispatcher = HumanControlDispatcher::new(
+        runtime.process().broker_instance_id(),
+        MemoryControllerKeyStore::seeded(0x61),
+    );
+    let signing_key =
+        ControllerSigningKey::from_stored_bytes(vec![0x61; 32]).expect("controller key");
+    let listener = UnixBrokerListener::bind(&home.paths).expect("listener");
+    let metadata = fs::symlink_metadata(listener.socket_path()).expect("socket metadata");
+    assert_eq!(metadata.mode() & 0o777, 0o600);
+    let zero_timeout = match UnixBrokerConnection::connect_with_timeout(&home.paths, Duration::ZERO)
+    {
+        Ok(_) => panic!("zero timeout must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        zero_timeout,
+        UnixBrokerTransportError::Io {
+            entry: UnixBrokerTransportEntry::Socket,
+            operation: UnixBrokerTransportOperation::Connect,
+            kind: std::io::ErrorKind::TimedOut,
+        }
+    );
+
+    let paths = home.paths.clone();
+    let client = thread::spawn(move || {
+        let mut connection =
+            UnixBrokerConnection::connect_with_timeout(&paths, Duration::from_secs(2))
+                .expect("bounded connect");
+        connection
+            .set_operation_timeout(Some(Duration::from_secs(2)))
+            .expect("operation timeout");
+        let HumanControlClientResponse::Success(hello) =
+            exchange_human_control(&mut connection, &human_control_hello())
+        else {
+            panic!("hello success");
+        };
+        assert!(hello.has_complete_operation_catalog());
+
+        let challenge_request =
+            HumanControlRequest::ControllerChallenge(ControllerChallengeRequest::new(
+                signing_key.controller_id(),
+                ControllerNonce::from_bytes([0x62; 32]),
+            ));
+        let HumanControlClientResponse::Success(challenge) =
+            exchange_human_control(&mut connection, &challenge_request)
+        else {
+            panic!("challenge success");
+        };
+        let challenge = challenge
+            .controller_challenge()
+            .expect("controller challenge");
+        let HumanControlClientResponse::Success(authenticated) = exchange_human_control(
+            &mut connection,
+            &HumanControlRequest::ControllerAuthenticate(challenge.prove(&signing_key)),
+        ) else {
+            panic!("authentication success");
+        };
+        assert_eq!(
+            authenticated.authenticated_session().expect("session").0,
+            signing_key.controller_id()
+        );
+        let HumanControlClientResponse::Success(readiness) =
+            exchange_human_control(&mut connection, &HumanControlRequest::ReadinessGet)
+        else {
+            panic!("readiness success");
+        };
+        assert_eq!(
+            readiness
+                .result()
+                .get("humanControlSchema")
+                .and_then(serde_json::Value::as_str),
+            Some(HUMAN_CONTROL_SCHEMA_ID)
+        );
+        connection.shutdown().expect("client shutdown");
+    });
+
+    assert_eq!(
+        listener
+            .serve_one_routed(&mut runtime, &dispatcher)
+            .expect("routed serve"),
+        (
+            BrokerConnectionClass::HumanControl,
+            BrokerConnectionExit::PeerClosed
+        )
+    );
+    client.join().expect("client");
+    runtime
+        .shutdown_at(timestamp(200))
+        .expect("runtime shutdown");
+    listener.shutdown().expect("listener shutdown");
 }
 
 #[test]

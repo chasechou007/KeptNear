@@ -105,9 +105,15 @@ validator, connection-local bounded single-use audit-clear tickets, process
 lock, readiness projection, and 30-second monotonic connection lease are
 implemented and tested in source. Lease expiry closes authorization and
 requires a fresh authenticated connection; App-associated Vault locking on
-lease loss remains part of the later external-client lifecycle. The App
-human-control client and ServiceManagement lifecycle remain
-unimplemented, so installation still does not activate the service.
+lease loss remains part of the later external-client lifecycle. Source now also
+includes symmetric closed request/success/failure codecs, strict first-frame
+routing on the existing owner-only `broker-v1.sock`, one authenticated server
+connection loop, and a bounded first-party Rust macOS client with an injected
+signing boundary. Consumer first frames are replayed into the existing Consumer
+loop; ambiguous or unknown protocol identities are rejected before dispatch.
+The product Broker `main` still starts only the Consumer loop. App/FFI migration,
+ServiceManagement lifecycle, and entitlement-qualified shared Keychain use
+remain unimplemented, so installation still does not activate the service.
 The process-lifetime singleton uses an advisory kernel lock on the canonical
 operating-system account home directory inode and requires that entry to be
 anchored by a non-user-owned, non-writable system parent. Its owner-only runtime
@@ -822,7 +828,9 @@ Implemented:
 - `crates/psw-core`: Rust vault core.
 - `crates/psw-ffi`: macOS bridge.
 - `crates/keptnear-client`: shared first-party Consumer identity, Keychain,
-  Broker negotiation, pairing, authentication, and framed request client.
+  Broker negotiation, pairing, authentication, and framed request client, plus
+  the source-level bounded Human Control client and macOS restricted-Keychain
+  wrapper.
 - `crates/psw-cli`: current diagnostic CLI plus the Broker-connected stable
   public machine-command contract.
 - `crates/keptnear-mcp`: local stdio MCP lifecycle, device-local Consumer

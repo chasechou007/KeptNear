@@ -1,6 +1,6 @@
 # Capability Status
 
-Review date: 2026-07-31
+Review date: 2026-08-12
 
 KeptNear uses four public status labels. A feature moving between labels
 requires implementation evidence, applicable tests, and an updated public-copy
@@ -41,6 +41,21 @@ delivery. The MCP adapter and CLI use the same authenticated
 There is no raw secret retrieval command. MCP and CLI remain developer
 interfaces that require a compatible Broker process; they are not labeled as
 released end-user machine access.
+
+The source also implements the separate `keptnear.human-control/1.0` controller
+path: closed request and secret-free success/fixed-failure codecs, strict
+Consumer-versus-Human-Control first-frame routing on the existing owner-only
+socket, one authenticated server connection loop with lease and disconnect
+cleanup, and a bounded Rust macOS client that uses an injected controller
+signer and an existing restricted Keychain item. Deterministic tests cover both
+connection classes, protocol ambiguity and incompatibility, full controller
+authentication and management dispatch, EOF and timeout behavior, `0600`
+temporary socket transport, and private-marker exclusion without a real user
+Keychain or Vault.
+
+This remains a source harness. The product Broker entry point does not activate
+the router, the App FFI still owns its in-process Apps & Tools runtime, and no
+installed artifact uses the shared controller Keychain path.
 
 ## Bundled But Not Activated
 
