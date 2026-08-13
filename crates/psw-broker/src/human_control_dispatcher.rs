@@ -1011,7 +1011,11 @@ where
             schema: HUMAN_CONTROL_SCHEMA_ID,
             broker_instance_id: self.broker_instance_id,
             limits: HumanControlLimits::current(),
-            operations: HUMAN_CONTROL_DISPATCH_OPERATIONS.to_vec(),
+            operations: HUMAN_CONTROL_DISPATCH_OPERATIONS
+                .iter()
+                .copied()
+                .filter(|operation| operation.contract().introduced_minor() <= protocol.minor())
+                .collect(),
         })
     }
 

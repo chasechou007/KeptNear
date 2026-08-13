@@ -22,6 +22,8 @@ mod dispatcher;
 mod grant_invalidation;
 mod http_request;
 mod human_control;
+mod human_control_codec;
+mod human_control_connection;
 mod human_control_dispatcher;
 mod human_control_protocol;
 mod human_control_types;
@@ -153,6 +155,13 @@ pub use human_control::{
     BrokerHumanControlError, BrokerPendingRequest, BrokerPendingRequestId,
     BrokerPendingRequestKind, BrokerPendingRequestQueue, BrokerUsageProfileSummary,
     MAX_CONSUMER_DETAIL_AUDIT_EVENTS,
+};
+pub use human_control_codec::{
+    decode_human_control_response, encode_human_control_failure, encode_human_control_request,
+    encode_human_control_response, HumanControlClientResponse, HumanControlSuccessEnvelope,
+};
+pub use human_control_connection::{
+    serve_routed_broker_connection, BrokerConnectionClass, BrokerConnectionRouteError,
 };
 pub use human_control_dispatcher::{
     HumanControlAuditPage, HumanControlConnectionPhase, HumanControlConnectionState,

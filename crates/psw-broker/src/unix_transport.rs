@@ -2,19 +2,27 @@ use std::fmt::{Display, Formatter};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use nix::errno::Errno;
+use nix::fcntl::{fcntl, FcntlArg, FdFlag, OFlag};
 use nix::poll::{poll, PollFd, PollFlags};
+use nix::sys::socket::{
+    connect as connect_socket, getsockopt, socket, sockopt::SocketError, AddressFamily, SockFlag,
+    SockType, UnixAddr,
+};
 use nix::unistd::{geteuid, getpeereid};
 
 use crate::macos_peer_evidence::observe_peer;
 use crate::{
-    BrokerConnectionExit, BrokerProcess, BrokerProcessError, BrokerProcessRunCancellation,
-    BrokerRuntime, DevicePaths, ObservedConsumerIdentity,
+    serve_routed_broker_connection, BrokerConnectionClass, BrokerConnectionExit,
+    BrokerConnectionRouteError, BrokerProcess, BrokerProcessError, BrokerProcessRunCancellation,
+    BrokerRuntime, ControllerKeyStore, DevicePaths, HumanControlDispatcher,
+    ObservedConsumerIdentity,
 };
 
 /// Stable filename of the local Broker socket.
@@ -65,6 +73,10 @@ pub enum UnixBrokerTransportOperation {
     PeerCredentials,
     /// Clone a connected stream for independent framed reads and writes.
     CloneStream,
+    /// Configure bounded stream reads and writes.
+    SetTimeout,
+    /// Select and serve one supported local protocol.
+    RouteProtocol,
     /// Shut down a connected peer.
     Shutdown,
     /// Remove the listener's socket during clean shutdown.
@@ -83,6 +95,8 @@ impl UnixBrokerTransportOperation {
             Self::Connect => "connect to",
             Self::PeerCredentials => "read credentials for",
             Self::CloneStream => "clone",
+            Self::SetTimeout => "set timeout on",
+            Self::RouteProtocol => "route protocol for",
             Self::Shutdown => "shut down",
             Self::Cleanup => "clean up",
         }
@@ -187,6 +201,22 @@ impl From<BrokerProcessError> for UnixBrokerTransportError {
     }
 }
 
+impl From<BrokerConnectionRouteError> for UnixBrokerTransportError {
+    fn from(source: BrokerConnectionRouteError) -> Self {
+        match source {
+            BrokerConnectionRouteError::Consumer(source) => Self::Process { source },
+            BrokerConnectionRouteError::InitialFrame
+            | BrokerConnectionRouteError::UnknownProtocol
+            | BrokerConnectionRouteError::HumanControl(_)
+            | BrokerConnectionRouteError::ClockUnavailable => Self::Io {
+                entry: UnixBrokerTransportEntry::Peer,
+                operation: UnixBrokerTransportOperation::RouteProtocol,
+                kind: io::ErrorKind::InvalidData,
+            },
+        }
+    }
+}
+
 /// Operating-system identity observed for one local socket peer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UnixBrokerPeerIdentity {
@@ -229,6 +259,15 @@ impl UnixBrokerConnection {
         Self::connect_at(paths.runtime(), expected_user)
     }
 
+    /// Connects to the stable Broker socket within one nonzero local deadline.
+    pub fn connect_with_timeout(
+        paths: &DevicePaths,
+        timeout: Duration,
+    ) -> Result<Self, UnixBrokerTransportError> {
+        let expected_user = geteuid().as_raw();
+        Self::connect_at_with_timeout(paths.runtime(), expected_user, timeout)
+    }
+
     /// Returns the operating-system identity observed for the peer.
     #[must_use]
     pub const fn peer_identity(&self) -> UnixBrokerPeerIdentity {
@@ -239,6 +278,21 @@ impl UnixBrokerConnection {
     #[must_use]
     pub const fn observed_identity(&self) -> &ObservedConsumerIdentity {
         &self.observed_identity
+    }
+
+    /// Applies bounded read and write waits without exposing the raw socket.
+    pub fn set_operation_timeout(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<(), UnixBrokerTransportError> {
+        self.stream
+            .set_read_timeout(timeout)
+            .and_then(|()| self.stream.set_write_timeout(timeout))
+            .map_err(|error| UnixBrokerTransportError::Io {
+                entry: UnixBrokerTransportEntry::Peer,
+                operation: UnixBrokerTransportOperation::SetTimeout,
+                kind: error.kind(),
+            })
     }
 
     /// Serves this accepted peer through the transport-independent process.
@@ -310,6 +364,51 @@ impl UnixBrokerConnection {
         }
     }
 
+    /// Serves this peer through the explicit source-level protocol router.
+    ///
+    /// The product entry point does not call this method before activation and
+    /// shared controller Keychain acceptance are complete.
+    pub fn serve_routed<S>(
+        self,
+        runtime: &mut BrokerRuntime,
+        dispatcher: &HumanControlDispatcher<S>,
+    ) -> Result<(BrokerConnectionClass, BrokerConnectionExit), UnixBrokerTransportError>
+    where
+        S: ControllerKeyStore,
+    {
+        let observed_identity = self.observed_identity.clone();
+        let process_cancellation = process_run_cancellation_for_stream(&self.stream)?;
+        let mut reader = self
+            .stream
+            .try_clone()
+            .map_err(|error| UnixBrokerTransportError::Io {
+                entry: UnixBrokerTransportEntry::Peer,
+                operation: UnixBrokerTransportOperation::CloneStream,
+                kind: error.kind(),
+            })?;
+        let mut writer = self.stream;
+        let result = serve_routed_broker_connection(
+            runtime,
+            dispatcher,
+            &observed_identity,
+            &mut reader,
+            &mut writer,
+            &process_cancellation,
+        )
+        .map_err(UnixBrokerTransportError::from);
+        let shutdown = writer.shutdown(Shutdown::Both);
+        match (result, shutdown) {
+            (Ok(exit), Ok(())) => Ok(exit),
+            (Ok(exit), Err(error)) if error.kind() == io::ErrorKind::NotConnected => Ok(exit),
+            (Ok(_), Err(error)) => Err(UnixBrokerTransportError::Io {
+                entry: UnixBrokerTransportEntry::Peer,
+                operation: UnixBrokerTransportOperation::Shutdown,
+                kind: error.kind(),
+            }),
+            (Err(error), _) => Err(error),
+        }
+    }
+
     /// Closes both directions of this connection.
     pub fn shutdown(&self) -> Result<(), UnixBrokerTransportError> {
         self.stream
@@ -341,6 +440,110 @@ impl UnixBrokerConnection {
             peer_identity,
             observed_identity,
         })
+    }
+
+    fn connect_at_with_timeout(
+        runtime_directory: &Path,
+        expected_user: u32,
+        timeout: Duration,
+    ) -> Result<Self, UnixBrokerTransportError> {
+        validate_runtime_directory(runtime_directory, expected_user)?;
+        let socket_path = runtime_directory.join(BROKER_SOCKET_FILENAME);
+        validate_socket_entry(&socket_path, expected_user)?;
+        let stream = connect_unix_socket_with_timeout(&socket_path, timeout)?;
+        let (peer_identity, observed_identity) = read_peer_identity(&stream)?;
+        validate_peer_identity(peer_identity, expected_user)?;
+        Ok(Self {
+            stream,
+            peer_identity,
+            observed_identity,
+        })
+    }
+}
+
+fn connect_unix_socket_with_timeout(
+    socket_path: &Path,
+    timeout: Duration,
+) -> Result<UnixStream, UnixBrokerTransportError> {
+    if timeout.is_zero() {
+        return Err(connect_io_error(io::ErrorKind::TimedOut));
+    }
+    let address = UnixAddr::new(socket_path).map_err(connect_errno_error)?;
+    let descriptor = socket(
+        AddressFamily::Unix,
+        SockType::Stream,
+        SockFlag::empty(),
+        None,
+    )
+    .map_err(connect_errno_error)?;
+    fcntl(
+        descriptor.as_raw_fd(),
+        FcntlArg::F_SETFD(FdFlag::FD_CLOEXEC),
+    )
+    .map_err(connect_errno_error)?;
+    fcntl(descriptor.as_raw_fd(), FcntlArg::F_SETFL(OFlag::O_NONBLOCK))
+        .map_err(connect_errno_error)?;
+    match connect_socket(descriptor.as_raw_fd(), &address) {
+        Ok(()) => {}
+        Err(Errno::EINPROGRESS | Errno::EALREADY | Errno::EWOULDBLOCK) => {
+            wait_for_connect(&descriptor, timeout)?;
+        }
+        Err(error) => return Err(connect_errno_error(error)),
+    }
+    let stream: UnixStream = descriptor.into();
+    stream
+        .set_nonblocking(false)
+        .map_err(|error| connect_io_error(error.kind()))?;
+    Ok(stream)
+}
+
+fn wait_for_connect(
+    descriptor: &OwnedFd,
+    timeout: Duration,
+) -> Result<(), UnixBrokerTransportError> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| connect_io_error(io::ErrorKind::InvalidInput))?;
+    loop {
+        let now = Instant::now();
+        if now >= deadline {
+            return Err(connect_io_error(io::ErrorKind::TimedOut));
+        }
+        let timeout_millis = poll_timeout_millis(deadline.saturating_duration_since(now));
+        let mut descriptors = [PollFd::new(descriptor, PollFlags::POLLOUT)];
+        match poll(&mut descriptors, timeout_millis) {
+            Ok(0) => return Err(connect_io_error(io::ErrorKind::TimedOut)),
+            Ok(_) => {
+                let socket_error =
+                    getsockopt(descriptor, SocketError).map_err(connect_errno_error)?;
+                return if socket_error == 0 {
+                    Ok(())
+                } else {
+                    Err(connect_io_error(
+                        io::Error::from_raw_os_error(socket_error).kind(),
+                    ))
+                };
+            }
+            Err(Errno::EINTR) => {}
+            Err(error) => return Err(connect_errno_error(error)),
+        }
+    }
+}
+
+fn poll_timeout_millis(timeout: Duration) -> i32 {
+    let millis = timeout.as_millis().max(1);
+    i32::try_from(millis).unwrap_or(i32::MAX)
+}
+
+fn connect_errno_error(error: Errno) -> UnixBrokerTransportError {
+    connect_io_error(io::Error::from_raw_os_error(error as i32).kind())
+}
+
+const fn connect_io_error(kind: io::ErrorKind) -> UnixBrokerTransportError {
+    UnixBrokerTransportError::Io {
+        entry: UnixBrokerTransportEntry::Socket,
+        operation: UnixBrokerTransportOperation::Connect,
+        kind,
     }
 }
 
@@ -441,6 +644,18 @@ impl UnixBrokerListener {
         runtime: &BrokerRuntime,
     ) -> Result<BrokerConnectionExit, UnixBrokerTransportError> {
         self.accept()?.serve_runtime(runtime)
+    }
+
+    /// Accepts one peer through the explicit source-level protocol router.
+    pub fn serve_one_routed<S>(
+        &self,
+        runtime: &mut BrokerRuntime,
+        dispatcher: &HumanControlDispatcher<S>,
+    ) -> Result<(BrokerConnectionClass, BrokerConnectionExit), UnixBrokerTransportError>
+    where
+        S: ControllerKeyStore,
+    {
+        self.accept()?.serve_routed(runtime, dispatcher)
     }
 
     /// Closes the listener and removes only its unchanged socket entry.

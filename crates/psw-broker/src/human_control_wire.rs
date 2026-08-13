@@ -86,9 +86,7 @@ impl Debug for HumanControlWireEnvelope {
 
 impl Drop for HumanControlWireEnvelope {
     fn drop(&mut self) {
-        for value in self.body.values_mut() {
-            zeroize_json_strings(value);
-        }
+        zeroize_json_object(&mut self.body);
     }
 }
 
@@ -96,9 +94,7 @@ struct ZeroizingJsonObject(serde_json::Map<String, Value>);
 
 impl Drop for ZeroizingJsonObject {
     fn drop(&mut self) {
-        for value in self.0.values_mut() {
-            zeroize_json_strings(value);
-        }
+        zeroize_json_object(&mut self.0);
     }
 }
 
@@ -409,11 +405,16 @@ fn zeroize_json_strings(value: &mut Value) {
             }
         }
         Value::Object(values) => {
-            for value in values.values_mut() {
-                zeroize_json_strings(value);
-            }
+            zeroize_json_object(values);
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn zeroize_json_object(values: &mut serde_json::Map<String, Value>) {
+    for (mut key, mut value) in std::mem::take(values) {
+        key.zeroize();
+        zeroize_json_strings(&mut value);
     }
 }
 
@@ -1485,7 +1486,7 @@ mod tests {
             request(
                 "vault.unlock",
                 &format!(
-                    "{{\"vaultId\":\"{vault_id}\",\"credential\":{{\"kind\":\"local-material\",\"valueBase64\":\"{}\",\"source\":\"keychain\"}}}}",
+                    "{{\"vaultId\":\"{vault_id}\",\"credential\":{{\"kind\":\"local-material\",\"valueBase64\":\"{}\",\"seeded-sensitive-object-key\":\"keychain\"}}}}",
                     BASE64_STANDARD.encode([0x22; LOCAL_UNLOCK_MATERIAL_LENGTH])
                 ),
             ),

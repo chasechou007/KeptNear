@@ -280,6 +280,10 @@ impl BrokerPairingUserApproval {
     pub fn after_user_approval(label: String, approved_at: StateTimestamp) -> Self {
         Self { label, approved_at }
     }
+
+    pub(crate) fn label(&self) -> &str {
+        &self.label
+    }
 }
 
 impl Debug for BrokerPairingUserApproval {

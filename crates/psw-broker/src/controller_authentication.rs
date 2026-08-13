@@ -28,6 +28,30 @@ pub enum ControllerAuthenticationMode {
     Authenticate,
 }
 
+impl ControllerAuthenticationMode {
+    /// Returns the canonical Human Control wire value.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Bootstrap => "bootstrap",
+            Self::Authenticate => "authenticate",
+        }
+    }
+
+    /// Parses one canonical Human Control wire value.
+    pub fn from_wire(value: &str) -> Result<Self, HumanControlProtocolFailure> {
+        match value {
+            "bootstrap" => Ok(Self::Bootstrap),
+            "authenticate" => Ok(Self::Authenticate),
+            _ => Err(HumanControlProtocolFailure::new(
+                HumanControlFailureCode::MalformedFrame,
+                false,
+                None,
+            )),
+        }
+    }
+}
+
 /// Strict request for one fresh controller challenge.
 #[derive(Clone, Eq, PartialEq)]
 pub struct ControllerChallengeRequest {
@@ -49,6 +73,12 @@ impl ControllerChallengeRequest {
     #[must_use]
     pub const fn controller_id(&self) -> ControllerId {
         self.controller_id
+    }
+
+    /// Returns the independently generated client nonce retained for this request.
+    #[must_use]
+    pub const fn client_nonce(&self) -> ControllerNonce {
+        self.client_nonce
     }
 }
 
@@ -76,6 +106,41 @@ pub struct ControllerAuthenticationChallenge {
 }
 
 impl ControllerAuthenticationChallenge {
+    /// Reconstructs a challenge from a closed, validated Broker response.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_validated_wire_bindings(
+        mode: ControllerAuthenticationMode,
+        protocol: HumanControlProtocolVersion,
+        broker_instance_id: BrokerInstanceId,
+        controller_id: ControllerId,
+        public_key: [u8; 32],
+        session_id: ControllerSessionId,
+        client_nonce: ControllerNonce,
+        broker_nonce: ControllerNonce,
+        deadline: ControllerDeadline,
+    ) -> Result<Self, HumanControlProtocolFailure> {
+        if protocol.major() == 0
+            || crate::derive_controller_id(&public_key) != *controller_id.as_bytes()
+        {
+            return Err(HumanControlProtocolFailure::new(
+                HumanControlFailureCode::MalformedFrame,
+                false,
+                None,
+            ));
+        }
+        Ok(Self {
+            mode,
+            protocol,
+            broker_instance_id,
+            controller_id,
+            public_key,
+            session_id,
+            client_nonce,
+            broker_nonce,
+            deadline,
+        })
+    }
+
     /// Returns the proof domain selected for this challenge.
     #[must_use]
     pub const fn mode(&self) -> ControllerAuthenticationMode {
@@ -215,6 +280,34 @@ impl ControllerAuthenticationProof {
             deadline,
             signature,
         }
+    }
+
+    pub(crate) const fn broker_instance_id(self) -> BrokerInstanceId {
+        self.broker_instance_id
+    }
+
+    pub(crate) const fn controller_id(self) -> ControllerId {
+        self.controller_id
+    }
+
+    pub(crate) const fn session_id(self) -> ControllerSessionId {
+        self.session_id
+    }
+
+    pub(crate) const fn client_nonce(self) -> ControllerNonce {
+        self.client_nonce
+    }
+
+    pub(crate) const fn broker_nonce(self) -> ControllerNonce {
+        self.broker_nonce
+    }
+
+    pub(crate) const fn deadline(self) -> ControllerDeadline {
+        self.deadline
+    }
+
+    pub(crate) const fn signature(self) -> ControllerSignature {
+        self.signature
     }
 
     /// Replaces the echoed controller identity, useful to reject identity substitution.
