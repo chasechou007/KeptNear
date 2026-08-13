@@ -796,7 +796,7 @@ fn validate_response_values(
     match schema {
         HumanControlResponseSchema::Hello => {
             let limits = object(body, "limits")?;
-            protocol_version(object(body, "protocol")?)?;
+            let selected = protocol_version(object(body, "protocol")?)?;
             parse::<crate::BrokerInstanceId>(body, "brokerInstanceId")?;
             exact_keys(
                 limits,
@@ -832,9 +832,11 @@ fn validate_response_values(
                 return Err(HumanControlWireError::Malformed);
             }
             let operations = array(body, "operations")?;
-            if operations.len() != crate::HUMAN_CONTROL_OPERATION_CONTRACTS.len()
-                || crate::HUMAN_CONTROL_OPERATION_CONTRACTS
-                    .iter()
+            let contracts = crate::HUMAN_CONTROL_OPERATION_CONTRACTS
+                .iter()
+                .filter(|contract| contract.introduced_minor() <= selected.minor());
+            if operations.len() != contracts.clone().count()
+                || contracts
                     .zip(operations)
                     .any(|(contract, value)| value.as_str() != Some(contract.operation().as_str()))
             {

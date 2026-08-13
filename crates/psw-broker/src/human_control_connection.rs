@@ -4,7 +4,7 @@ use std::ops::{Deref, DerefMut};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     decode_human_control_hello_wire_envelope, decode_human_control_wire_envelope,
@@ -261,9 +261,11 @@ fn read_exact(reader: &mut impl Read, buffer: &mut [u8]) -> Result<(), BrokerCon
 fn classify_first_frame(
     payload: &[u8],
 ) -> Result<BrokerConnectionClass, BrokerConnectionRouteError> {
-    let value = crate::protocol::parse_unique_json(payload)
-        .map_err(|_| BrokerConnectionRouteError::UnknownProtocol)?;
-    let Value::Object(envelope) = value else {
+    let value = ZeroizingJsonValue(
+        crate::protocol::parse_unique_json(payload)
+            .map_err(|_| BrokerConnectionRouteError::UnknownProtocol)?,
+    );
+    let Value::Object(envelope) = &value.0 else {
         return Err(BrokerConnectionRouteError::UnknownProtocol);
     };
     let consumer = matches!(
@@ -278,6 +280,34 @@ fn classify_first_frame(
         (true, false) => Ok(BrokerConnectionClass::Consumer),
         (false, true) => Ok(BrokerConnectionClass::HumanControl),
         _ => Err(BrokerConnectionRouteError::UnknownProtocol),
+    }
+}
+
+struct ZeroizingJsonValue(Value);
+
+impl Zeroize for ZeroizingJsonValue {
+    fn zeroize(&mut self) {
+        zeroize_json_strings(&mut self.0);
+    }
+}
+
+impl Drop for ZeroizingJsonValue {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+fn zeroize_json_strings(value: &mut Value) {
+    match value {
+        Value::String(value) => value.zeroize(),
+        Value::Array(values) => values.iter_mut().for_each(zeroize_json_strings),
+        Value::Object(values) => {
+            for (mut key, mut value) in std::mem::take(values) {
+                key.zeroize();
+                zeroize_json_strings(&mut value);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
 
@@ -611,6 +641,37 @@ mod tests {
         assert_eq!(
             read_initial_frame(&mut oversized),
             Err(BrokerConnectionRouteError::InitialFrame)
+        );
+    }
+
+    #[test]
+    fn first_frame_classifier_zeroizes_every_parsed_string() {
+        let marker = "seeded-first-frame-private-marker";
+        let mut value = ZeroizingJsonValue(serde_json::json!({
+            "protocol": HUMAN_CONTROL_PROTOCOL_NAME,
+            "body": {"credential": marker},
+            "nested": [marker],
+        }));
+        value
+            .0
+            .as_object_mut()
+            .expect("object")
+            .insert(marker.to_owned(), Value::String("private-value".to_owned()));
+        assert!(value.0.to_string().contains(marker));
+
+        value.zeroize();
+
+        assert!(!value.0.to_string().contains(marker));
+        assert_eq!(
+            classify_first_frame(
+                serde_json::to_string(&serde_json::json!({
+                    "protocol": HUMAN_CONTROL_PROTOCOL_NAME,
+                    "body": {"credential": marker},
+                }))
+                .expect("first frame")
+                .as_bytes(),
+            ),
+            Ok(BrokerConnectionClass::HumanControl)
         );
     }
 
