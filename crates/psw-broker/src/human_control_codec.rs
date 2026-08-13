@@ -1621,9 +1621,11 @@ fn validate_field_scope(b: &Map<String, Value>) -> Result<(), HumanControlWireEr
 }
 fn validate_capability(b: &Map<String, Value>) -> Result<(), HumanControlWireError> {
     exact_keys(b, &["name", "version"])?;
-    crate::CapabilityName::from_str(string(b, "name")?)
+    let name = crate::CapabilityName::from_str(string(b, "name")?)
         .map_err(|_| HumanControlWireError::Malformed)?;
-    positive(unsigned(b, "version")?)?;
+    let version =
+        u16::try_from(unsigned(b, "version")?).map_err(|_| HumanControlWireError::Malformed)?;
+    Capability::new(name, version).map_err(|_| HumanControlWireError::Malformed)?;
     Ok(())
 }
 fn validate_cursor(b: &Map<String, Value>) -> Result<(), HumanControlWireError> {
@@ -2075,6 +2077,39 @@ mod tests {
                 Err(HumanControlWireError::Malformed)
             ));
         }
+    }
+
+    #[test]
+    fn response_decoder_rejects_capability_versions_above_the_domain_bound() {
+        let response = HumanControlResponse::CredentialReview(HumanControlCredentialReview {
+            consumer_id: crate::ConsumerId::generate(),
+            vault_id: crate::VaultId::generate(),
+            capability: Capability::v1(crate::CapabilityName::CredentialSearch),
+            candidates: Vec::new(),
+            truncated: false,
+        });
+        let encoded = encode_human_control_response(
+            request_id(),
+            version(),
+            HumanControlOperation::CredentialReview,
+            &response,
+        )
+        .expect("response");
+        let oversized = std::str::from_utf8(&encoded).expect("UTF-8").replacen(
+            "\"version\":1",
+            "\"version\":65536",
+            1,
+        );
+
+        assert!(matches!(
+            decode_human_control_response(
+                oversized.as_bytes(),
+                request_id(),
+                version(),
+                HumanControlOperation::CredentialReview,
+            ),
+            Err(HumanControlWireError::Malformed)
+        ));
     }
 
     #[test]
